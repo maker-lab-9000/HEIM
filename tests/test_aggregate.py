@@ -5,7 +5,19 @@ Expectations are derived from reference/pam-10-daily-analysis/aggregate-summariz
 
 from datetime import datetime, timezone
 
-from heim.metrics.aggregate import aggregate
+from heim.metrics.aggregate import aggregate as _aggregate
+
+# The JS hardcoded this map; the port takes it as a parameter. Bind it here so
+# the golden tests keep matching the JS behavior verbatim.
+_JS_HOST_MAP = {
+    "192.168.178.241": "ubuntu-server",
+    "192.168.178.2": "homelab",
+    "192.168.178.137": "home-assistant",
+}
+
+
+def aggregate(results, now=None):
+    return _aggregate(results, now=now, instance_host_map=_JS_HOST_MAP)
 
 DAY = 86400
 NOW = datetime(2026, 1, 10, 6, 0, 0, tzinfo=timezone.utc)

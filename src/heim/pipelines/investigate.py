@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from jinja2 import Environment, FileSystemLoader
 
 from heim.agent.runner import run_agent
+from heim.config import expand_env
 from heim.channels.telegram import chunk_text
 from heim.reports.render import extract_sections, investigation_email, salvage
 from heim.runtime import Runtime
@@ -84,11 +85,14 @@ def _build_system_prompt(rt: Runtime, jenv: Environment, req: InvestigationReque
     ordered = sorted(cfg.hosts.values(), key=lambda h: (h.name != req.host, h.name))
     facts = "\n".join(h.facts.strip() for h in ordered if h.facts.strip())
     privileges = "\n".join(h.privileges.strip() for h in cfg.hosts.values() if h.privileges.strip())
-    return jenv.get_template(agent.prompt).render(
-        now=rt.now_iso(),
-        facts=facts,
-        privileges=privileges or "(no SSH privileges configured)",
-        soft_step_budget=agent.soft_step_budget,
+    return expand_env(
+        jenv.get_template(agent.prompt).render(
+            now=rt.now_iso(),
+            facts=facts,
+            privileges=privileges or "(no SSH privileges configured)",
+            soft_step_budget=agent.soft_step_budget,
+        ),
+        source=agent.prompt,
     )
 
 
@@ -131,8 +135,11 @@ async def run_investigation(
 
     # ------------------------------------------------------------ the agent
     template = _ROLE_TEMPLATE.get(req.host_role, "guest")
-    brief = jenv.get_template(f"briefs/{template}.md.j2").render(
-        host=req.host, findings_text=ftext, is_temperature=bool(_TEMP_RE.search(ftext)),
+    brief = expand_env(
+        jenv.get_template(f"briefs/{template}.md.j2").render(
+            host=req.host, findings_text=ftext, is_temperature=bool(_TEMP_RE.search(ftext)),
+        ),
+        source=f"briefs/{template}.md.j2",
     )
     system = _build_system_prompt(rt, jenv, req)
     ctx = ToolContext(config=cfg, tag=req.tag, feed=rt.feed, audit=rt.audit)

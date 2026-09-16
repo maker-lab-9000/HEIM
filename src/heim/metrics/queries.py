@@ -56,8 +56,10 @@ def load_queries(path: str | Path) -> list[QueryDef]:
 
     Mirrors the query list emitted by the n8n "Build Queries" Code node.
     """
+    from heim.config import expand_env
+
     with open(path, encoding="utf-8") as fh:
-        doc = yaml.safe_load(fh)
+        doc = yaml.safe_load(expand_env(fh.read(), source=str(path)))
     queries = doc["queries"]
     return [
         QueryDef(

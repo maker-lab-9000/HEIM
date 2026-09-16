@@ -190,6 +190,27 @@ journalctl -u heim -f
 
 ## Configuration reference
 
+### Environment interpolation — deployment identity lives in `.env`
+
+Every file under `config/` (and the prompt templates) supports `${VAR}` /
+`${VAR:-default}` references, expanded from the environment at load time. All
+deployment-specific identity — server/Proxmox/HA IPs, SSH user, Telegram chat id,
+email recipients — therefore lives in `.env` next to the secrets:
+
+| Variable | Used for |
+|---|---|
+| `HEIM_SERVER_IP` | Prometheus/Loki URLs, SSH target, instance→host mapping |
+| `HEIM_PROXMOX_IP` | Proxmox API URL, PromQL examples in the prompts, mapping |
+| `HEIM_HA_IP` | Home Assistant URL, mapping |
+| `HEIM_SSH_USER` | the read-only SSH user (default `monitoring-agent`) |
+| `HEIM_TELEGRAM_CHAT_ID` | approval/report chat |
+| `HEIM_EMAIL_TO` / `HEIM_EMAIL_FROM` | report delivery |
+
+`config/settings.yaml` can be copied from the example **unchanged**; a reference
+without a default that is unset fails at startup naming the variable and file. In
+Docker, `.env` is injected via compose's `env_file`, so the same mechanism works
+identically in and out of the container.
+
 ### `config/settings.yaml`
 Endpoints, schedules, recipients, timeouts — see the commented
 [`settings.example.yaml`](config/settings.example.yaml). Every optional block
@@ -304,7 +325,7 @@ The repo ships the full self-hosted observability layer HEIM plugs into — depl
 The investigator executes **model-authored commands** on your host. The layered defenses
 are ported intact, but the OS boundary is the one that matters:
 
-1. **Dedicated SSH user** (e.g. `n8n-monitoring-agent`) with a scoped, read-only sudoers
+1. **Dedicated SSH user** (e.g. `monitoring-agent`) with a scoped, read-only sudoers
    allowlist (`du, df, findmnt, lsof, ls, ss, agent-docker`), `systemd-journal`+`adm`
    groups, `kernel.dmesg_restrict=0`, and the root-owned read-only `agent-docker`
    wrapper. Full rationale and setup: the n8n repo's README *Setup step 7* — the

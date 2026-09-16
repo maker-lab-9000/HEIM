@@ -14,6 +14,7 @@ Secrets never live in YAML — they come from the environment (see ``.env.exampl
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -193,9 +194,34 @@ def config_root() -> Path:
     return Path.cwd() / "config"
 
 
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
+def expand_env(text: str, *, source: str = "") -> str:
+    """Expand ``${VAR}`` / ``${VAR:-default}`` from the environment.
+
+    Applied to every YAML under config/ (pre-parse, so types still work) and
+    to rendered prompt templates — deployment identity (IPs, SSH user, chat
+    id, recipients) lives in .env, the committed config stays generic.
+    A reference without a default that is unset (or empty) raises, naming the
+    variable and the file — fail fast beats a silently empty URL.
+    """
+    def repl(m: re.Match) -> str:
+        name, default = m.group(1), m.group(2)
+        val = os.environ.get(name)
+        if val:
+            return val
+        if default is not None:
+            return default
+        where = f" (referenced in {source})" if source else ""
+        raise RuntimeError(f"${{{name}}} is not set{where} — add it to .env (see .env.example)")
+
+    return _ENV_REF.sub(repl, text)
+
+
 def _load_yaml(path: Path) -> dict:
     with open(path) as fh:
-        return yaml.safe_load(fh) or {}
+        return yaml.safe_load(expand_env(fh.read(), source=str(path))) or {}
 
 
 def load_config(root: Path | None = None) -> Config:

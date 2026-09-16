@@ -56,12 +56,8 @@ from decimal import ROUND_HALF_UP, Decimal
 _DAY_SECONDS = 86400
 _TOP_ALERTS = 15
 
-#: instance-IP -> friendly host name (verbatim from the JS ``hostFromMetric``).
-_HOST_BY_IP = {
-    "192.168.178.241": "ubuntu-server",
-    "192.168.178.2": "homelab",
-    "192.168.178.137": "home-assistant",
-}
+#: instance-IP -> friendly host name. The JS ``hostFromMetric`` hardcoded the
+#: deployment's map; here it is passed in (``settings.instance_host_map``).
 
 _VETH_RE = re.compile(r"^veth", re.IGNORECASE)
 
@@ -72,13 +68,13 @@ def _to_fixed(value: float, digits: int) -> float:
     return float(Decimal(value).quantize(quantum, rounding=ROUND_HALF_UP))
 
 
-def _host_from_metric(metric: dict | None) -> str:
+def _host_from_metric(metric: dict | None, host_by_ip: dict[str, str]) -> str:
     """Port of ``hostFromMetric``."""
     if not metric:
         return "unknown"
     instance = metric.get("instance") or ""
     ip = instance.split(":")[0]
-    mapped = _HOST_BY_IP.get(ip)
+    mapped = host_by_ip.get(ip)
     if mapped is not None:
         return mapped
     return instance or "unknown"
@@ -160,7 +156,8 @@ def _parse_pairs(series: dict) -> tuple[list[float], list[float]]:
     return ts, vals
 
 
-def aggregate(results: list[dict], now: datetime | None = None) -> dict:
+def aggregate(results: list[dict], now: datetime | None = None,
+              instance_host_map: dict[str, str] | None = None) -> dict:
     """Fold query_range results into the daily payload (pure, no I/O).
 
     ``now`` stamps ``payload.generatedAt`` (the JS used ``$now.toISO()``);
@@ -240,7 +237,7 @@ def aggregate(results: list[dict], now: datetime | None = None) -> dict:
             flag = _flag_for(cur, mq)
 
             metric = series.get("metric")
-            host = _host_from_metric(metric)
+            host = _host_from_metric(metric, instance_host_map or {})
             name = _series_name(metric, guest_names)
             mid = (metric or {}).get("id")
             if mid and (mid.startswith("qemu/") or mid.startswith("lxc/")):

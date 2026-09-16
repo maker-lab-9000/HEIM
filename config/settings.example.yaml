@@ -1,33 +1,41 @@
-# PAM deployment settings — copy to config/settings.yaml and edit.
-# Secrets do NOT go here; they come from the environment (see .env.example).
+# HEIM deployment settings — copy to config/settings.yaml.
+#
+# Values written as "dollar-brace VAR" references (see below for the syntax,
+# a "-:default" fallback is supported) are read from the environment / .env at
+# load time — so this file can usually be copied UNCHANGED, with all deployment
+# identity living in .env (see .env.example):
+#   HEIM_SERVER_IP, HEIM_PROXMOX_IP, HEIM_HA_IP, HEIM_SSH_USER,
+#   HEIM_TELEGRAM_CHAT_ID, HEIM_EMAIL_TO, HEIM_EMAIL_FROM
+# Secrets (API keys, tokens, SMTP password) NEVER go in YAML — .env only.
 
 prometheus:
-  url: http://YOUR_SERVER_IP:9090
+  url: http://${HEIM_SERVER_IP}:9090
 
 # Optional: AI-event stream for the Grafana "Homelab AI Operations" dashboard.
 # Remove the block to disable Loki emits entirely.
 loki:
-  url: http://YOUR_SERVER_IP:3100
+  url: http://${HEIM_SERVER_IP}:3100
 
 # Optional: approvals, live command feed, and report pushes over Telegram.
 # Bot token comes from env TELEGRAM_BOT_TOKEN. Remove to disable (investigations
 # then require --no-approval or approvals.require: false).
 telegram:
-  chat_id: 111111111
+  chat_id: ${HEIM_TELEGRAM_CHAT_ID}
 
 # Optional: report delivery by email (SMTP). Credentials via env SMTP_USER /
 # SMTP_PASSWORD (for Gmail: an app password). Remove to disable email.
 email:
-  to: you@example.com
-  from: you@example.com
+  to: ${HEIM_EMAIL_TO}
+  from: ${HEIM_EMAIL_FROM}
   smtp_host: smtp.gmail.com
   smtp_port: 465
 
 # Optional: push finished reports into Home Assistant as sensor entities
-# (sensor.pam_report_morning / _evening / pam_investigation_<host>).
+# (sensor.pam_report_morning / _evening / pam_investigation_<host> — the pam_
+# prefix is kept for compatibility with dashboards built for the n8n stack).
 # Token via env HA_TOKEN. Remove to disable.
 home_assistant:
-  url: http://YOUR_HA_IP:8123
+  url: http://${HEIM_HA_IP}:8123
 
 schedules:
   daily: ["07:00", "22:00"]   # local time, see `timezone`
@@ -39,12 +47,14 @@ approvals:
   outcome_timeout_hours: 8    # no outcome answer -> incident stays flagged
 
 timezone: Europe/Berlin
-db_path: heim.sqlite3          # incident store (SQLite)
+db_path: heim.sqlite3         # incident store (SQLite; relative to the working dir)
 audit_log: audit.jsonl        # every executed/blocked tool call, one JSON line each
 
 # Maps Prometheus `instance` label address prefixes to host names — used by the
-# alert poller to attribute firing alerts. Extend when you add hosts.
+# alert poller and the daily aggregation to attribute metrics/alerts to hosts.
+# Matched in order: put longer / more specific prefixes FIRST. Extend when you
+# add hosts.
 instance_host_map:
-  "YOUR_SERVER_IP": ubuntu-server
-  "YOUR_PROXMOX_IP": homelab
-  "YOUR_HA_IP": home-assistant
+  "${HEIM_SERVER_IP}": ubuntu-server
+  "${HEIM_PROXMOX_IP}": homelab
+  "${HEIM_HA_IP}": home-assistant

@@ -17,6 +17,7 @@ import httpx
 from heim.incidents.loki_events import finding_and_category_events, incident_events
 from heim.incidents.reconcile import reconcile
 from heim.incidents.state import compute_state
+from heim.config import expand_env
 from heim.llm import analyst_complete, parse_analysis
 from heim.metrics.aggregate import aggregate
 from heim.metrics.queries import build_window, load_queries
@@ -89,7 +90,7 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     window = build_window(rt.now())
     log.info("daily run: fetching %d queries over %s → %s", len(qdefs), window["start"], window["end"])
     results = await _fetch_query_ranges(cfg.settings.prometheus.url, qdefs, window)
-    agg = aggregate(results, now=rt.now())
+    agg = aggregate(results, now=rt.now(), instance_host_map=cfg.settings.instance_host_map)
     payload = agg["payload"]
     log.info("aggregated: overall=%s crit=%s warn=%s na=%s", payload["overall"],
              payload["counts"]["crit"], payload["counts"]["warn"], payload["counts"]["naQueries"])
@@ -97,7 +98,7 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     # 2. LLM analysis
     if cfg.analyst is None:
         raise RuntimeError("no analyst agent configured (config/agents/daily_analyst.yaml)")
-    system = (cfg.prompts_dir / cfg.analyst.prompt).read_text()
+    system = expand_env((cfg.prompts_dir / cfg.analyst.prompt).read_text(), source=cfg.analyst.prompt)
     user = (
         "Here is the homelab 3-day Prometheus metrics summary as JSON. Analyze it for degradation "
         "TRENDS over the window (use the day3d per-day averages and changePct, not just current "

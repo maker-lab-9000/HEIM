@@ -14,14 +14,48 @@ from heim.pipelines.investigate import InvestigationRequest, findings_text
 ROOT = Path(__file__).resolve().parent.parent
 
 
+DUMMY_ENV = {
+    "HEIM_SERVER_IP": "10.0.0.10",
+    "HEIM_PROXMOX_IP": "10.0.0.2",
+    "HEIM_HA_IP": "10.0.0.3",
+    "HEIM_TELEGRAM_CHAT_ID": "111111111",
+    "HEIM_EMAIL_TO": "test@example.com",
+    "HEIM_EMAIL_FROM": "test@example.com",
+}
+
+
 @pytest.fixture()
 def cfg(tmp_path, monkeypatch):
-    # use the example settings so tests don't depend on the gitignored real file
+    # use the example settings so tests don't depend on the gitignored real file;
+    # committed config references ${HEIM_*} identity vars -> set dummies
+    for k, v in DUMMY_ENV.items():
+        monkeypatch.setenv(k, v)
     import shutil
     croot = tmp_path / "config"
     shutil.copytree(ROOT / "config", croot, ignore=shutil.ignore_patterns("settings.yaml"))
     shutil.copy(croot / "settings.example.yaml", croot / "settings.yaml")
     return load_config(croot)
+
+
+def test_expand_env(monkeypatch):
+    from heim.config import expand_env
+    monkeypatch.setenv("HEIM_X", "1.2.3.4")
+    assert expand_env("url: http://${HEIM_X}:9090") == "url: http://1.2.3.4:9090"
+    assert expand_env("user: ${HEIM_MISSING:-fallback}") == "user: fallback"
+    monkeypatch.setenv("HEIM_EMPTY", "")
+    assert expand_env("${HEIM_EMPTY:-dflt}") == "dflt"  # empty counts as unset
+    with pytest.raises(RuntimeError, match="HEIM_MISSING"):
+        expand_env("${HEIM_MISSING}", source="settings.yaml")
+
+
+def test_config_values_interpolated(cfg):
+    assert cfg.settings.prometheus.url == "http://10.0.0.10:9090"
+    assert cfg.settings.telegram.chat_id == 111111111  # yaml parses the int post-expansion
+    assert cfg.hosts["ubuntu-server"].ssh.host == "10.0.0.10"
+    assert cfg.hosts["ubuntu-server"].ssh.user == "monitoring-agent"  # ${...:-default}
+    assert cfg.settings.instance_host_map == {
+        "10.0.0.10": "ubuntu-server", "10.0.0.2": "homelab", "10.0.0.3": "home-assistant"}
+    assert "10.0.0.2:9100" in cfg.hosts["homelab"].facts
 
 
 def test_config_loads_and_routes(cfg):

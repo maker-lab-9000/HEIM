@@ -5,9 +5,9 @@ role: hypervisor
 investigable: [cpu, memory, temperature, disk, diskHealth]
 
 api:
-  url: https://192.168.178.2:8006   # Proxmox VE API; token via env PROXMOX_TOKEN
+  url: https://${HEIM_PROXMOX_IP}:8006   # Proxmox VE API; token via env PROXMOX_TOKEN
   verify_ssl: false
 
 # Injected into the investigator prompt's [FACTS] block.
 facts: |
-  Disk topology (verified): guest sda=/ and sdd1=/docker-data sit on homelab's NVMe (local-lvm), like ALL VM disks (incl. home-assistant, ubuntu-sandbox). Guest sdb1=/Photos = qcow2 on homelab physical sda; guest sdc1=/JellyMedia = qcow2 on homelab sdb; homelab sdc/sdd/sde = host-only backup disks. So: only /Photos I/O heats homelab sda, only /JellyMedia heats homelab sdb (plus host-side backup jobs); other VMs cannot touch them. cAdvisor 'device' labels are GUEST devices (/dev/sda = NVMe root, NOT /Photos). Physical-disk busyness: rate(node_disk_written_bytes_total{instance="192.168.178.2:9100",device="sda"}[5m]).
+  Disk topology (verified): guest sda=/ and sdd1=/docker-data sit on homelab's NVMe (local-lvm), like ALL VM disks (incl. home-assistant, ubuntu-sandbox). Guest sdb1=/Photos = qcow2 on homelab physical sda; guest sdc1=/JellyMedia = qcow2 on homelab sdb; homelab sdc/sdd/sde = host-only backup disks. So: only /Photos I/O heats homelab sda, only /JellyMedia heats homelab sdb (plus host-side backup jobs); other VMs cannot touch them. cAdvisor 'device' labels are GUEST devices (/dev/sda = NVMe root, NOT /Photos). Physical-disk busyness: rate(node_disk_written_bytes_total{instance="${HEIM_PROXMOX_IP}:9100",device="sda"}[5m]).

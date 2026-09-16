@@ -3,7 +3,7 @@ role: ha-guest
 investigable: all
 
 api:
-  url: http://192.168.178.137:8123   # HA REST API; token via env HA_TOKEN (non-admin user)
+  url: http://${HEIM_HA_IP}:8123   # HA REST API; token via env HA_TOKEN (non-admin user)
   verify_ssl: true
 
 facts: |

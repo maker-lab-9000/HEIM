@@ -3,9 +3,9 @@ role: guest
 investigable: all
 
 ssh:
-  host: 192.168.178.241
+  host: ${HEIM_SERVER_IP}
   port: 22
-  user: n8n-monitoring-agent
+  user: ${HEIM_SSH_USER:-monitoring-agent}
   key_path: ~/.ssh/pam_agent   # override with env HEIM_SSH_KEY
 
 # Injected into the investigator prompt's [FACTS] block.
