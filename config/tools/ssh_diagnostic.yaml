@@ -1,0 +1,19 @@
+name: ssh_diagnostic
+module: heim.tools.ssh_diagnostic:SshDiagnosticTool
+description: >-
+  Execute a single READ-ONLY Linux shell command on the ubuntu-server host over SSH and
+  return stdout, stderr and exit code. Use it to inspect processes, memory, disk, logs,
+  Docker containers, systemd units, and network state. Mutating or dangerous commands
+  (rm, mv, dd, kill, chmod, systemctl start/stop/restart, docker run/stop/rm, package
+  installs, file redirection, nested shells) are automatically rejected — if that happens,
+  rephrase as a read-only command. Pass the full command line as the 'command' argument.
+args:
+  command:
+    type: string
+    description: >-
+      A single read-only Linux shell command to run on ubuntu-server, e.g. df -h or
+      journalctl --no-pager -n 200 -p warning
+required: [command]
+options:
+  host: ubuntu-server   # must reference a config/hosts/*.yaml with an ssh: block
+  clip_bytes: 8192

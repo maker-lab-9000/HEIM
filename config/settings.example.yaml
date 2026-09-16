@@ -1,0 +1,50 @@
+# PAM deployment settings — copy to config/settings.yaml and edit.
+# Secrets do NOT go here; they come from the environment (see .env.example).
+
+prometheus:
+  url: http://YOUR_SERVER_IP:9090
+
+# Optional: AI-event stream for the Grafana "Homelab AI Operations" dashboard.
+# Remove the block to disable Loki emits entirely.
+loki:
+  url: http://YOUR_SERVER_IP:3100
+
+# Optional: approvals, live command feed, and report pushes over Telegram.
+# Bot token comes from env TELEGRAM_BOT_TOKEN. Remove to disable (investigations
+# then require --no-approval or approvals.require: false).
+telegram:
+  chat_id: 111111111
+
+# Optional: report delivery by email (SMTP). Credentials via env SMTP_USER /
+# SMTP_PASSWORD (for Gmail: an app password). Remove to disable email.
+email:
+  to: you@example.com
+  from: you@example.com
+  smtp_host: smtp.gmail.com
+  smtp_port: 465
+
+# Optional: push finished reports into Home Assistant as sensor entities
+# (sensor.pam_report_morning / _evening / pam_investigation_<host>).
+# Token via env HA_TOKEN. Remove to disable.
+home_assistant:
+  url: http://YOUR_HA_IP:8123
+
+schedules:
+  daily: ["07:00", "22:00"]   # local time, see `timezone`
+  poll_minutes: 5             # fast-path alert poller interval
+
+approvals:
+  require: true               # human Telegram approval before any investigation
+  approve_timeout_hours: 6    # no answer -> declined (re-proposed next run)
+  outcome_timeout_hours: 8    # no outcome answer -> incident stays flagged
+
+timezone: Europe/Berlin
+db_path: heim.sqlite3          # incident store (SQLite)
+audit_log: audit.jsonl        # every executed/blocked tool call, one JSON line each
+
+# Maps Prometheus `instance` label address prefixes to host names — used by the
+# alert poller to attribute firing alerts. Extend when you add hosts.
+instance_host_map:
+  "YOUR_SERVER_IP": ubuntu-server
+  "YOUR_PROXMOX_IP": homelab
+  "YOUR_HA_IP": home-assistant

@@ -1,0 +1,22 @@
+name: ubuntu-server
+role: guest
+investigable: all
+
+ssh:
+  host: 192.168.178.241
+  port: 22
+  user: n8n-monitoring-agent
+  key_path: ~/.ssh/pam_agent   # override with env HEIM_SSH_KEY
+
+# Injected into the investigator prompt's [FACTS] block.
+facts: |
+  Target host 'ubuntu-server' = Proxmox VM 100 (4 vCPU, 16 GiB) on bare-metal 'homelab'. Runs Docker + a Photos library. Physical hardware (SMART, drive temps) lives on 'homelab' and is NOT visible from inside the VM — a clean VM view never rules out a host hardware cause; say so when in-VM evidence is inconclusive.
+  Mounts: /docker-data = Docker data-root (growth → images/volumes) · /Photos = PhotoPrism + backups (growth normal) · /JellyMedia = Jellyfin media (growth normal; excluded from fs alerts) · / = OS + everything else. Judge growth against the mount's purpose: media on /JellyMedia is normal; a stray file on / or image pileup on /docker-data is not.
+
+# Injected into the investigator prompt's [PRIVILEGES] block. Keep this in sync
+# with the actual sudoers/groups on the host — the agent plans around it.
+privileges: |
+  NO sudo: ps, top -bn1, free -m, uptime, vmstat, swapon --show; cat /proc/*; dmesg; journalctl (--no-pager, -u <unit>, -p warning); /var/log/*; ss -tuna, ip -s link/addr/route; lsblk, findmnt, df; sensors; cat/grep on world-readable files.
+  WITH sudo (passwordless, read-only ONLY): du, df, findmnt, lsof, ls, ss, agent-docker. For root-owned paths: 'sudo du -x -d1 <path> | sort -h' (dir sizes); 'sudo du -ah -d1 <dir> | sort -h' or 'sudo ls -la' (reveal large FILES that du -d1 hides); 'sudo ss -tunap'; 'sudo lsof <path>'.
+  Containers: ONLY 'sudo agent-docker <ps|logs|stats|top|inspect|system df|images>' (read-only; logs tail-bounded, no -f; inspect redacts env). Raw docker/podman/socket WILL fail.
+  NOT available: 'sudo cat'/'sudo grep' (sudo gives sizes/names/paths, never file contents); smartctl (SMART/temps already in metrics); ANY mutation (restart, kill, rm, chmod, mv, installs, redirection, nested shells — guard-rejected).

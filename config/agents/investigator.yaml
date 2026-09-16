@@ -1,0 +1,13 @@
+# The root-cause investigator agent (port of n8n PAM 20's Investigator).
+name: investigator
+model: claude-sonnet-4-6
+max_tokens: 4096
+soft_step_budget: 15   # the prompt tells the model to conclude by ~12-15 commands
+hard_step_cap: 25      # the loop force-finalizes here (n8n used maxIterations 40)
+prompt: investigator.md.j2
+tools:
+  - ssh_diagnostic
+  - prometheus_query
+  - discover_metrics
+  - ha_api
+  - proxmox_api

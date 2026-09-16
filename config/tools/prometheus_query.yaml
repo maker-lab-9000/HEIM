@@ -1,0 +1,24 @@
+name: prometheus_query
+module: heim.tools.prometheus_query:PrometheusQueryTool
+description: >-
+  Run a PromQL query against the homelab Prometheus. Default = instant query (current
+  values). Pass the optional 'lookback' argument (e.g. 30m, 6h, 24h, 3d — max 3d) to get
+  a RANGE of values over that window instead: use it to see the SHAPE and ONSET TIME of a
+  problem (spike vs step vs slow ramp). Optional 'step' sets range resolution (e.g. 5m);
+  leave empty for automatic (~100 points). Examples:
+  promql=100*(1-node_memory_MemAvailable_bytes/node_memory_MemTotal_bytes);
+  promql=container_fs_usage_bytes{name="jellyfin"} with lookback=24h.
+args:
+  promql:
+    type: string
+    description: A valid PromQL expression
+  lookback:
+    type: string
+    description: >-
+      OPTIONAL - empty for instant query. Duration like 30m, 6h, 24h, 3d to get a range
+      of values over that window (max 3d); use to see when a problem started
+  step:
+    type: string
+    description: "OPTIONAL range resolution like 1m, 5m, 1h; empty = automatic (~100 points)"
+required: [promql]
+options: {}

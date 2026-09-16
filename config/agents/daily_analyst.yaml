@@ -1,0 +1,12 @@
+# The daily trend analyst (port of n8n PAM 10's Basic LLM Chain).
+# One completion, no tools; primary model with automatic fallback.
+kind: analyst
+name: daily_analyst
+primary:
+  provider: openrouter
+  model: google/gemma-4-31b-it:free
+fallback:
+  provider: anthropic
+  model: claude-opus-4-6
+max_tokens: 4096
+prompt: analyst.md

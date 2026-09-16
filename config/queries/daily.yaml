@@ -1,0 +1,405 @@
+# Daily analysis PromQL query catalog.
+#
+# Port of the n8n "Build Queries" Code node from workflow PAM-10 Daily Analysis
+# (reference/pam-10-daily-analysis/build-queries.js). promql strings are
+# transcribed verbatim from the JS source. The Prometheus base URL (promBase in
+# the JS) is deliberately NOT stored here -- the runtime supplies it.
+#
+# dir semantics: 'high' high-is-bad | 'low' low-is-bad | 'one' must equal 1 |
+# 'zero' must stay 0 | 'info' informational only | 'vmup' >=1 ok, else n/a.
+window:
+  days: 3
+  step: 3h
+queries:
+- qid: cpu_busy
+  category: CPU
+  label: CPU busy
+  unit: '%'
+  dir: high
+  warn: 80
+  crit: 95
+  promql: 100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])))
+- qid: load_per_core
+  category: CPU
+  label: Load15 / core
+  unit: ''
+  dir: high
+  warn: 1
+  crit: 2
+  promql: node_load15 / on(instance) group_left count by (instance)(node_cpu_seconds_total{mode="idle"})
+- qid: cpu_psi
+  category: CPU
+  label: CPU PSI stall
+  unit: ratio
+  dir: high
+  warn: 0.1
+  crit: 0.3
+  promql: rate(node_pressure_cpu_waiting_seconds_total[5m])
+- qid: procs_blocked
+  category: CPU
+  label: Procs blocked
+  unit: ''
+  dir: high
+  warn: 2
+  crit: 5
+  promql: node_procs_blocked
+- qid: mem_used
+  category: Memory
+  label: Memory used
+  unit: '%'
+  dir: high
+  warn: 85
+  crit: 95
+  promql: 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)
+- qid: swap_used
+  category: Memory
+  label: Swap used
+  unit: '%'
+  dir: high
+  warn: 25
+  crit: 60
+  promql: 100 * (1 - node_memory_SwapFree_bytes / node_memory_SwapTotal_bytes)
+- qid: mem_psi
+  category: Memory
+  label: Memory PSI stall
+  unit: ratio
+  dir: high
+  warn: 0.05
+  crit: 0.2
+  promql: rate(node_pressure_memory_waiting_seconds_total[5m])
+- qid: oom
+  category: Memory
+  label: OOM kills (24h)
+  unit: ''
+  dir: high
+  warn: 1
+  crit: 1
+  promql: increase(node_vmstat_oom_kill[1d])
+- qid: ha_cpu
+  category: CPU
+  label: HA CPU (guest)
+  unit: '%'
+  dir: high
+  warn: 80
+  crit: 95
+  promql: hass_sensor_unit_percent{entity="sensor.processor_use"}
+- qid: ha_mem
+  category: Memory
+  label: HA memory (guest)
+  unit: '%'
+  dir: high
+  warn: 85
+  crit: 95
+  promql: hass_sensor_unit_percent{entity="sensor.memory_use_percent"}
+- qid: ha_disk
+  category: Disk
+  label: HA disk used /
+  unit: '%'
+  dir: high
+  warn: 80
+  crit: 90
+  promql: hass_sensor_unit_percent{entity="sensor.disk_use_percent"}
+- qid: ha_disk_free
+  category: Disk
+  label: HA disk free /
+  unit: B
+  dir: info
+  warn: 0
+  crit: 0
+  promql: hass_sensor_data_size_gib{entity="sensor.disk_free"} * 1073741824
+- qid: ha_svc_uptime
+  category: Host
+  label: HA min service uptime (24h)
+  unit: '%'
+  dir: low
+  warn: 99
+  crit: 95
+  promql: min by (instance) (hass_sensor_unit_percent{entity=~".+_uptime_1_day"})
+- qid: ha_unavail
+  category: Host
+  label: HA unavailable entities
+  unit: ''
+  dir: info
+  warn: 0
+  crit: 0
+  promql: count by (instance) (hass_entity_available == 0)
+- qid: ha_recorder
+  category: Host
+  label: HA recorder writes
+  unit: /s
+  dir: info
+  warn: 0
+  crit: 0
+  promql: sum by (instance) (rate(hass_state_change_total[5m]))
+- qid: ha_automations
+  category: Host
+  label: HA automations/hour
+  unit: ''
+  dir: info
+  warn: 0
+  crit: 0
+  promql: sum by (instance) (rate(hass_automation_triggered_count_total[1h])) * 3600
+- qid: ha_backup
+  category: Host
+  label: HA backups stale
+  unit: ''
+  dir: zero
+  warn: 0
+  crit: 0
+  promql: hass_binary_sensor_state{entity="binary_sensor.backups_stale"}
+- qid: fs_used
+  category: Disk
+  label: Filesystem used
+  unit: '%'
+  dir: high
+  warn: 80
+  crit: 90
+  promql: 100 * (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.*|overlay|squashfs|vfat",mountpoint!~"/boot|/JellyMedia"} / node_filesystem_size_bytes)
+- qid: inodes_used
+  category: Disk
+  label: Inodes used
+  unit: '%'
+  dir: high
+  warn: 80
+  crit: 90
+  promql: 100 * (1 - node_filesystem_files_free{fstype!~"tmpfs|fuse.*|overlay|squashfs",mountpoint!~"/boot|/JellyMedia"} / node_filesystem_files)
+- qid: disk_io_util
+  category: Disk
+  label: Disk I/O util
+  unit: ratio
+  dir: high
+  warn: 0.8
+  crit: 0.95
+  promql: rate(node_disk_io_time_seconds_total{device!~"dm-.*"}[5m])
+- qid: disk_write
+  category: Disk
+  label: Disk write rate
+  unit: B/s
+  dir: high
+  warn: 1000000000
+  crit: 3000000000
+  promql: rate(node_disk_written_bytes_total{device!~"dm-.*"}[5m])
+- qid: smart_status
+  category: Disk Health
+  label: SMART status
+  unit: ''
+  dir: one
+  warn: 1
+  crit: 1
+  promql: smartctl_device_smart_status
+- qid: nvme_wear
+  category: Disk Health
+  label: NVMe wear
+  unit: '%'
+  dir: high
+  warn: 70
+  crit: 90
+  promql: smartctl_device_percentage_used
+- qid: spare
+  category: Disk Health
+  label: Available spare
+  unit: '%'
+  dir: low
+  warn: 30
+  crit: 10
+  promql: smartctl_device_available_spare
+- qid: media_err
+  category: Disk Health
+  label: Media errors
+  unit: ''
+  dir: high
+  warn: 1
+  crit: 1
+  promql: smartctl_device_media_errors
+- qid: errlog
+  category: Disk Health
+  label: SMART err-log
+  unit: ''
+  dir: high
+  warn: 1
+  crit: 10
+  promql: smartctl_device_num_err_log_entries
+- qid: sda_wear
+  category: Disk Health
+  label: SSD life left
+  unit: '%'
+  dir: low
+  warn: 20
+  crit: 10
+  promql: smartctl_device_attribute{device="sda",attribute_name="Media_Wearout_Indicator",attribute_value_type="value"}
+- qid: sdb_crc
+  category: Disk Health
+  label: CRC errors
+  unit: ''
+  dir: info
+  warn: 0
+  crit: 0
+  promql: smartctl_device_attribute{device="sdb",attribute_name="UDMA_CRC_Error_Count",attribute_value_type="raw"}
+- qid: drive_temp
+  category: Temperature
+  label: Drive temp
+  unit: °C
+  dir: high
+  warn: 55
+  crit: 65
+  promql: smartctl_device_temperature{temperature_type="current"}
+- qid: host_temp_max
+  category: Temperature
+  label: Max sensor temp
+  unit: °C
+  dir: high
+  warn: 75
+  crit: 90
+  promql: max by (instance)(node_hwmon_temp_celsius)
+- qid: chip_temp
+  category: Temperature
+  label: Chip temp
+  unit: °C
+  dir: high
+  warn: 75
+  crit: 90
+  promql: max by (instance, chip)(node_hwmon_temp_celsius)
+- qid: net_rx
+  category: Network
+  label: RX rate
+  unit: B/s
+  dir: high
+  warn: 100000000
+  crit: 115000000
+  promql: rate(node_network_receive_bytes_total{device=~"nic0|enp.*|eno.*|eth.*"}[5m])
+- qid: net_tx
+  category: Network
+  label: TX rate
+  unit: B/s
+  dir: high
+  warn: 100000000
+  crit: 115000000
+  promql: rate(node_network_transmit_bytes_total{device=~"nic0|enp.*|eno.*|eth.*"}[5m])
+- qid: net_err
+  category: Network
+  label: NIC errors+drops
+  unit: /s
+  dir: high
+  warn: 0.1
+  crit: 1
+  promql: rate(node_network_receive_errs_total{device=~"nic0|enp.*|eno.*|eth.*"}[5m]) + rate(node_network_transmit_errs_total{device=~"nic0|enp.*|eno.*|eth.*"}[5m]) + rate(node_network_receive_drop_total{device=~"nic0|enp.*|eno.*|eth.*"}[5m]) + rate(node_network_transmit_drop_total{device=~"nic0|enp.*|eno.*|eth.*"}[5m])
+- qid: tcp_retrans
+  category: Network
+  label: TCP retransmits
+  unit: /s
+  dir: high
+  warn: 5
+  crit: 50
+  promql: rate(node_netstat_Tcp_RetransSegs[5m])
+- qid: uptime
+  category: Host
+  label: Uptime
+  unit: days
+  dir: info
+  warn: 999999
+  crit: 999999
+  promql: (node_time_seconds - node_boot_time_seconds) / 86400
+- qid: vm_uptime
+  category: Host
+  label: Uptime
+  unit: days
+  dir: info
+  warn: 999999
+  crit: 999999
+  promql: pve_uptime_seconds{id=~"qemu/.*",id!="qemu/100"} / 86400
+- qid: pve_node_up
+  category: Proxmox
+  label: PVE node status
+  unit: online
+  dir: one
+  warn: 1
+  crit: 1
+  promql: pve_up{id="node/homelab"}
+- qid: pve_vm_up
+  category: Proxmox
+  label: VM status
+  unit: state
+  dir: vmup
+  warn: 0
+  crit: 0
+  promql: pve_up{id=~"qemu/.*"}
+- qid: pve_vm_cpu
+  category: Proxmox
+  label: VM CPU
+  unit: '%'
+  dir: high
+  warn: 85
+  crit: 95
+  promql: pve_cpu_usage_ratio{id=~"qemu/.*"} * 100
+- qid: pve_vm_mem
+  category: Proxmox
+  label: VM memory (incl cache)
+  unit: '%'
+  dir: info
+  warn: 85
+  crit: 95
+  promql: 100 * pve_memory_usage_bytes{id=~"qemu/.*"} / pve_memory_size_bytes{id=~"qemu/.*"}
+- qid: pve_vm_disk_write
+  category: Proxmox
+  label: VM disk write
+  unit: B/s
+  dir: info
+  warn: 0
+  crit: 0
+  promql: rate(pve_disk_written_bytes_total{id=~"qemu/.*"}[5m])
+- qid: pve_vm_disk_read
+  category: Proxmox
+  label: VM disk read
+  unit: B/s
+  dir: info
+  warn: 0
+  crit: 0
+  promql: rate(pve_disk_read_bytes_total{id=~"qemu/.*"}[5m])
+- qid: pve_vm_net_rx
+  category: Proxmox
+  label: VM net RX
+  unit: B/s
+  dir: info
+  warn: 0
+  crit: 0
+  promql: rate(pve_network_receive_bytes_total{id=~"qemu/.*"}[5m])
+- qid: pve_vm_net_tx
+  category: Proxmox
+  label: VM net TX
+  unit: B/s
+  dir: info
+  warn: 0
+  crit: 0
+  promql: rate(pve_network_transmit_bytes_total{id=~"qemu/.*"}[5m])
+- qid: pve_pool_used
+  category: Proxmox
+  label: Pool used
+  unit: '%'
+  dir: high
+  warn: 80
+  crit: 90
+  promql: 100 * pve_disk_usage_bytes{id=~"storage/.*"} / pve_disk_size_bytes{id=~"storage/.*"}
+- qid: pve_pool_up
+  category: Proxmox
+  label: Pool status
+  unit: online
+  dir: one
+  warn: 1
+  crit: 1
+  promql: pve_up{id=~"storage/.*"}
+- qid: pve_unbacked
+  category: Proxmox
+  label: Guests not backed up
+  unit: ''
+  dir: high
+  warn: 2
+  crit: 3
+  promql: pve_not_backed_up_total
+- qid: pve_guest_info
+  category: Proxmox
+  label: guest info
+  unit: ''
+  dir: info
+  warn: 0
+  crit: 0
+  promql: pve_guest_info

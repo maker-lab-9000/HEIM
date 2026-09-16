@@ -1,0 +1,24 @@
+name: proxmox_api
+module: heim.tools.proxmox_api:ProxmoxApiTool
+description: >-
+  Perform a READ-ONLY GET against the Proxmox VE API of the hypervisor 'homelab' - DIRECT
+  host-side facts no guest can see. Key endpoints (prefix /api2/json):
+  /nodes/homelab/tasks?typefilter=vzdump&limit=20 (recent backup/scrub tasks with
+  start/end times - correlate with an onset), /nodes/homelab/tasks/<upid>/log (a task's
+  log), /nodes/homelab/qemu/<vmid>/config (VM disk placement), /nodes/homelab/qemu (list
+  VMs), /nodes/homelab/status (host CPU/mem/load/uptime), /nodes/homelab/syslog?limit=200
+  or /nodes/homelab/journal?lastentries=200 (host logs), /nodes/homelab/disks/list and
+  /nodes/homelab/disks/smart?disk=/dev/sda (full SMART attributes),
+  /nodes/homelab/storage/<name>/status, /cluster/resources. Anything else is
+  guard-blocked. NO physical temperature sensors and NO process list are available. Pass
+  the endpoint path including query string as 'path'.
+args:
+  path:
+    type: string
+    description: >-
+      Proxmox API GET path starting with /api2/json/, e.g.
+      /api2/json/nodes/homelab/tasks?typefilter=vzdump&limit=20
+required: [path]
+options:
+  host: homelab   # must reference a config/hosts/*.yaml with an api: block
+  clip_bytes: 8192

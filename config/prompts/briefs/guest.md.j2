@@ -1,0 +1,7 @@
+Investigate the following alert(s) detected on host "{{ host }}" during automated monitoring. Determine the ROOT CAUSE by running read-only diagnostic commands over SSH and/or querying Prometheus. Do not stop at the symptom — dig until you can explain WHY it is happening.
+
+DETECTED FINDINGS:
+{{ findings_text }}
+
+{% include 'briefs/_report_spec.md' %}
+{% include 'briefs/_temperature_playbook.md.j2' %}

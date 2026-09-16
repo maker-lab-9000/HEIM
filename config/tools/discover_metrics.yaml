@@ -1,0 +1,17 @@
+name: discover_metrics
+module: heim.tools.discover_metrics:DiscoverMetricsTool
+description: >-
+  Search the Prometheus metric catalog. Pass 'pattern' (substring or regex, e.g. hass_ or
+  container_fs or temp) to list matching metric names (100 cap). Optionally pass 'metric'
+  (one exact metric name) to also get up to 30 sample label-sets showing which labels and
+  values exist. Use BEFORE writing PromQL when unsure of a metric or label name - cheaper
+  than guessing and getting empty results.
+args:
+  pattern:
+    type: string
+    description: Substring or regex to match metric names, e.g. hass_ or node_disk
+  metric:
+    type: string
+    description: OPTIONAL exact metric name to list sample label-sets for; empty to skip
+required: [pattern]
+options: {}

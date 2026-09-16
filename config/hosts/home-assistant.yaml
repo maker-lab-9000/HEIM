@@ -1,0 +1,10 @@
+name: home-assistant
+role: ha-guest
+investigable: all
+
+api:
+  url: http://192.168.178.137:8123   # HA REST API; token via env HA_TOKEN (non-admin user)
+  verify_ssl: true
+
+facts: |
+  'home-assistant' = Proxmox VM 101 (2 vCPU, 4 GiB) on 'homelab'. NOT SSH-reachable — investigate it only via the Home Assistant REST API tool and Prometheus (hass_* metrics = in-guest view; pve_* with id="qemu/101" = hypervisor view).

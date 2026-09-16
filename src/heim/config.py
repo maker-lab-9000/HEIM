@@ -1,0 +1,246 @@
+"""Configuration loading for PAM.
+
+Everything declarative lives under ``config/``:
+
+- ``settings.yaml``       — deployment-specific endpoints, schedules, recipients
+- ``hosts/*.yaml``        — one file per monitored host (role, ssh/api access, prompt facts)
+- ``tools/*.yaml``        — one file per agent tool (LLM-facing description, arg schema, options)
+- ``agents/*.yaml``       — one file per agent (model, budget, tool list, prompt template)
+- ``queries/daily.yaml``  — the daily PromQL catalog
+- ``prompts/``            — jinja2 prompt templates
+
+Secrets never live in YAML — they come from the environment (see ``.env.example``).
+"""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+
+from heim.incidents.types import HostRouting
+
+
+# --------------------------------------------------------------------------- settings
+
+
+class PrometheusCfg(BaseModel):
+    url: str
+
+
+class LokiCfg(BaseModel):
+    url: str
+
+
+class TelegramCfg(BaseModel):
+    chat_id: int
+
+
+class EmailCfg(BaseModel):
+    to: str
+    from_addr: str = Field(alias="from")
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 465
+
+    model_config = {"populate_by_name": True}
+
+
+class HomeAssistantCfg(BaseModel):
+    url: str
+
+
+class SchedulesCfg(BaseModel):
+    daily: list[str] = ["07:00", "22:00"]  # HH:MM in the configured timezone
+    poll_minutes: int = 5
+
+
+class ApprovalsCfg(BaseModel):
+    require: bool = True
+    approve_timeout_hours: float = 6.0
+    outcome_timeout_hours: float = 8.0
+
+
+class Settings(BaseModel):
+    prometheus: PrometheusCfg
+    loki: LokiCfg | None = None
+    telegram: TelegramCfg | None = None
+    email: EmailCfg | None = None
+    home_assistant: HomeAssistantCfg | None = None
+    schedules: SchedulesCfg = SchedulesCfg()
+    approvals: ApprovalsCfg = ApprovalsCfg()
+    timezone: str = "Europe/Berlin"
+    db_path: str = "heim.sqlite3"
+    audit_log: str = "audit.jsonl"
+    # instance-label address prefix -> host name (used by the alert poller to
+    # attribute a firing alert's `instance` label to a configured host)
+    instance_host_map: dict[str, str] = {}
+
+
+# --------------------------------------------------------------------------- hosts
+
+
+class SshCfg(BaseModel):
+    host: str
+    port: int = 22
+    user: str
+    key_path: str  # expanded at use; override with env HEIM_SSH_KEY
+
+    def resolved_key_path(self) -> str:
+        return os.path.expanduser(os.environ.get("HEIM_SSH_KEY", self.key_path))
+
+
+class ApiCfg(BaseModel):
+    url: str
+    verify_ssl: bool = True
+
+
+class Host(BaseModel):
+    name: str
+    role: Literal["guest", "hypervisor", "ha-guest"]
+    # 'all' or a list of investigable categories (cpu, memory, disk, diskHealth,
+    # temperature, network, container, ...)
+    investigable: str | list[str] = "all"
+    ssh: SshCfg | None = None
+    api: ApiCfg | None = None
+    facts: str = ""       # injected into the investigator prompt's [FACTS] block
+    privileges: str = ""  # injected into the [PRIVILEGES] block (ssh hosts only)
+
+
+# --------------------------------------------------------------------------- tools & agents
+
+
+class ToolCfg(BaseModel):
+    name: str
+    description: str          # shown to the LLM verbatim
+    module: str               # "heim.tools.ssh_diagnostic:SshDiagnosticTool"
+    args: dict = {}           # JSON-schema `properties` for the tool input
+    required: list[str] = []
+    options: dict = {}        # tool-specific knobs (host binding, clip bytes, ...)
+
+    def input_schema(self) -> dict:
+        return {"type": "object", "properties": self.args, "required": self.required}
+
+
+class ModelRef(BaseModel):
+    provider: Literal["anthropic", "openrouter"] = "anthropic"
+    model: str
+
+
+class AgentCfg(BaseModel):
+    name: str
+    model: str                         # anthropic model id (the agent loop is Anthropic-native)
+    max_tokens: int = 4096
+    soft_step_budget: int = 15         # told to the model in the prompt
+    hard_step_cap: int = 25            # loop refuses tools beyond this
+    prompt: str = ""                   # template filename under prompts/
+    tools: list[str] = []
+    temperature: float | None = None
+
+
+class AnalystCfg(BaseModel):
+    name: str = "daily_analyst"
+    primary: ModelRef
+    fallback: ModelRef | None = None
+    max_tokens: int = 4096
+    prompt: str = "analyst.md"
+
+
+# --------------------------------------------------------------------------- loader
+
+
+@dataclass
+class Config:
+    root: Path
+    settings: Settings
+    hosts: dict[str, Host]
+    tools: dict[str, ToolCfg]
+    agents: dict[str, AgentCfg]
+    analyst: AnalystCfg | None
+    prompts_dir: Path
+    queries_path: Path
+
+    def routing(self) -> HostRouting:
+        """Derive incident/investigation routing from the host files."""
+        ssh_hosts: set[str] = set()
+        hypervisor: str | None = None
+        hyper_cats: set[str] = set()
+        ha_host: str | None = None
+        for h in self.hosts.values():
+            if h.role == "guest" and h.ssh is not None:
+                ssh_hosts.add(h.name)
+            elif h.role == "hypervisor":
+                hypervisor = h.name
+                if isinstance(h.investigable, list):
+                    hyper_cats = set(h.investigable)
+            elif h.role == "ha-guest":
+                ha_host = h.name
+        return HostRouting(
+            ssh_hosts=frozenset(ssh_hosts),
+            hypervisor_host=hypervisor,
+            hypervisor_categories=frozenset(hyper_cats),
+            ha_host=ha_host,
+        )
+
+
+def config_root() -> Path:
+    env = os.environ.get("HEIM_CONFIG")
+    if env:
+        return Path(env).expanduser()
+    return Path.cwd() / "config"
+
+
+def _load_yaml(path: Path) -> dict:
+    with open(path) as fh:
+        return yaml.safe_load(fh) or {}
+
+
+def load_config(root: Path | None = None) -> Config:
+    root = root or config_root()
+    if not root.is_dir():
+        raise FileNotFoundError(f"config directory not found: {root} (set HEIM_CONFIG or run from the repo root)")
+
+    load_dotenv(root.parent / ".env")
+
+    settings_path = root / "settings.yaml"
+    if not settings_path.exists():
+        raise FileNotFoundError(
+            f"{settings_path} missing — copy config/settings.example.yaml to config/settings.yaml and edit it"
+        )
+    settings = Settings(**_load_yaml(settings_path))
+
+    hosts = {h.name: h for h in (Host(**_load_yaml(p)) for p in sorted((root / "hosts").glob("*.yaml")))}
+    tools = {t.name: t for t in (ToolCfg(**_load_yaml(p)) for p in sorted((root / "tools").glob("*.yaml")))}
+
+    agents: dict[str, AgentCfg] = {}
+    analyst: AnalystCfg | None = None
+    for p in sorted((root / "agents").glob("*.yaml")):
+        data = _load_yaml(p)
+        if data.get("kind") == "analyst":
+            data.pop("kind", None)
+            analyst = AnalystCfg(**data)
+        else:
+            data.pop("kind", None)
+            a = AgentCfg(**data)
+            agents[a.name] = a
+
+    return Config(
+        root=root,
+        settings=settings,
+        hosts=hosts,
+        tools=tools,
+        agents=agents,
+        analyst=analyst,
+        prompts_dir=root / "prompts",
+        queries_path=root / "queries" / "daily.yaml",
+    )
+
+
+def env(name: str, *, required: bool = False, default: str | None = None) -> str | None:
+    val = os.environ.get(name, default)
+    if required and not val:
+        raise RuntimeError(f"required environment variable {name} is not set (see .env.example)")
+    return val
