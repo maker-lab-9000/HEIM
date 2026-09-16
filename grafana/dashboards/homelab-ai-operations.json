@@ -1,0 +1,2943 @@
+{
+ "__inputs": [
+  {
+   "name": "DS_PROMETHEUS",
+   "label": "Prometheus",
+   "description": "Existing Prometheus datasource (raw infra metrics)",
+   "type": "datasource",
+   "pluginId": "prometheus",
+   "pluginName": "Prometheus"
+  },
+  {
+   "name": "DS_LOKI",
+   "label": "Loki",
+   "description": "AI event stream (job=homelab-ai-monitor)",
+   "type": "datasource",
+   "pluginId": "loki",
+   "pluginName": "Loki"
+  }
+ ],
+ "__requires": [],
+ "annotations": {
+  "list": [
+   {
+    "builtIn": 1,
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": true,
+    "iconColor": "rgba(0, 211, 255, 1)",
+    "name": "Annotations & Alerts",
+    "type": "dashboard"
+   },
+   {
+    "datasource": {
+     "type": "loki",
+     "uid": "${DS_LOKI}"
+    },
+    "enable": true,
+    "iconColor": "red",
+    "name": "Incident detected",
+    "target": {
+     "expr": "{job=\"homelab-ai-monitor\", event=\"incident\", status=\"new\"}",
+     "refId": "Anno"
+    },
+    "titleFormat": "Incident: {{host}} / {{category}}"
+   },
+   {
+    "datasource": {
+     "type": "loki",
+     "uid": "${DS_LOKI}"
+    },
+    "enable": true,
+    "iconColor": "blue",
+    "name": "Investigation started",
+    "target": {
+     "expr": "{job=\"homelab-ai-monitor\", event=\"action\", phase=\"started\"}",
+     "refId": "Anno"
+    },
+    "titleFormat": "Investigation started: {{host}}"
+   },
+   {
+    "datasource": {
+     "type": "loki",
+     "uid": "${DS_LOKI}"
+    },
+    "enable": true,
+    "iconColor": "purple",
+    "name": "Resolved",
+    "target": {
+     "expr": "{job=\"homelab-ai-monitor\", event=\"action\", phase=\"resolved\"}",
+     "refId": "Anno"
+    },
+    "titleFormat": "Resolved: {{host}}"
+   }
+  ]
+ },
+ "editable": true,
+ "fiscalYearStartMonth": 0,
+ "graphTooltip": 0,
+ "links": [],
+ "liveNow": false,
+ "refresh": "1m",
+ "schemaVersion": 39,
+ "tags": [
+  "homelab",
+  "ai",
+  "observability"
+ ],
+ "templating": {
+  "list": []
+ },
+ "time": {
+  "from": "now-7d",
+  "to": "now"
+ },
+ "timepicker": {},
+ "timezone": "",
+ "title": "Homelab AI Operations",
+ "uid": "homelab-ai-ops",
+ "version": 3,
+ "weekStart": "",
+ "panels": [
+  {
+   "id": 1,
+   "type": "row",
+   "title": "AI AGENT STATUS OVERVIEW",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "panels": []
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "Overall Health",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 0,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "last_over_time({job=\"homelab-ai-monitor\", event=\"state\"} | json v=\"healthScore\" | unwrap v [24h])"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "textMode": "value"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "HEALTHY",
+         "color": "green",
+         "index": 0
+        },
+        "1": {
+         "text": "WARNING",
+         "color": "orange",
+         "index": 1
+        },
+        "2": {
+         "text": "CRITICAL",
+         "color": "red",
+         "index": 2
+        }
+       }
+      }
+     ],
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "green"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "Active Incidents",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "last_over_time({job=\"homelab-ai-monitor\", event=\"state\"} | json v=\"activeIncidents\" | unwrap v [24h])"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "textMode": "value"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       },
+       {
+        "color": "red",
+        "value": 4
+       }
+      ]
+     },
+     "color": {
+      "mode": "thresholds"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "Pending Approval",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "last_over_time({job=\"homelab-ai-monitor\", event=\"state\"} | json v=\"pendingApproval\" | unwrap v [24h])"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "textMode": "value"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 1
+       }
+      ]
+     },
+     "color": {
+      "mode": "thresholds"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 5,
+   "type": "stat",
+   "title": "Investigating",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 12,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "clamp_min(sum(count_over_time({job=\"homelab-ai-monitor\", event=\"action\", phase=\"started\"}[2h])) - sum(count_over_time({job=\"homelab-ai-monitor\", event=\"action\", phase=~\"resolved|needs_human|declined\"}[2h])), 0)"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "textMode": "value"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "noValue": "0",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "blue",
+        "value": null
+       }
+      ]
+     },
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "blue"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 6,
+   "type": "stat",
+   "title": "Last Successful Run",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 16,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "last_over_time({job=\"homelab-ai-monitor\", event=\"state\"} | json v=\"lastRunMs\" | unwrap v [24h])"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "textMode": "value"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "dateTimeFromNow",
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 7,
+   "type": "stat",
+   "title": "Agent Status",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 20,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "last_over_time({job=\"homelab-ai-monitor\", event=\"state\"} | json v=\"agentOk\" | unwrap v [24h])"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "textMode": "value"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "HEALTHY",
+         "color": "green",
+         "index": 0
+        },
+        "0": {
+         "text": "DEGRADED",
+         "color": "red",
+         "index": 1
+        }
+       }
+      }
+     ],
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "green"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 10,
+   "type": "state-timeline",
+   "title": "Incident Timeline (last 7 days)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 14,
+    "x": 0,
+    "y": 5
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "range",
+     "expr": "max by (host) (last_over_time({job=\"homelab-ai-monitor\", event=\"incident\"} | json v=\"sevScore\" | unwrap v [1h]))",
+     "legendFormat": "{{host}}"
+    }
+   ],
+   "options": {
+    "mergeValues": true,
+    "showValue": "never",
+    "alignValue": "left",
+    "rowHeight": 0.9,
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 0,
+      "fillOpacity": 80
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "Resolved",
+         "color": "purple",
+         "index": 0
+        },
+        "2": {
+         "text": "Warning",
+         "color": "orange",
+         "index": 1
+        },
+        "3": {
+         "text": "Critical",
+         "color": "red",
+         "index": 2
+        }
+       }
+      }
+     ],
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 11,
+   "type": "table",
+   "title": "Active & Recent Incidents",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 10,
+    "x": 14,
+    "y": 5
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "range",
+     "expr": "{job=\"homelab-ai-monitor\", event=\"incident\"} | json",
+     "maxLines": 50
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Detected",
+      "desc": true
+     }
+    ]
+   },
+   "transformations": [
+    {
+     "id": "extractFields",
+     "options": {
+      "source": "labels",
+      "keepTime": false,
+      "replace": false
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Line": true,
+       "labels": true,
+       "labelTypes": true,
+       "id": true,
+       "tsNs": true,
+       "Time": true,
+       "fingerprint": true,
+       "metric": true,
+       "firstSeen": true,
+       "lastSeen": true,
+       "timesSeen": true,
+       "sevScore": true
+      },
+      "indexByName": {
+       "severity": 0,
+       "host": 1,
+       "category": 2,
+       "finding": 3,
+       "status": 4,
+       "confidence": 5,
+       "detectedAt": 6
+      },
+      "renameByName": {
+       "severity": "Severity",
+       "host": "Host",
+       "category": "Category",
+       "finding": "Finding",
+       "status": "Status",
+       "confidence": "Confidence",
+       "detectedAt": "Detected"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   }
+  },
+  {
+   "id": 20,
+   "type": "bargauge",
+   "title": "Filesystem Usage % by Mountpoint",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 7,
+    "x": 0,
+    "y": 13
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "instant": true,
+     "range": false,
+     "expr": "100 * (1 - node_filesystem_avail_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"} / node_filesystem_size_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"})",
+     "legendFormat": "{{instance}} {{mountpoint}}"
+    },
+    {
+     "editorMode": "code",
+     "expr": "label_replace(label_replace(hass_sensor_unit_percent{entity=\"sensor.disk_use_percent\"}, \"mountpoint\", \"/\", \"instance\", \".*\"), \"instance\", \"home-assistant\", \"instance\", \".*\")",
+     "legendFormat": "{{instance}} {{mountpoint}}",
+     "range": true,
+     "refId": "B"
+    }
+   ],
+   "options": {
+    "displayMode": "gradient",
+    "orientation": "horizontal",
+    "showUnfilled": true,
+    "valueMode": "color",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "max": 100,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 70
+       },
+       {
+        "color": "orange",
+        "value": 80
+       },
+       {
+        "color": "red",
+        "value": 90
+       }
+      ]
+     },
+     "color": {
+      "mode": "thresholds"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 21,
+   "type": "timeseries",
+   "title": "Root Filesystem Usage",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 11,
+    "x": 7,
+    "y": 13
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "range": true,
+     "expr": "100 * (1 - node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"})",
+     "legendFormat": "{{instance}} /"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "max": 100,
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 15,
+      "lineWidth": 2,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 22,
+   "type": "stat",
+   "title": "Estimated Days Until Full",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 6,
+    "x": 18,
+    "y": 13
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "instant": true,
+     "range": false,
+     "expr": "(node_filesystem_avail_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"} - 0.10 * node_filesystem_size_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"}) / clamp_min(-deriv(node_filesystem_avail_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"}[6h]), 1) / 86400",
+     "legendFormat": "{{instance}} {{mountpoint}}"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "textMode": "value_and_name",
+    "orientation": "vertical"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "d",
+     "decimals": 0,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 14
+       },
+       {
+        "color": "green",
+        "value": 45
+       }
+      ]
+     },
+     "color": {
+      "mode": "thresholds"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 30,
+   "type": "logs",
+   "title": "Latest Investigation Summary",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 9,
+    "w": 14,
+    "x": 0,
+    "y": 21
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "range",
+     "expr": "{job=\"homelab-ai-monitor\", event=\"investigation\"} | json | line_format \"{{.host}} — {{.status}} (confidence: {{.confidence}})\\n\\nROOT CAUSE: {{.rootCause}}\\n\\nIMPACT: {{.impact}}\\n\\n~{{.tokenEstimate}} tokens · {{.nSteps}} commands\"",
+     "maxLines": 5
+    }
+   ],
+   "options": {
+    "showTime": true,
+    "wrapLogMessage": true,
+    "prettifyLogMessage": false,
+    "enableLogDetails": true,
+    "dedupStrategy": "none",
+    "sortOrder": "Descending"
+   }
+  },
+  {
+   "id": 31,
+   "type": "piechart",
+   "title": "Risk Overview (open incidents by category)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 9,
+    "w": 10,
+    "x": 14,
+    "y": 21
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "last_over_time({job=\"homelab-ai-monitor\", event=\"state\"} | json v=\"riskByCategory.filesystem\" | unwrap v [24h])",
+     "legendFormat": "Filesystem"
+    },
+    {
+     "refId": "B",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "last_over_time({job=\"homelab-ai-monitor\", event=\"state\"} | json v=\"riskByCategory.diskHealth\" | unwrap v [24h])",
+     "legendFormat": "Disk Health"
+    },
+    {
+     "refId": "C",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "last_over_time({job=\"homelab-ai-monitor\", event=\"state\"} | json v=\"riskByCategory.temperature\" | unwrap v [24h])",
+     "legendFormat": "Temperature"
+    },
+    {
+     "refId": "D",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "last_over_time({job=\"homelab-ai-monitor\", event=\"state\"} | json v=\"riskByCategory.memory\" | unwrap v [24h])",
+     "legendFormat": "Memory"
+    },
+    {
+     "refId": "E",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "last_over_time({job=\"homelab-ai-monitor\", event=\"state\"} | json v=\"riskByCategory.cpu\" | unwrap v [24h])",
+     "legendFormat": "CPU"
+    },
+    {
+     "refId": "F",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "last_over_time({job=\"homelab-ai-monitor\", event=\"state\"} | json v=\"riskByCategory.network\" | unwrap v [24h])",
+     "legendFormat": "Network"
+    }
+   ],
+   "options": {
+    "pieType": "donut",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "showLegend": true,
+     "values": [
+      "value"
+     ]
+    },
+    "displayLabels": [
+     "name",
+     "value"
+    ]
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "mappings": []
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "A"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Filesystem"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "B"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Disk Health"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "C"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Temperature"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "D"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Memory"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "E"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "CPU"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byFrameRefID",
+       "options": "F"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Network"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": 40,
+   "type": "table",
+   "title": "Top Growing Mounts (7d)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 30
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "instant": true,
+     "range": false,
+     "format": "table",
+     "expr": "topk(6, ((node_filesystem_size_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"} - node_filesystem_avail_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"}) - (node_filesystem_size_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"} offset 7d - node_filesystem_avail_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"} offset 7d)))"
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Growth",
+      "desc": true
+     }
+    ]
+   },
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "job": true,
+       "fstype": true,
+       "device": true,
+       "__name__": true
+      },
+      "renameByName": {
+       "instance": "Host",
+       "mountpoint": "Mountpoint",
+       "Value": "Growth"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 41,
+   "type": "timeseries",
+   "title": "Forecast: Root Fill (ubuntu-server)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 30
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "range": true,
+     "expr": "100 * (1 - node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"})",
+     "legendFormat": "Actual"
+    },
+    {
+     "refId": "B",
+     "editorMode": "code",
+     "range": true,
+     "expr": "100 * (1 - clamp_min(predict_linear(node_filesystem_avail_bytes{mountpoint=\"/\"}[3d], 86400 * 7), 0) / node_filesystem_size_bytes{mountpoint=\"/\"})",
+     "legendFormat": "Forecast (+7d)"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "max": 100,
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "lineWidth": 2,
+      "showPoints": "never"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Forecast (+7d)"
+      },
+      "properties": [
+       {
+        "id": "custom.lineStyle",
+        "value": {
+         "dash": [
+          8,
+          6
+         ],
+         "fill": "dash"
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "orange"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": 42,
+   "type": "logs",
+   "title": "Last Actions Taken",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 30
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "range",
+     "expr": "{job=\"homelab-ai-monitor\", event=\"action\"} | json | line_format \"{{.host}}: {{.message}}\"",
+     "maxLines": 40
+    }
+   ],
+   "options": {
+    "showTime": true,
+    "wrapLogMessage": true,
+    "prettifyLogMessage": false,
+    "enableLogDetails": true,
+    "dedupStrategy": "none",
+    "sortOrder": "Descending"
+   }
+  },
+  {
+   "id": 43,
+   "type": "logs",
+   "title": "Recommended Actions (latest investigation)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 24,
+    "x": 0,
+    "y": 38
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "range",
+     "expr": "{job=\"homelab-ai-monitor\", event=\"investigation\"} | json | line_format \"{{.host}} → {{.recommendedActions}}\"",
+     "maxLines": 3
+    }
+   ],
+   "options": {
+    "showTime": true,
+    "wrapLogMessage": true,
+    "prettifyLogMessage": false,
+    "enableLogDetails": true,
+    "dedupStrategy": "none",
+    "sortOrder": "Descending"
+   }
+  },
+  {
+   "id": 50,
+   "type": "row",
+   "title": "INFRASTRUCTURE TRENDS & FORECASTS",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 44
+   },
+   "panels": []
+  },
+  {
+   "id": 61,
+   "type": "timeseries",
+   "title": "CPU Used — Hosts",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 6,
+    "x": 0,
+    "y": 45
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "range": true,
+     "expr": "label_replace(label_replace(100 * (1 - avg by (instance)(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))), \"host\", \"ubuntu-server\", \"instance\", \"192.168.178.241:9100\"), \"host\", \"homelab\", \"instance\", \"192.168.178.2:9100\")",
+     "legendFormat": "{{host}}"
+    },
+    {
+     "editorMode": "code",
+     "expr": "label_replace(hass_sensor_unit_percent{entity=\"sensor.processor_use\"}, \"host\", \"home-assistant\", \"instance\", \".*\")",
+     "legendFormat": "{{host}}",
+     "range": true,
+     "refId": "B"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "max": 100,
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "lineWidth": 2,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 62,
+   "type": "timeseries",
+   "title": "CPU Used — VMs (Proxmox)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 6,
+    "x": 6,
+    "y": 45
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "range": true,
+     "expr": "(pve_cpu_usage_ratio{id=~\"qemu/.*\"} * 100) * on(id) group_left(name) pve_guest_info",
+     "legendFormat": "{{name}}"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "max": 100,
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "lineWidth": 2,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 51,
+   "type": "timeseries",
+   "title": "Memory Used — Hosts",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 6,
+    "x": 12,
+    "y": 45
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "range": true,
+     "expr": "label_replace(label_replace(100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes), \"host\", \"ubuntu-server\", \"instance\", \"192.168.178.241:9100\"), \"host\", \"homelab\", \"instance\", \"192.168.178.2:9100\")",
+     "legendFormat": "{{host}}"
+    },
+    {
+     "editorMode": "code",
+     "expr": "label_replace(hass_sensor_unit_percent{entity=\"sensor.memory_use_percent\"}, \"host\", \"home-assistant\", \"instance\", \".*\")",
+     "legendFormat": "{{host}}",
+     "range": true,
+     "refId": "B"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "max": 100,
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "lineWidth": 2,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 52,
+   "type": "timeseries",
+   "title": "Memory Used — VMs (Proxmox)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 6,
+    "x": 18,
+    "y": 45
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "range": true,
+     "expr": "(100 * pve_memory_usage_bytes{id=~\"qemu/.*\"} / pve_memory_size_bytes{id=~\"qemu/.*\"}) * on(id) group_left(name) pve_guest_info",
+     "legendFormat": "{{name}}"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "max": 100,
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "lineWidth": 2,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 53,
+   "type": "timeseries",
+   "title": "Swap Used — Hosts",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 6,
+    "x": 0,
+    "y": 53
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "range": true,
+     "expr": "label_replace(label_replace(100 * (1 - node_memory_SwapFree_bytes / node_memory_SwapTotal_bytes), \"host\", \"ubuntu-server\", \"instance\", \"192.168.178.241:9100\"), \"host\", \"homelab\", \"instance\", \"192.168.178.2:9100\")",
+     "legendFormat": "{{host}}"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "lineWidth": 2,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 54,
+   "type": "timeseries",
+   "title": "Temperature — Drives (SMART)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 6,
+    "x": 6,
+    "y": 53
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "range": true,
+     "expr": "smartctl_device_temperature{temperature_type=\"current\"}",
+     "legendFormat": "{{device}}"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "celsius",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "lineWidth": 2,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 55
+       },
+       {
+        "color": "red",
+        "value": 65
+       }
+      ]
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 55,
+   "type": "timeseries",
+   "title": "Temperature — Host Sensors (max)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 6,
+    "x": 12,
+    "y": 53
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "range": true,
+     "expr": "label_replace(label_replace(max by (instance)(node_hwmon_temp_celsius), \"host\", \"ubuntu-server\", \"instance\", \"192.168.178.241:9100\"), \"host\", \"homelab\", \"instance\", \"192.168.178.2:9100\")",
+     "legendFormat": "{{host}}"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "celsius",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "lineWidth": 2,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 75
+       },
+       {
+        "color": "red",
+        "value": 90
+       }
+      ]
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 56,
+   "type": "stat",
+   "title": "Guests Not Backed Up",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 6,
+    "x": 18,
+    "y": 53
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "instant": true,
+     "range": false,
+     "expr": "pve_not_backed_up_total{id=\"cluster/homelab\"}"
+    }
+   ],
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "textMode": "value_and_name"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "noValue": "0",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 2
+       },
+       {
+        "color": "red",
+        "value": 3
+       }
+      ]
+     },
+     "color": {
+      "mode": "thresholds"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 57,
+   "type": "timeseries",
+   "title": "Volume Usage % — All Mountpoints (trend)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 16,
+    "x": 0,
+    "y": 61
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "range": true,
+     "expr": "100 * (1 - node_filesystem_avail_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"} / node_filesystem_size_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"})",
+     "legendFormat": "{{mountpoint}} ({{instance}})"
+    },
+    {
+     "editorMode": "code",
+     "expr": "label_replace(label_replace(hass_sensor_unit_percent{entity=\"sensor.disk_use_percent\"}, \"mountpoint\", \"/\", \"instance\", \".*\"), \"instance\", \"home-assistant\", \"instance\", \".*\")",
+     "legendFormat": "{{mountpoint}} ({{instance}})",
+     "range": true,
+     "refId": "B"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "showLegend": true,
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "max": 100,
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 8,
+      "lineWidth": 2,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 58,
+   "type": "table",
+   "title": "Volume Forecast — Days Until Full",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 61
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "instant": true,
+     "range": false,
+     "format": "table",
+     "expr": "(node_filesystem_avail_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"} - 0.10 * node_filesystem_size_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"}) / clamp_min(-deriv(node_filesystem_avail_bytes{fstype!~\"tmpfs|fuse.*|overlay|squashfs|vfat\", mountpoint!~\"/boot\"}[1d]), 1) / 86400"
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Days to full",
+      "desc": false
+     }
+    ]
+   },
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "job": true,
+       "fstype": true,
+       "device": true,
+       "__name__": true
+      },
+      "renameByName": {
+       "instance": "Host",
+       "mountpoint": "Mountpoint",
+       "Value": "Days to full"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "d",
+     "decimals": 0,
+     "custom": {
+      "cellOptions": {
+       "type": "auto"
+      }
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 14
+       },
+       {
+        "color": "green",
+        "value": 45
+       }
+      ]
+     },
+     "color": {
+      "mode": "thresholds"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 59,
+   "type": "timeseries",
+   "title": "Network — n8n container (vetha3b36a8)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 69
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "range": true,
+     "expr": "rate(node_network_receive_bytes_total{device=\"vetha3b36a8\"}[5m])",
+     "legendFormat": "RX"
+    },
+    {
+     "refId": "B",
+     "editorMode": "code",
+     "range": true,
+     "expr": "rate(node_network_transmit_bytes_total{device=\"vetha3b36a8\"}[5m])",
+     "legendFormat": "TX"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "Bps",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "lineWidth": 2,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 60,
+   "type": "timeseries",
+   "title": "Network — Home Assistant VM (qemu/101)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 69
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "range": true,
+     "expr": "rate(pve_network_receive_bytes_total{id=\"qemu/101\"}[5m])",
+     "legendFormat": "RX"
+    },
+    {
+     "refId": "B",
+     "editorMode": "code",
+     "range": true,
+     "expr": "rate(pve_network_transmit_bytes_total{id=\"qemu/101\"}[5m])",
+     "legendFormat": "TX"
+    }
+   ],
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "Bps",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "lineWidth": 2,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 77
+   },
+   "id": 73,
+   "panels": [],
+   "title": "HOME ASSISTANT",
+   "type": "row"
+  },
+  {
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "axisBorderShow": false,
+      "axisCenteredZero": false,
+      "axisColorMode": "text",
+      "axisLabel": "",
+      "axisPlacement": "auto",
+      "barAlignment": 0,
+      "barWidthFactor": 0.6,
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "gradientMode": "none",
+      "hideFrom": {
+       "legend": false,
+       "tooltip": false,
+       "viz": false
+      },
+      "insertNulls": false,
+      "lineInterpolation": "linear",
+      "lineWidth": 2,
+      "pointSize": 5,
+      "scaleDistribution": {
+       "type": "linear"
+      },
+      "showPoints": "never",
+      "showValues": false,
+      "spanNulls": false,
+      "stacking": {
+       "group": "A",
+       "mode": "none"
+      },
+      "thresholdsStyle": {
+       "mode": "off"
+      }
+     },
+     "mappings": [],
+     "min": 0,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": 0
+       }
+      ]
+     },
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 78
+   },
+   "id": 74,
+   "options": {
+    "legend": {
+     "calcs": [],
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "hideZeros": false,
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "pluginVersion": "12.3.0",
+   "targets": [
+    {
+     "editorMode": "code",
+     "expr": "sum(rate(hass_state_change_total[5m]))",
+     "legendFormat": "recorder writes/s",
+     "range": true,
+     "refId": "A"
+    }
+   ],
+   "title": "HA Recorder Writes/s (DB load)",
+   "type": "timeseries"
+  },
+  {
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "axisBorderShow": false,
+      "axisCenteredZero": false,
+      "axisColorMode": "text",
+      "axisLabel": "",
+      "axisPlacement": "auto",
+      "barAlignment": 0,
+      "barWidthFactor": 0.6,
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "gradientMode": "none",
+      "hideFrom": {
+       "legend": false,
+       "tooltip": false,
+       "viz": false
+      },
+      "insertNulls": false,
+      "lineInterpolation": "linear",
+      "lineWidth": 2,
+      "pointSize": 5,
+      "scaleDistribution": {
+       "type": "linear"
+      },
+      "showPoints": "never",
+      "showValues": false,
+      "spanNulls": false,
+      "stacking": {
+       "group": "A",
+       "mode": "none"
+      },
+      "thresholdsStyle": {
+       "mode": "off"
+      }
+     },
+     "mappings": [],
+     "min": 0,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": 0
+       }
+      ]
+     },
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 78
+   },
+   "id": 75,
+   "options": {
+    "legend": {
+     "calcs": [],
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "hideZeros": false,
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "pluginVersion": "12.3.0",
+   "targets": [
+    {
+     "editorMode": "code",
+     "expr": "sum(rate(hass_automation_triggered_count_total[1h])) * 3600",
+     "legendFormat": "automations/h",
+     "range": true,
+     "refId": "A"
+    }
+   ],
+   "title": "HA Automations / hour",
+   "type": "timeseries"
+  },
+  {
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "axisBorderShow": false,
+      "axisCenteredZero": false,
+      "axisColorMode": "text",
+      "axisLabel": "",
+      "axisPlacement": "auto",
+      "barAlignment": 0,
+      "barWidthFactor": 0.6,
+      "drawStyle": "line",
+      "fillOpacity": 25,
+      "gradientMode": "none",
+      "hideFrom": {
+       "legend": false,
+       "tooltip": false,
+       "viz": false
+      },
+      "insertNulls": false,
+      "lineInterpolation": "linear",
+      "lineWidth": 2,
+      "pointSize": 5,
+      "scaleDistribution": {
+       "type": "linear"
+      },
+      "showPoints": "never",
+      "showValues": false,
+      "spanNulls": false,
+      "stacking": {
+       "group": "A",
+       "mode": "normal"
+      },
+      "thresholdsStyle": {
+       "mode": "off"
+      }
+     },
+     "mappings": [],
+     "min": 0,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": 0
+       }
+      ]
+     },
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 78
+   },
+   "id": 76,
+   "options": {
+    "legend": {
+     "calcs": [],
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "hideZeros": false,
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "pluginVersion": "12.3.0",
+   "targets": [
+    {
+     "editorMode": "code",
+     "expr": "count by (domain) (hass_entity_available == 0)",
+     "legendFormat": "{{domain}}",
+     "range": true,
+     "refId": "A"
+    }
+   ],
+   "title": "HA Unavailable Entities by domain (trend)",
+   "type": "timeseries"
+  },
+  {
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "OK",
+         "color": "green",
+         "index": 0
+        },
+        "1": {
+         "text": "STALE",
+         "color": "red",
+         "index": 1
+        }
+       }
+      }
+     ],
+     "unit": "",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": 0
+       },
+       {
+        "color": "red",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 0,
+    "y": 86
+   },
+   "id": 77,
+   "options": {
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "percentChangeColorMode": "standard",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "showPercentChange": false,
+    "textMode": "value_and_name",
+    "wideLayout": true
+   },
+   "pluginVersion": "12.3.0",
+   "targets": [
+    {
+     "editorMode": "code",
+     "expr": "hass_binary_sensor_state{entity=\"binary_sensor.backups_stale\"}",
+     "instant": true,
+     "range": false,
+     "refId": "A"
+    }
+   ],
+   "title": "HA Backups Stale",
+   "type": "stat"
+  },
+  {
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "unit": "short",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": 0
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 6,
+    "y": 86
+   },
+   "id": 78,
+   "options": {
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "percentChangeColorMode": "standard",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "showPercentChange": false,
+    "textMode": "value_and_name",
+    "wideLayout": true
+   },
+   "pluginVersion": "12.3.0",
+   "targets": [
+    {
+     "editorMode": "code",
+     "expr": "count(hass_entity_available == 0)",
+     "instant": true,
+     "range": false,
+     "refId": "A"
+    }
+   ],
+   "title": "HA Unavailable Entities",
+   "type": "stat"
+  },
+  {
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "unit": "short",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": 0
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 12,
+    "y": 86
+   },
+   "id": 79,
+   "options": {
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "percentChangeColorMode": "standard",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "showPercentChange": false,
+    "textMode": "value_and_name",
+    "wideLayout": true
+   },
+   "pluginVersion": "12.3.0",
+   "targets": [
+    {
+     "editorMode": "code",
+     "expr": "sum(rate(hass_state_change_total[5m]))",
+     "instant": true,
+     "range": false,
+     "refId": "A"
+    }
+   ],
+   "title": "HA Recorder Writes/s",
+   "type": "stat"
+  },
+  {
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${DS_PROMETHEUS}"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "unit": "short",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": 0
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 18,
+    "y": 86
+   },
+   "id": 80,
+   "options": {
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "percentChangeColorMode": "standard",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "showPercentChange": false,
+    "textMode": "value_and_name",
+    "wideLayout": true
+   },
+   "pluginVersion": "12.3.0",
+   "targets": [
+    {
+     "editorMode": "code",
+     "expr": "sum(rate(hass_automation_triggered_count_total[1h])) * 3600",
+     "instant": true,
+     "range": false,
+     "refId": "A"
+    }
+   ],
+   "title": "HA Automations / hour",
+   "type": "stat"
+  },
+  {
+   "id": 70,
+   "type": "row",
+   "title": "AI FINDINGS & CATEGORY STATUS",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 92
+   },
+   "panels": []
+  },
+  {
+   "id": 71,
+   "type": "table",
+   "title": "Findings & Recommendations (latest run)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 11,
+    "w": 24,
+    "x": 0,
+    "y": 93
+   },
+   "timeFrom": "18h",
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "range",
+     "expr": "{job=\"homelab-ai-monitor\", event=\"finding\"} | json",
+     "maxLines": 50
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "prio",
+      "desc": true
+     }
+    ],
+    "cellHeight": "lg"
+   },
+   "transformations": [
+    {
+     "id": "extractFields",
+     "options": {
+      "source": "labels",
+      "keepTime": false,
+      "replace": false
+     }
+    },
+    {
+     "id": "filterFieldsByName",
+     "options": {
+      "include": {
+       "names": [
+        "severity",
+        "host",
+        "metric",
+        "trend",
+        "summary",
+        "action",
+        "sevScore"
+       ]
+      }
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "severity": 0,
+       "host": 1,
+       "metric": 2,
+       "trend": 3,
+       "summary": 4,
+       "action": 5,
+       "sevScore": 6
+      },
+      "renameByName": {
+       "severity": "Sev",
+       "host": "Host",
+       "metric": "Metric",
+       "trend": "Trend",
+       "summary": "Finding",
+       "action": "Action",
+       "sevScore": "prio"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "cellOptions": {
+       "type": "auto",
+       "wrapText": true
+      },
+      "filterable": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Sev"
+      },
+      "properties": [
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background",
+         "mode": "gradient"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "crit": {
+            "text": "CRITICAL",
+            "color": "red",
+            "index": 0
+           },
+           "warn": {
+            "text": "WARNING",
+            "color": "orange",
+            "index": 1
+           },
+           "info": {
+            "text": "INFO",
+            "color": "blue",
+            "index": 2
+           },
+           "ok": {
+            "text": "OK",
+            "color": "green",
+            "index": 3
+           },
+           "na": {
+            "text": "—",
+            "color": "gray",
+            "index": 4
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.width",
+        "value": 110
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "prio"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Host"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 120
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Metric"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 160
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Trend"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 90
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Finding"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 430
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Action"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 320
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": 72,
+   "type": "table",
+   "title": "Category Status (latest run)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "h": 10,
+    "w": 24,
+    "x": 0,
+    "y": 104
+   },
+   "timeFrom": "18h",
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "range",
+     "expr": "{job=\"homelab-ai-monitor\", event=\"category\"} | json",
+     "maxLines": 50
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "prio",
+      "desc": true
+     }
+    ],
+    "cellHeight": "lg"
+   },
+   "transformations": [
+    {
+     "id": "extractFields",
+     "options": {
+      "source": "labels",
+      "keepTime": false,
+      "replace": false
+     }
+    },
+    {
+     "id": "filterFieldsByName",
+     "options": {
+      "include": {
+       "names": [
+        "category",
+        "status",
+        "insight",
+        "statusScore"
+       ]
+      }
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "status": 0,
+       "category": 1,
+       "insight": 2,
+       "statusScore": 3
+      },
+      "renameByName": {
+       "category": "Category",
+       "status": "Status",
+       "insight": "Insight",
+       "statusScore": "prio"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "cellOptions": {
+       "type": "auto",
+       "wrapText": true
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Status"
+      },
+      "properties": [
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background",
+         "mode": "gradient"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "crit": {
+            "text": "CRIT",
+            "color": "red",
+            "index": 0
+           },
+           "warn": {
+            "text": "WARN",
+            "color": "orange",
+            "index": 1
+           },
+           "ok": {
+            "text": "OK",
+            "color": "green",
+            "index": 2
+           },
+           "info": {
+            "text": "INFO",
+            "color": "blue",
+            "index": 3
+           },
+           "na": {
+            "text": "N/A",
+            "color": "gray",
+            "index": 4
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.width",
+        "value": 90
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "prio"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Category"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 140
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ]
+}

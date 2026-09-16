@@ -1,0 +1,1441 @@
+{
+ "__inputs": [
+  {
+   "name": "DS_LOKI",
+   "label": "Loki",
+   "description": "AI event stream (job=homelab-ai-monitor)",
+   "type": "datasource",
+   "pluginId": "loki",
+   "pluginName": "Loki"
+  }
+ ],
+ "__requires": [],
+ "annotations": {
+  "list": []
+ },
+ "editable": true,
+ "fiscalYearStartMonth": 0,
+ "graphTooltip": 1,
+ "links": [],
+ "panels": [
+  {
+   "id": 1,
+   "type": "row",
+   "title": "ALERTS & INCIDENTS",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "New incidents (24h)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 1,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "noValue": "0",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       },
+       {
+        "color": "red",
+        "value": 3
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "wideLayout": true
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "sum(count_over_time({job=\"homelab-ai-monitor\", event=\"incident\", status=~\"new|open\"}[24h]))"
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "Escalated (24h)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 6,
+    "y": 1,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "noValue": "0",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "wideLayout": true
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "sum(count_over_time({job=\"homelab-ai-monitor\", event=\"incident\", status=\"escalated\"}[24h]))"
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "Resolved (24h)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 1,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "noValue": "0",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "wideLayout": true
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "sum(count_over_time({job=\"homelab-ai-monitor\", event=\"incident\", status=\"resolved\"}[24h]))"
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "type": "stat",
+   "title": "Findings (24h)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 18,
+    "y": 1,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "noValue": "0",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "blue",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value",
+    "wideLayout": true
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "instant",
+     "expr": "sum(count_over_time({job=\"homelab-ai-monitor\", event=\"finding\"}[24h]))"
+    }
+   ]
+  },
+  {
+   "id": 6,
+   "type": "timeseries",
+   "title": "Incident events by severity",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 5,
+    "w": 10,
+    "h": 9
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 60,
+      "lineWidth": 1,
+      "showPoints": "never",
+      "stacking": {
+       "group": "A",
+       "mode": "normal"
+      },
+      "barAlignment": 0,
+      "axisPlacement": "auto",
+      "hideFrom": {
+       "legend": false,
+       "tooltip": false,
+       "viz": false
+      }
+     },
+     "mappings": [],
+     "min": 0,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "unit": "short"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "critical"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "warning"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "orange"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "info"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "blue"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "crit"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "warn"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "orange"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "targets": [
+    {
+     "expr": "sum by (severity) (count_over_time({job=\"homelab-ai-monitor\", event=\"incident\"}[$__auto]))",
+     "legendFormat": "{{severity}}",
+     "queryType": "range",
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "${DS_LOKI}"
+     }
+    }
+   ]
+  },
+  {
+   "id": 7,
+   "type": "table",
+   "title": "Recent incident events",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 10,
+    "y": 5,
+    "w": 14,
+    "h": 9
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "range",
+     "expr": "{job=\"homelab-ai-monitor\", event=\"incident\"} | json",
+     "maxLines": 50
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Detected",
+      "desc": true
+     }
+    ]
+   },
+   "transformations": [
+    {
+     "id": "extractFields",
+     "options": {
+      "source": "labels",
+      "keepTime": false,
+      "replace": false
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Line": true,
+       "labels": true,
+       "labelTypes": true,
+       "id": true,
+       "tsNs": true,
+       "Time": true,
+       "fingerprint": true,
+       "metric": true,
+       "firstSeen": true,
+       "lastSeen": true,
+       "timesSeen": true,
+       "sevScore": true
+      },
+      "indexByName": {
+       "severity": 0,
+       "host": 1,
+       "category": 2,
+       "finding": 3,
+       "status": 4,
+       "confidence": 5,
+       "detectedAt": 6
+      },
+      "renameByName": {
+       "severity": "Severity",
+       "host": "Host",
+       "category": "Category",
+       "finding": "Finding",
+       "status": "Status",
+       "confidence": "Confidence",
+       "detectedAt": "Detected"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   }
+  },
+  {
+   "id": 8,
+   "type": "table",
+   "title": "Alert-born incidents (fast path, [alert]-prefixed)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 14,
+    "w": 14,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "range",
+     "expr": "{job=\"homelab-ai-monitor\", event=\"incident\"} | json | finding=~\"\\\\[alert\\\\].*\"",
+     "maxLines": 50
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Detected",
+      "desc": true
+     }
+    ]
+   },
+   "transformations": [
+    {
+     "id": "extractFields",
+     "options": {
+      "source": "labels",
+      "keepTime": false,
+      "replace": false
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Line": true,
+       "labels": true,
+       "labelTypes": true,
+       "id": true,
+       "tsNs": true,
+       "Time": true,
+       "fingerprint": true,
+       "metric": true,
+       "firstSeen": true,
+       "lastSeen": true,
+       "timesSeen": true,
+       "sevScore": true
+      },
+      "indexByName": {
+       "severity": 0,
+       "host": 1,
+       "category": 2,
+       "finding": 3,
+       "status": 4,
+       "confidence": 5,
+       "detectedAt": 6
+      },
+      "renameByName": {
+       "severity": "Severity",
+       "host": "Host",
+       "category": "Category",
+       "finding": "Finding",
+       "status": "Status",
+       "confidence": "Confidence",
+       "detectedAt": "Detected"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   }
+  },
+  {
+   "id": 9,
+   "type": "logs",
+   "title": "Raw incident stream",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 14,
+    "y": 14,
+    "w": 10,
+    "h": 8
+   },
+   "options": {
+    "dedupStrategy": "none",
+    "enableLogDetails": true,
+    "prettifyLogMessage": true,
+    "showCommonLabels": false,
+    "showLabels": false,
+    "showTime": true,
+    "sortOrder": "Descending",
+    "wrapLogMessage": true
+   },
+   "targets": [
+    {
+     "expr": "{job=\"homelab-ai-monitor\", event=\"incident\"}",
+     "queryType": "range",
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "${DS_LOKI}"
+     }
+    }
+   ]
+  },
+  {
+   "id": 10,
+   "type": "row",
+   "title": "AI FINDINGS",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 22,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "id": 11,
+   "type": "table",
+   "title": "Findings & Recommendations",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 23,
+    "w": 24,
+    "h": 11
+   },
+   "timeFrom": "18h",
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "range",
+     "expr": "{job=\"homelab-ai-monitor\", event=\"finding\"} | json",
+     "maxLines": 50
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "prio",
+      "desc": true
+     }
+    ],
+    "cellHeight": "lg"
+   },
+   "transformations": [
+    {
+     "id": "extractFields",
+     "options": {
+      "source": "labels",
+      "keepTime": false,
+      "replace": false
+     }
+    },
+    {
+     "id": "filterFieldsByName",
+     "options": {
+      "include": {
+       "names": [
+        "severity",
+        "host",
+        "metric",
+        "trend",
+        "summary",
+        "action",
+        "sevScore"
+       ]
+      }
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "severity": 0,
+       "host": 1,
+       "metric": 2,
+       "trend": 3,
+       "summary": 4,
+       "action": 5,
+       "sevScore": 6
+      },
+      "renameByName": {
+       "severity": "Sev",
+       "host": "Host",
+       "metric": "Metric",
+       "trend": "Trend",
+       "summary": "Finding",
+       "action": "Action",
+       "sevScore": "prio"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "cellOptions": {
+       "type": "auto",
+       "wrapText": true
+      },
+      "filterable": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Sev"
+      },
+      "properties": [
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background",
+         "mode": "gradient"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "crit": {
+            "text": "CRITICAL",
+            "color": "red",
+            "index": 0
+           },
+           "warn": {
+            "text": "WARNING",
+            "color": "orange",
+            "index": 1
+           },
+           "info": {
+            "text": "INFO",
+            "color": "blue",
+            "index": 2
+           },
+           "ok": {
+            "text": "OK",
+            "color": "green",
+            "index": 3
+           },
+           "na": {
+            "text": "—",
+            "color": "gray",
+            "index": 4
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.width",
+        "value": 110
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "prio"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Host"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 120
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Metric"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 160
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Trend"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 90
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Finding"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 430
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Action"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 320
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": 12,
+   "type": "timeseries",
+   "title": "Findings per run by severity",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 34,
+    "w": 10,
+    "h": 9
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 60,
+      "lineWidth": 1,
+      "showPoints": "never",
+      "stacking": {
+       "group": "A",
+       "mode": "normal"
+      },
+      "barAlignment": 0,
+      "axisPlacement": "auto",
+      "hideFrom": {
+       "legend": false,
+       "tooltip": false,
+       "viz": false
+      }
+     },
+     "mappings": [],
+     "min": 0,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "unit": "short"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "critical"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "warning"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "orange"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "info"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "blue"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "crit"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "warn"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "orange"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "targets": [
+    {
+     "expr": "sum by (severity) (count_over_time({job=\"homelab-ai-monitor\", event=\"finding\"}[$__auto]))",
+     "legendFormat": "{{severity}}",
+     "queryType": "range",
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "${DS_LOKI}"
+     }
+    }
+   ]
+  },
+  {
+   "id": 13,
+   "type": "table",
+   "title": "Category Status",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 10,
+    "y": 34,
+    "w": 14,
+    "h": 9
+   },
+   "timeFrom": "18h",
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "range",
+     "expr": "{job=\"homelab-ai-monitor\", event=\"category\"} | json",
+     "maxLines": 50
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "prio",
+      "desc": true
+     }
+    ],
+    "cellHeight": "lg"
+   },
+   "transformations": [
+    {
+     "id": "extractFields",
+     "options": {
+      "source": "labels",
+      "keepTime": false,
+      "replace": false
+     }
+    },
+    {
+     "id": "filterFieldsByName",
+     "options": {
+      "include": {
+       "names": [
+        "category",
+        "status",
+        "insight",
+        "statusScore"
+       ]
+      }
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "status": 0,
+       "category": 1,
+       "insight": 2,
+       "statusScore": 3
+      },
+      "renameByName": {
+       "category": "Category",
+       "status": "Status",
+       "insight": "Insight",
+       "statusScore": "prio"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "cellOptions": {
+       "type": "auto",
+       "wrapText": true
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Status"
+      },
+      "properties": [
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background",
+         "mode": "gradient"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "crit": {
+            "text": "CRIT",
+            "color": "red",
+            "index": 0
+           },
+           "warn": {
+            "text": "WARN",
+            "color": "orange",
+            "index": 1
+           },
+           "ok": {
+            "text": "OK",
+            "color": "green",
+            "index": 2
+           },
+           "info": {
+            "text": "INFO",
+            "color": "blue",
+            "index": 3
+           },
+           "na": {
+            "text": "N/A",
+            "color": "gray",
+            "index": 4
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.width",
+        "value": 90
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "prio"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Category"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 140
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": 14,
+   "type": "logs",
+   "title": "Raw finding events",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 43,
+    "w": 24,
+    "h": 7
+   },
+   "options": {
+    "dedupStrategy": "none",
+    "enableLogDetails": true,
+    "prettifyLogMessage": true,
+    "showCommonLabels": false,
+    "showLabels": false,
+    "showTime": true,
+    "sortOrder": "Descending",
+    "wrapLogMessage": true
+   },
+   "targets": [
+    {
+     "expr": "{job=\"homelab-ai-monitor\", event=\"finding\"}",
+     "queryType": "range",
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "${DS_LOKI}"
+     }
+    }
+   ]
+  },
+  {
+   "id": 18,
+   "type": "row",
+   "title": "AI INVESTIGATIONS",
+   "collapsed": false,
+   "gridPos": {
+    "x": 0,
+    "y": 50,
+    "w": 24,
+    "h": 1
+   },
+   "panels": []
+  },
+  {
+   "id": 16,
+   "type": "logs",
+   "title": "Investigation reports (root cause + remediation)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 51,
+    "w": 14,
+    "h": 9
+   },
+   "options": {
+    "dedupStrategy": "none",
+    "enableLogDetails": true,
+    "prettifyLogMessage": false,
+    "showCommonLabels": false,
+    "showLabels": false,
+    "showTime": true,
+    "sortOrder": "Descending",
+    "wrapLogMessage": true
+   },
+   "targets": [
+    {
+     "expr": "{job=\"homelab-ai-monitor\", event=\"investigation\"} | json | line_format \"🔍 {{.host}} · {{.fingerprint}} · confidence: {{.confidence}} · {{.nSteps}} steps\\n\\nROOT CAUSE:\\n{{.rootCause}}\\n\\nREMEDIATION:\\n{{.remediation}}\"",
+     "queryType": "range",
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "${DS_LOKI}"
+     }
+    }
+   ]
+  },
+  {
+   "id": 15,
+   "type": "table",
+   "title": "Investigations (metadata)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 14,
+    "y": 51,
+    "w": 10,
+    "h": 9
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "editorMode": "code",
+     "queryType": "range",
+     "expr": "{job=\"homelab-ai-monitor\", event=\"investigation\"} | json",
+     "maxLines": 50
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Detected",
+      "desc": true
+     }
+    ]
+   },
+   "transformations": [
+    {
+     "id": "extractFields",
+     "options": {
+      "source": "labels"
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Line": true,
+       "labels": true,
+       "labelTypes": true,
+       "id": true,
+       "tsNs": true,
+       "detected_level": true,
+       "service_name": true,
+       "job": true,
+       "event": true,
+       "detectedAt": true,
+       "resolvedAt": true,
+       "impact": true,
+       "rootCause": true,
+       "remediation": true,
+       "recommendedActions": true
+      },
+      "indexByName": {
+       "Time": 0,
+       "host": 1,
+       "status": 2,
+       "confidence": 3,
+       "fingerprint": 4,
+       "nSteps": 5,
+       "tokenEstimate": 6
+      },
+      "renameByName": {}
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   }
+  },
+  {
+   "id": 17,
+   "type": "timeseries",
+   "title": "Agent activity by phase (action events)",
+   "datasource": {
+    "type": "loki",
+    "uid": "${DS_LOKI}"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 60,
+    "w": 24,
+    "h": 7
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 60,
+      "lineWidth": 1,
+      "showPoints": "never",
+      "stacking": {
+       "group": "A",
+       "mode": "normal"
+      },
+      "barAlignment": 0,
+      "axisPlacement": "auto",
+      "hideFrom": {
+       "legend": false,
+       "tooltip": false,
+       "viz": false
+      }
+     },
+     "mappings": [],
+     "min": 0,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "targets": [
+    {
+     "expr": "sum by (phase) (count_over_time({job=\"homelab-ai-monitor\", event=\"action\"}[$__auto]))",
+     "legendFormat": "{{phase}}",
+     "queryType": "range",
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "${DS_LOKI}"
+     }
+    }
+   ]
+  }
+ ],
+ "refresh": "5m",
+ "schemaVersion": 39,
+ "tags": [
+  "homelab",
+  "ai",
+  "loki"
+ ],
+ "templating": {
+  "list": []
+ },
+ "time": {
+  "from": "now-7d",
+  "to": "now"
+ },
+ "timepicker": {},
+ "timezone": "browser",
+ "title": "Homelab AI — Alerts & Findings (Loki)",
+ "uid": "loki_alerts_findings",
+ "version": 2,
+ "weekStart": ""
+}

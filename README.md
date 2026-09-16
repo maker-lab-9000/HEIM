@@ -96,6 +96,11 @@ heim/
 │       ├── daily.py                #   the daily run (was n8n PAM 10)
 │       ├── poller.py               #   the fast-path poller (was PAM 11)
 │       └── investigate.py          #   the approval-gated investigation (was PAM 20)
+├── grafana/                        # the "Homelab AI Operations" dashboard + Loki datasource
+│   ├── dashboards/homelab-ai-operations.json · loki-alerts-findings.json
+│   └── provisioning/datasources/loki.yml
+├── loki/                           # docker-compose + config for the AI event store
+├── prometheus/                     # docker-compose, scrape config, and alerts.yml (fast-path rules)
 ├── tests/                          # 264 tests, incl. faithful-port golden cases
 └── docs/ARCHITECTURE.md            # design, data flow, n8n→module provenance map
 ```
@@ -193,6 +198,28 @@ The 49-query catalog (qid, category, label, unit, direction, warn/crit threshold
 verbatim PromQL) + the 3-day/3h window. Add or trim queries freely — `qid` is the stable
 identity used in incident fingerprints and alert-rule labels, so keep qids stable and
 matching your `prometheus/alerts.yml` labels.
+
+---
+
+## Observability stack (Grafana / Loki / Prometheus)
+
+The repo ships the full self-hosted observability layer HEIM plugs into — deploy notes in
+[`grafana/README.md`](grafana/README.md) and [`prometheus/README.md`](prometheus/README.md):
+
+- **`grafana/dashboards/homelab-ai-operations.json`** — the AI-operations dashboard
+  (agent status, incidents, investigations, risk, infra trends & forecasts; 42 panels).
+  Import it and map its two inputs (`DS_PROMETHEUS`, `DS_LOKI`). HEIM emits the exact
+  event schema its LogQL queries expect (`job=homelab-ai-monitor`; `state` / `incident` /
+  `finding` / `category` / `investigation` / `action`), so it works with HEIM and the n8n
+  stack interchangeably — including while running both side by side.
+- **`grafana/dashboards/loki-alerts-findings.json`** — a second, Loki-only view of alerts
+  and LLM findings.
+- **`loki/`** — single-binary Loki with filesystem storage and 90-day retention.
+- **`prometheus/`** — scrape config and **`alerts.yml`**, the fast-path alert rules. This
+  one is functionally coupled to HEIM: each rule carries a `qid` label matching
+  [`config/queries/daily.yaml`](config/queries/daily.yaml), which is how the poller builds
+  the same `host|qid|name` incident fingerprints as the daily reconcile (no duplicate
+  incidents across the two paths). If you add rules, give them a `qid`.
 
 ---
 

@@ -1,0 +1,256 @@
+# Fast-path alert rules for the homelab AI monitor.
+#
+# These decouple *detection* from the daily LLM run: Prometheus evaluates them
+# continuously (with `for:` anti-flap), and the n8n "Monitor - Alert Poller"
+# workflow polls /api/v1/alerts every 5 minutes, turning firing alerts into
+# monitor_incidents rows and (with Telegram approval) agentic investigations.
+#
+# Label contract (the poller depends on these):
+#   severity: warning | critical
+#   qid:      the monitoring_metrics.md query id — used to build the incident
+#             fingerprint (host|qid|name) so alert-born and LLM-born incidents
+#             deduplicate against each other.
+#
+# Deploy: see prometheus/README.md (mount + rule_files entry + reload).
+
+groups:
+  - name: homelab-fast-path
+    rules:
+      # ── Availability ────────────────────────────────────────────────────
+      - alert: ExporterDown
+        expr: up == 0
+        for: 5m
+        labels: { severity: critical, qid: exporter_up }
+        annotations:
+          summary: "Exporter/target down: {{ $labels.job }}"
+          description: "Scrape target {{ $labels.job }} ({{ $labels.instance }}) has been down for 5m — host or exporter is unreachable."
+
+      - alert: PVENodeDown
+        expr: pve_up{id="node/homelab"} == 0
+        for: 5m
+        labels: { severity: critical, qid: pve_node_up }
+        annotations:
+          summary: "Proxmox node offline"
+          description: "PVE reports node homelab as down for 5m."
+
+      - alert: PVEPoolDown
+        expr: pve_up{id=~"storage/.*"} == 0
+        for: 5m
+        labels: { severity: critical, qid: pve_pool_up }
+        annotations:
+          summary: "Proxmox storage pool offline: {{ $labels.id }}"
+          description: "Storage pool {{ $labels.id }} has been offline for 5m."
+
+      - alert: KeyVMDown
+        expr: pve_up{id=~"qemu/(100|101)"} == 0
+        for: 10m
+        labels: { severity: critical, qid: pve_vm_up }
+        annotations:
+          summary: "Key VM stopped: {{ $labels.id }}"
+          description: "Guest {{ $labels.id }} (ubuntu-server=100 / home-assistant=101) has been stopped for 10m. (ubuntu-sandbox is intentionally excluded.)"
+
+      # ── Capacity ────────────────────────────────────────────────────────
+      - alert: FilesystemCritical
+        expr: 100 * (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.*|overlay|squashfs|vfat",mountpoint!~"/boot|/JellyMedia"} / node_filesystem_size_bytes{fstype!~"tmpfs|fuse.*|overlay|squashfs|vfat",mountpoint!~"/boot|/JellyMedia"}) > 90
+        for: 10m
+        labels: { severity: critical, qid: fs_used }
+        annotations:
+          summary: "Filesystem >90%: {{ $labels.mountpoint }} on {{ $labels.instance }}"
+          description: "{{ $labels.mountpoint }} ({{ $labels.device }}) is at {{ $value | printf \"%.1f\" }}% — critically full."
+
+      - alert: FilesystemWarning
+        expr: 100 * (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.*|overlay|squashfs|vfat",mountpoint!~"/boot|/JellyMedia"} / node_filesystem_size_bytes{fstype!~"tmpfs|fuse.*|overlay|squashfs|vfat",mountpoint!~"/boot|/JellyMedia"}) > 80
+        for: 30m
+        labels: { severity: warning, qid: fs_used }
+        annotations:
+          summary: "Filesystem >80%: {{ $labels.mountpoint }} on {{ $labels.instance }}"
+          description: "{{ $labels.mountpoint }} ({{ $labels.device }}) is at {{ $value | printf \"%.1f\" }}% and has stayed above 80% for 30m."
+
+      - alert: FilesystemFillingFast
+        expr: predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.*|overlay|squashfs|vfat",mountpoint!~"/boot|/JellyMedia"}[6h], 24*3600) < 0
+        for: 30m
+        labels: { severity: warning, qid: fs_used }
+        annotations:
+          summary: "Filesystem filling within 24h: {{ $labels.mountpoint }} on {{ $labels.instance }}"
+          description: "At the current 6h write rate, {{ $labels.mountpoint }} ({{ $labels.device }}) is projected to run out of space within 24 hours."
+
+      - alert: InodesCritical
+        expr: 100 * (1 - node_filesystem_files_free{fstype!~"tmpfs|fuse.*|overlay|squashfs",mountpoint!~"/boot|/JellyMedia"} / node_filesystem_files{fstype!~"tmpfs|fuse.*|overlay|squashfs",mountpoint!~"/boot|/JellyMedia"}) > 90
+        for: 15m
+        labels: { severity: critical, qid: inodes_used }
+        annotations:
+          summary: "Inodes >90%: {{ $labels.mountpoint }} on {{ $labels.instance }}"
+          description: "{{ $labels.mountpoint }} is at {{ $value | printf \"%.1f\" }}% inode usage — file creation will start failing."
+
+      - alert: PVEPoolCritical
+        expr: 100 * pve_disk_usage_bytes{id=~"storage/.*"} / pve_disk_size_bytes{id=~"storage/.*"} > 90
+        for: 15m
+        labels: { severity: critical, qid: pve_pool_used }
+        annotations:
+          summary: "Proxmox pool >90%: {{ $labels.id }}"
+          description: "Storage pool {{ $labels.id }} is at {{ $value | printf \"%.1f\" }}% — VM disks may fail to grow."
+
+      # ── Compute ─────────────────────────────────────────────────────────
+      - alert: CPUPegged
+        expr: 100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 95
+        for: 15m
+        labels: { severity: warning, qid: cpu_busy }
+        annotations:
+          summary: "CPU pegged >95% on {{ $labels.instance }}"
+          description: "CPU has been above 95% for 15 sustained minutes ({{ $value | printf \"%.1f\" }}%) — a runaway process or batch job."
+
+      - alert: LoadHigh
+        expr: node_load15 / on(instance) group_left count by (instance)(node_cpu_seconds_total{mode="idle"}) > 2
+        for: 15m
+        labels: { severity: warning, qid: load_per_core }
+        annotations:
+          summary: "Load15/core >2 on {{ $labels.instance }}"
+          description: "15-minute load per core is {{ $value | printf \"%.2f\" }} — the host is heavily oversubscribed."
+
+      - alert: MemoryExhaustion
+        expr: 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 95
+        for: 10m
+        labels: { severity: critical, qid: mem_used }
+        annotations:
+          summary: "Memory >95% used on {{ $labels.instance }}"
+          description: "MemAvailable is below 5% for 10m ({{ $value | printf \"%.1f\" }}% used) — OOM risk."
+
+      - alert: OOMKill
+        expr: increase(node_vmstat_oom_kill[15m]) > 0
+        labels: { severity: critical, qid: oom }
+        annotations:
+          summary: "OOM kill on {{ $labels.instance }}"
+          description: "The kernel OOM-killed at least one process in the last 15 minutes."
+
+      # ── Disk health ─────────────────────────────────────────────────────
+      - alert: SmartFail
+        expr: smartctl_device_smart_status != 1
+        for: 5m
+        labels: { severity: critical, qid: smart_status }
+        annotations:
+          summary: "SMART FAILED: {{ $labels.device }}"
+          description: "SMART overall-health for {{ $labels.device }} is failing — imminent drive failure risk. Note the drive→mount mapping: sda→/Photos, sdb→/JellyMedia, nvme0→ubuntu-server LVM."
+
+      - alert: MediaErrors
+        expr: increase(smartctl_device_media_errors[30m]) > 0
+        labels: { severity: critical, qid: media_err }
+        annotations:
+          summary: "New media errors on {{ $labels.device }}"
+          description: "{{ $labels.device }} logged new media errors in the last 30m — active surface/NAND problem."
+
+      - alert: CRCErrorsIncreasing
+        expr: increase(smartctl_device_attribute{device="sdb",attribute_name="UDMA_CRC_Error_Count",attribute_value_type="raw"}[30m]) > 0
+        labels: { severity: critical, qid: sdb_crc }
+        annotations:
+          summary: "CRC errors increasing on sdb"
+          description: "sdb's UDMA CRC error count increased in the last 30m — active SATA cable/connector/port fault (the historical static count is expected; growth is not). sdb backs /JellyMedia."
+
+      # ── Temperature ─────────────────────────────────────────────────────
+      - alert: DriveTempCritical
+        expr: smartctl_device_temperature{temperature_type="current"} > 65
+        for: 10m
+        labels: { severity: critical, qid: drive_temp }
+        annotations:
+          summary: "Drive {{ $labels.device }} at {{ $value | printf \"%.0f\" }}°C"
+          description: "{{ $labels.device }} has been above 65°C for 10m — thermal damage risk. Mapping: sda→/Photos, sdb→/JellyMedia, nvme0→ubuntu-server LVM."
+
+      - alert: DriveTempWarning
+        expr: smartctl_device_temperature{temperature_type="current"} > 55
+        for: 30m
+        labels: { severity: warning, qid: drive_temp }
+        annotations:
+          summary: "Drive {{ $labels.device }} at {{ $value | printf \"%.0f\" }}°C"
+          description: "{{ $labels.device }} has been above 55°C for 30 sustained minutes (brief spikes are ignored)."
+
+      - alert: HostTempCritical
+        expr: max by (instance) (node_hwmon_temp_celsius) > 90
+        for: 10m
+        labels: { severity: critical, qid: host_temp_max }
+        annotations:
+          summary: "Host sensor >90°C on {{ $labels.instance }}"
+          description: "Hottest hwmon sensor has been above 90°C for 10m — cooling failure / thermal-throttle territory."
+
+      # ── Network ─────────────────────────────────────────────────────────
+      - alert: NICErrors
+        expr: rate(node_network_receive_errs_total{device=~"nic0|enp.*|eno.*|eth.*"}[5m]) + rate(node_network_transmit_errs_total{device=~"nic0|enp.*|eno.*|eth.*"}[5m]) + rate(node_network_receive_drop_total{device=~"nic0|enp.*|eno.*|eth.*"}[5m]) + rate(node_network_transmit_drop_total{device=~"nic0|enp.*|eno.*|eth.*"}[5m]) > 1
+        for: 15m
+        labels: { severity: warning, qid: net_err }
+        annotations:
+          summary: "NIC errors/drops on {{ $labels.device }} ({{ $labels.instance }})"
+          description: "Physical NIC {{ $labels.device }} is sustaining >1 error+drop/s for 15m — cable, port, or driver issue."
+
+  - name: containers-fast-path
+    rules:
+      # Outage detection via presence diff: "was exporting metrics 1h ago, isn't now".
+      # Works for stopped AND removed containers (unlike `time() - container_last_seen`,
+      # whose series vanishes with the container). Caveat: fires for ~1h only (the offset
+      # window), then auto-resolves — the incident/notification is the durable record.
+      - alert: ContainerGoneCore
+        expr: count by (name) (container_last_seen{name=~"^(n8n|prometheus|loki|cadvisor|jellyfin|bitwarden-nginx|nextcloud-app-1|photoprism-photoprism-1|paperless-webserver-1|portainer)$"} offset 1h) unless count by (name) (container_last_seen{name=~"^(n8n|prometheus|loki|cadvisor|jellyfin|bitwarden-nginx|nextcloud-app-1|photoprism-photoprism-1|paperless-webserver-1|portainer)$"})
+        for: 5m
+        labels: { severity: critical, qid: container_gone }
+        annotations:
+          summary: "Core container gone: {{ $labels.name }}"
+          description: "Container {{ $labels.name }} (core service) stopped reporting to cAdvisor >5m ago — it is stopped, removed, or crashed. All containers run on ubuntu-server."
+
+      - alert: ContainerGoneOther
+        expr: count by (name) (container_last_seen{name!="", name!~"^(n8n|prometheus|loki|cadvisor|jellyfin|bitwarden-nginx|nextcloud-app-1|photoprism-photoprism-1|paperless-webserver-1|portainer)$"} offset 1h) unless count by (name) (container_last_seen{name!="", name!~"^(n8n|prometheus|loki|cadvisor|jellyfin|bitwarden-nginx|nextcloud-app-1|photoprism-photoprism-1|paperless-webserver-1|portainer)$"})
+        for: 10m
+        labels: { severity: warning, qid: container_gone }
+        annotations:
+          summary: "Container gone: {{ $labels.name }}"
+          description: "Container {{ $labels.name }} stopped reporting to cAdvisor >10m ago — stopped, removed, or crashed. (Warning tier: sidecar/optional service.)"
+
+      - alert: ContainerCrashLoop
+        expr: changes(container_start_time_seconds{name!=""}[30m]) > 2
+        labels: { severity: critical, qid: container_crashloop }
+        annotations:
+          summary: "Container crash-looping: {{ $labels.name }}"
+          description: "Container {{ $labels.name }} restarted {{ $value | printf \"%.0f\" }} times in 30m — check 'sudo agent-docker logs {{ $labels.name }}'."
+
+      # Deviation-from-own-baseline rules (never absolute thresholds — a container has no
+      # universal 'too much'). Floors stop tiny containers from firing on noise.
+      - alert: ContainerCPUDeviation
+        expr: sum by (name) (rate(container_cpu_usage_seconds_total{name!=""}[10m])) > 0.5 and sum by (name) (rate(container_cpu_usage_seconds_total{name!=""}[10m])) > 4 * sum by (name) (rate(container_cpu_usage_seconds_total{name!=""}[1d]))
+        for: 30m
+        labels: { severity: warning, qid: container_cpu_dev }
+        annotations:
+          summary: "Container CPU deviation: {{ $labels.name }}"
+          description: "Container {{ $labels.name }} has used {{ $value | printf \"%.2f\" }} CPU cores for 30m sustained — over 4x its own 1-day baseline."
+
+      - alert: ContainerMemDeviation
+        expr: container_memory_working_set_bytes{name!=""} > 5e8 and container_memory_working_set_bytes{name!=""} > 2 * avg_over_time(container_memory_working_set_bytes{name!=""}[1d])
+        for: 30m
+        labels: { severity: warning, qid: container_mem_dev }
+        annotations:
+          summary: "Container memory deviation: {{ $labels.name }}"
+          description: "Container {{ $labels.name }} working set is {{ $value | humanize1024 }}B — over 2x its own 1-day baseline for 30m (possible leak; working set excludes page cache)."
+
+      - alert: ContainerFSGrowth
+        expr: container_fs_usage_bytes{name!=""} - container_fs_usage_bytes{name!=""} offset 6h > 5e9
+        for: 15m
+        labels: { severity: warning, qid: container_fs_growth }
+        annotations:
+          summary: "Container disk growth: {{ $labels.name }}"
+          description: "Container {{ $labels.name }} filesystem usage grew {{ $value | humanize1024 }}B in 6h — runaway cache/log/volume (the Jellyfin-transcode pattern, caught at container level)."
+
+      # Coarse abuse tripwire for the public Telegram webhook (packets, not HTTP requests —
+      # request-level monitoring needs logs → Loki, a later project).
+      - alert: N8nInboundSpike
+        expr: rate(container_network_receive_packets_total{name="n8n"}[5m]) > 200 and rate(container_network_receive_packets_total{name="n8n"}[5m]) > 5 * rate(container_network_receive_packets_total{name="n8n"}[1d])
+        for: 10m
+        labels: { severity: warning, qid: n8n_net_spike }
+        annotations:
+          summary: "Unusual inbound traffic to n8n"
+          description: "n8n container is receiving {{ $value | printf \"%.0f\" }} packets/s for 10m — over 5x its 1-day baseline. Possible webhook abuse/scan on the public Funnel endpoint."
+
+      # ── E2E test (keep commented) ───────────────────────────────────────
+      # Uncomment + reload to test the poller end-to-end: creates a warning
+      # incident on host "unknown" (not investigable, no Telegram), which
+      # auto-resolves ~10 minutes after you re-comment it and reload.
+      # - alert: TestAlwaysFiring
+      #   expr: vector(1)
+      #   labels: { severity: warning, qid: test }
+      #   annotations:
+      #     summary: "fast-path E2E test"
+      #     description: "delete me"

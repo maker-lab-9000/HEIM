@@ -1,0 +1,46 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # Proxmox API exporter (multi-target via /pve)
+  - job_name: "proxmox-api-exporter"
+    metrics_path: /pve
+    params:
+      module: [default]
+      cluster: ["1"]
+      node: ["1"]
+    static_configs:
+      - targets:
+          - "192.168.178.2"          # Proxmox node IP/FQDN used as ?target=
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 192.168.178.2:9221  # where the exporter is
+
+  # Node exporter (host OS metrics)
+  - job_name: "proxmox-host-node-exporter"
+    static_configs:
+      - targets:
+          - "192.168.178.2:9100"
+
+  # SMART metrics (disk health + temps)
+  - job_name: "proxmox-host-smartctl"
+    static_configs:
+      - targets:
+          - "192.168.178.2:9633"
+  # Node exporter for ubuntu-server
+  - job_name: 'ubuntu-server-vm-node-exporter'
+    static_configs:
+      - targets:
+          - '192.168.178.241:9100'
+  # Container monitor
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets:
+          - '192.168.178.241:8081'
+
+rule_files:
+     - /etc/prometheus/alerts.yml

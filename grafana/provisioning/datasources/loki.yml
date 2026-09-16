@@ -1,0 +1,18 @@
+# Grafana datasource provisioning for the AI-observability Loki.
+# Drop this into Grafana's provisioning dir (e.g. /etc/grafana/provisioning/datasources/)
+# on the Home Assistant VM and restart Grafana — OR add it via the UI
+# (Connections -> Data sources -> Add data source -> Loki).
+#
+# Replace 192.168.178.241 with the LAN/tailnet IP of the ubuntu-server VM
+# where Loki runs (Grafana is on a different VM, so localhost will NOT work).
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    type: loki
+    access: proxy
+    uid: homelab_loki            # the dashboard references this uid via ${DS_LOKI}
+    url: http://192.168.178.241:3100
+    isDefault: false
+    jsonData:
+      maxLines: 1000
