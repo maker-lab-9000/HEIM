@@ -96,6 +96,7 @@ heim/
 │       ├── daily.py                #   the daily run (was n8n PAM 10)
 │       ├── poller.py               #   the fast-path poller (was PAM 11)
 │       └── investigate.py          #   the approval-gated investigation (was PAM 20)
+├── Dockerfile · docker-compose.yml # container deployment (recommended) — see below
 ├── grafana/                        # the "Homelab AI Operations" dashboard + Loki datasource
 │   ├── dashboards/homelab-ai-operations.json · loki-alerts-findings.json
 │   └── provisioning/datasources/loki.yml
@@ -132,7 +133,36 @@ heim incidents                      # show the incident store
 heim daemon                         # the real thing: schedules + poller + approval listener
 ```
 
-### Run it as a service (on your homeserver)
+### Run it in Docker (recommended)
+
+HEIM is outbound-only (Telegram approvals long-poll — no webhook), so the container
+publishes **no ports**. All mutable state (SQLite store, audit log, dry-run reports)
+lives in `./data`; `config/` is mounted read-only; secrets come from `.env`.
+
+```bash
+cp .env.example .env && $EDITOR .env
+cp config/settings.example.yaml config/settings.yaml && $EDITOR config/settings.yaml
+echo "HEIM_SSH_KEY_FILE=$HOME/.ssh/pam_agent" >> .env   # host path of the agent's SSH key
+
+docker compose run --rm heim check          # validate config + connectivity
+docker compose run --rm heim daily --dry-run   # report lands in ./data/out/
+docker compose up -d --build                # the daemon
+docker compose logs -f heim
+```
+
+Notes:
+- One-off commands (`check`, `daily`, `poll`, `investigate`, `incidents`) run via
+  `docker compose run --rm heim <cmd>` with the same mounts as the daemon.
+- The image is built on the host that runs it (`--build`), so ARM Mac vs x86 server
+  needs no multi-arch registry work.
+- Don't run a second daemon (locally or elsewhere) against the **same Telegram bot
+  token** — `getUpdates` allows one consumer; use a separate dev bot for local tests,
+  or stick to `--dry-run` (which never touches Telegram).
+- On Proxmox, run this in a small **VM with Docker** (Docker-inside-LXC works with
+  `nesting=1` but is upgrade-fragile). A guest separate from the monitored hosts also
+  means HEIM survives — and alerts on — an outage of the main server.
+
+### Alternative: bare systemd service
 
 ```ini
 # /etc/systemd/system/heim.service

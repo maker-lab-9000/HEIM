@@ -1,0 +1,17 @@
+.git
+.venv
+.env
+config/settings.yaml
+data
+out
+reference
+tests
+docs
+grafana
+loki
+prometheus
+*.sqlite3
+audit.jsonl
+__pycache__
+*.egg-info
+.pytest_cache

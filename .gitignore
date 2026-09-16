@@ -4,6 +4,7 @@
 config/settings.yaml
 
 # runtime artifacts
+data/
 heim.sqlite3
 *.sqlite3
 out/

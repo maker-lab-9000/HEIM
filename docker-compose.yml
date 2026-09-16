@@ -1,0 +1,29 @@
+# HEIM in a container — outbound-only (no ports to publish).
+#
+#   docker compose up -d --build          # the daemon (schedules + poller + approvals)
+#   docker compose run --rm heim check    # one-off commands run the same image
+#   docker compose run --rm heim daily --dry-run   # report lands in ./data/out/
+#
+# Secrets come from .env (env_file); endpoints from ./config/settings.yaml.
+# The SSH key is mounted read-only — set HEIM_SSH_KEY_FILE (in .env or your
+# shell) to its host path, e.g. HEIM_SSH_KEY_FILE=/home/you/.ssh/pam_agent
+# (defaults to /dev/null so key-less local testing still composes).
+
+services:
+  heim:
+    build: .
+    image: heim:latest
+    container_name: heim
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      HEIM_SSH_KEY: /secrets/ssh_key
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/data
+      - ${HEIM_SSH_KEY_FILE:-/dev/null}:/secrets/ssh_key:ro
+    # the daemon exits on SIGTERM without ceremony; don't wait long
+    stop_grace_period: 10s
