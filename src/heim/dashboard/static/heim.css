@@ -145,6 +145,7 @@ main { margin-left: 200px; max-width: 1280px; padding: 16px; }
 .health .headline + .hstrip, .health .eyebrow + .hstrip { margin-top: 12px; }
 
 .empty { margin: 4px 0; color: var(--ink-3); font-size: 0.8125rem; }
+.ok-empty::first-letter { color: var(--ok); }
 .errmsg { color: var(--serious); margin: 4px 0; }
 
 /* tables */
@@ -285,6 +286,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .flist { list-style: none; margin: 0; padding: 0; }
 .flist > li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 0.8125rem; }
 .flist > li:last-child { border-bottom: 0; }
+.flist .acts { margin: 0; display: inline-flex; }
 .fhead, .headline { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin: 0; }
 .headline { margin: 8px 0; font-size: 0.875rem; }
 .fsum { color: var(--ink); }

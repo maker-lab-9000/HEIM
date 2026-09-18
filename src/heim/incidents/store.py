@@ -398,6 +398,33 @@ class IncidentStore:
         params += [limit, offset]
         return [dict(r) for r in self._db.execute(sql, params).fetchall()]
 
+    #: The statuses that mean "this run did not finish cleanly" — the
+    #: operator's triage queue on the overview (dashboard spec §12).
+    ATTENTION_STATUSES = ("incomplete", "failed", "needs_human")
+
+    def needs_attention(self, limit: int = 6) -> list[dict]:
+        """Investigations that ended badly, newest first.
+
+        ``id`` breaks the tie because a batch of retries can share one
+        ``started_at``, and a LIMIT over a tie can repeat or skip a row.
+        """
+        holes = ", ".join("?" * len(self.ATTENTION_STATUSES))
+        cur = self._db.execute(
+            f"SELECT * FROM investigations WHERE status IN ({holes}) "
+            "ORDER BY started_at DESC, id DESC LIMIT ?",
+            (*self.ATTENTION_STATUSES, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def needs_attention_count(self) -> int:
+        """How many there are in total — the number behind the "all" link."""
+        holes = ", ".join("?" * len(self.ATTENTION_STATUSES))
+        row = self._db.execute(
+            f"SELECT COUNT(*) AS n FROM investigations WHERE status IN ({holes})",
+            self.ATTENTION_STATUSES,
+        ).fetchone()
+        return int(row["n"] or 0)
+
     def investigation(self, investigation_id: int) -> dict | None:
         row = self._db.execute(
             "SELECT * FROM investigations WHERE id = ?", (investigation_id,)

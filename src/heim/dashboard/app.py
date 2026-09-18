@@ -577,6 +577,10 @@ def create_app(config: Config | None = None) -> FastAPI:
              "meta": "waiting for the daemon" if queued else "queue empty",
              "href": "/investigations"},
         ]
+        # the triage queue (spec §12): the runs that did not finish cleanly,
+        # with the total behind them so the card knows whether it is truncating
+        attention = reader.read(lambda s: s.needs_attention())
+        attention_count = reader.read(lambda s: s.needs_attention_count())
         feedback = reader.read(lambda s: s.latest_tool_feedback())
         tool_usage = _tool_usage(reader.read(lambda s: s.tool_usage(limit=12)), feedback)
         # the weekly rhythm (spec §11): 14 zero-filled days, turned into bar
@@ -586,6 +590,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             request, "overview.html", page_title="overview", kpis=kpis,
             token_chart=token_chart,
             latest_run=latest, run_list=run_list,
+            attention=attention, attention_count=attention_count,
             health=_health_card(latest, sev_counts, cfg, open_incidents),
             tool_usage=tool_usage,
             tool_feedback_general=_general_feedback(feedback, tool_usage),

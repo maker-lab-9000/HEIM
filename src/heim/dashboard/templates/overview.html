@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% import "partials/_macros.html" as m %}
+{#- `with context` so the action macro can read `back` (partials/_macros.html) -#}
+{% import "partials/_macros.html" as m with context %}
 {% block content %}
 
 {% if empty %}
@@ -48,6 +49,37 @@
   {%- endif %}
 </section>
 {%- endif %}
+
+{# the triage queue (design spec §12): the runs that did not finish cleanly,
+    directly under the health card because bad news travels first. Each row
+    says what happened (pill), where (host badge), which run (#id), why (the
+    reason line — incomplete_reason, or the outcome for needs_human) and when,
+    and offers the one action that helps: re-run it. The empty state stays
+    visible as good news rather than disappearing. -#}
+<section class="card">
+  <h2 class="eyebrow">needs attention</h2>
+  {%- if attention %}
+  <ul class="flist">
+    {%- for r in attention %}
+    <li>{{ m.pill(r.status) }} {{ m.hostbadge(r.host) }}
+      <a class="mono" href="/investigations/{{ r.id }}">#{{ r.id }}</a>
+      {{ m.when(r.started_at) }}
+      <span class="acts">{{ m.act('/actions/retrigger', 'RE-RUN',
+        {'investigation_id': r.id},
+        confirm='Re-run investigation #' ~ r.id ~ '?') }}</span>
+      {%- if r.incomplete_reason or r.outcome %}
+      <p class="runline">{{ r.incomplete_reason or r.outcome }}</p>
+      {%- endif %}
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- if attention_count > attention|length %}
+  <p><a class="qlink" href="/investigations">all ({{ attention_count }})</a></p>
+  {%- endif %}
+  {%- else %}
+  <p class="empty ok-empty">● Nothing needs attention.</p>
+  {%- endif %}
+</section>
 
 <section class="card">
   <h2 class="eyebrow">latest runs</h2>
