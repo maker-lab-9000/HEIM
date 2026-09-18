@@ -167,7 +167,8 @@ def test_overview_shell_and_kpis(client):
     assert r.status_code == 200
     html = r.text
     # wordmark, nav, daemon chip, topbar chrome
-    assert "✳" in html and "HEIM" in html
+    assert 'class="spark"' in html and "HEIM" in html      # the house wordmark
+    assert "/static/logo.svg" in html                       # favicon
     assert 'href="/investigations"' in html and 'href="/hosts"' in html
     assert "daemon" in html
     # KPI tiles: 2 open incidents, 1 running, 0 pending, tokens summed over 24h

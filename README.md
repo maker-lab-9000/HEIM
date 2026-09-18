@@ -1,3 +1,5 @@
+<img src="docs/logo.svg" alt="HEIM logo — a minimal line-drawn tall house with a chimney, round attic window and arched door, in ember orange" width="72" align="right">
+
 # HEIM — Homelab Event & Incident Monitor
 
 **HEIM** (German: *home*) is a standalone Python port of the n8n **Prometheus Agentic Monitor** stack: a daily AI-written

@@ -82,7 +82,9 @@ content column (max 1280px, 16px gutters).
 └──────────┴──────────────────────────────────────────────────────┘
 ```
 
-Rail: wordmark `✳ HEIM` (the asterisk is the hearth-spark, in ember), nav items
+Rail: wordmark — a minimal ink-style **house glyph** in ember (tall gable, chimney,
+round attic window, two windows, arched door; `static/logo.svg`, also the favicon) +
+`HEIM`; nav items
 (mono-caps, active item gets an ember left-border + `--raised` bg), and a footer daemon
 chip (`● daemon up 3d` — ok dot; `○ daemon unreachable` — ink-3) derived from the
 freshest `runs` row. Top bar: page title (lowercase, mono), right side environment chip
