@@ -240,11 +240,30 @@ def test_recommendations_dedupes_a_repeated_remediation_line(seeded_client):
 
 def test_recommendations_renders_a_missing_timestamp_as_a_dash(seeded_client):
     """A complete investigation with no finished_at still has advice to give;
-    its age cell is the dash every other page uses, never an empty box."""
+    its age cell is the dash every other page uses, never an empty box.
+
+    The cell goes through the same `when()` macro as every other table, so
+    this pins that the macro's `iso`/`rel` pair keeps dashing on an empty
+    value rather than emitting an empty <time>.
+    """
     html = seeded_client.get("/recommendations").text
     assert "Replace the drive" in html
     row = html.split("Replace the drive", 1)[1].split("</tr>", 1)[0]
     assert "—" in row
+    assert ">—</time>" in row and 'datetime="—"' in row
+
+
+def test_recommendations_timestamps_are_time_elements(seeded_client):
+    """Tabular timestamps use the `when()` macro, so they are machine-readable
+    and carry the exact-time tooltip — the table convention, not the bare
+    filter the inline lists use."""
+    html = seeded_client.get("/recommendations").text
+    row = html.split("Cap it", 1)[1].split("</tr>", 1)[0]
+    assert re.search(r'<time class="mono" datetime="20\d\d-[^"]+" title="20\d\d-', row)
+    key = re.search(r'name="key" value="([0-9a-f]{40})"', html).group(1)
+    seeded_client.post("/actions/recommendation", data={"key": key, "state": "done"})
+    handled = seeded_client.get("/recommendations").text.split("handled (1)", 1)[1]
+    assert re.search(r'<time class="mono" datetime="20\d\d-[^"]+" title="20\d\d-', handled)
 
 
 def test_recommendation_dismiss_moves_the_row_and_state_persists(seeded_client, seeded):

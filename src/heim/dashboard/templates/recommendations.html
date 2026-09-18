@@ -20,9 +20,10 @@
         <td class="rectext">{{ r.text }}</td>
         <td class="c-src mono ink2"><a class="qlink" href="{{ r.source_href }}">{{ r.source }}</a></td>
         {#- an investigation that never recorded a finish time has no age to
-            show; `rel` already answers that with the dash the rest of the UI
-            uses, so the cell is never blank -#}
-        <td class="c-when mono ink2">{{ r.at|rel }}</td>
+            show; `when` answers that with the dash the rest of the UI uses
+            (both `rel` and `iso` dash on an empty value), so the cell is
+            never blank -#}
+        <td class="c-when">{{ m.when(r.at) }}</td>
         <td class="c-acts">{% include "partials/_rec_acts.html" %}</td>
       </tr>
       {%- endfor %}
@@ -45,7 +46,7 @@
           <td class="c-host">{{ m.hostbadge(r.host) }}</td>
           <td class="rectext ink2">{{ r.text }}</td>
           <td class="c-src mono ink2"><a class="qlink" href="{{ r.source_href }}">{{ r.source }}</a></td>
-          <td class="c-when mono ink2">{{ r.acted_at|rel }}</td>
+          <td class="c-when">{{ m.when(r.acted_at) }}</td>
           <td class="c-acts">{{ m.pill(r.state) }}</td>
         </tr>
         {%- endfor %}
