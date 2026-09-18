@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close out the HEIM dashboard's deferred items: list pagination, the Recommendations page, light mode, per-investigation model choice, and the token-usage-by-weekday chart.
+**Goal:** Close out the HEIM dashboard's deferred items: list pagination, the Recommendations page, light mode, per-investigation model choice, the token-usage-by-weekday chart, and the needs-attention card.
 
 **Architecture:** All four are dashboard-layer changes on the existing FastAPI + Jinja + htmx app (`src/heim/dashboard/`), plus one new SQLite action table for recommendation states. No pipeline/daemon changes. Pure logic gets unit tests; routes get TestClient tests.
 
 **Tech Stack:** Python 3.11+, FastAPI, Jinja2, htmx (vendored), sqlite3, pytest.
 
-**Spec:** `docs/design/dashboard-ui.md` §8 (pagination), §9 (recommendations), §10 (light mode), §5.1 (model choice), §11 (token chart). §1–4 define the design system every task must match.
+**Spec:** `docs/design/dashboard-ui.md` §8 (pagination), §9 (recommendations), §10 (light mode), §5.1 (model choice), §11 (token chart), §12 (needs attention). §1–4 define the design system every task must match.
 
 ## Global Constraints
 
@@ -535,4 +535,56 @@ Overview route: `token_chart = store.daily_token_totals(14)`; compute `mx = max(
 ```bash
 .venv/bin/pytest tests/test_token_chart.py -q && .venv/bin/pytest -q
 git add -A && git commit -m "overview: token usage by weekday — 14-day ember bar chart (server-rendered SVG)"
+```
+
+---
+
+### Task 7: Needs-attention card on overview
+
+**Files:**
+- Modify: `src/heim/incidents/store.py` (query), `src/heim/dashboard/app.py` (overview context), `src/heim/dashboard/templates/overview.html` (the card), `src/heim/dashboard/static/heim.css` (only if needed)
+- Test: `tests/test_needs_attention.py` (new)
+
+**Interfaces:**
+- Consumes: investigations table; the existing status pill + hostbadge macros and the retrigger action form (`/actions/retrigger`, field `investigation_id`).
+- Produces: `store.needs_attention(limit=6) -> list[dict]` (status IN ('incomplete','failed','needs_human'), newest first) and `store.needs_attention_count() -> int`.
+
+**Spec:** `docs/design/dashboard-ui.md` §12.
+
+- [ ] **Step 1: Failing tests**
+
+```python
+# tests/test_needs_attention.py
+def test_store_needs_attention(tmp_path):
+    from heim.incidents.store import IncidentStore
+    s = IncidentStore(tmp_path / "n.sqlite3")
+    for i, st in enumerate(["complete", "incomplete", "failed", "needs_human", "running"]):
+        s.create_investigation(fingerprint=f"f{i}", host="h", trigger="daily", status=st,
+                               started_at=f"2026-09-1{i}T00:00:00",
+                               incomplete_reason="budget" if st == "incomplete" else "")
+    rows = s.needs_attention()
+    assert [r["status"] for r in rows] == ["needs_human", "failed", "incomplete"]  # newest first
+    assert s.needs_attention_count() == 3
+    s.close()
+
+def test_overview_needs_attention_card(seeded_client):
+    html = seeded_client.get("/").text
+    card = html[html.index("needs attention"):]
+    assert "incomplete" in card and "RE-RUN" in card and "budget" in card
+
+def test_overview_needs_attention_empty_is_good_news(empty_client):
+    assert "Nothing needs attention." in empty_client.get("/").text
+```
+
+- [ ] **Step 2: Run to verify failure** → FAIL
+
+- [ ] **Step 3: Implement**
+
+Store: two small queries (WHERE status IN (...) ORDER BY started_at DESC LIMIT ?; COUNT). Overview route: `attention = store.needs_attention()`, `attention_count = store.needs_attention_count()`. Card per spec §12, directly under the health card: rows with `m.pill(r.status)`, `m.hostbadge(r.host)`, `<a href="/investigations/{{ r.id }}">#{{ r.id }}</a>`, muted reason line (`r.incomplete_reason or r.outcome`), rel time, and the retrigger form via the act macro (`m.act('/actions/retrigger', 'RE-RUN', {'investigation_id': r.id}, confirm='Re-run investigation #' ~ r.id ~ '?')`); footer link `all ({{ attention_count }})` to `/investigations` when count > 6; empty state `<p class="empty ok-empty">● Nothing needs attention.</p>`.
+
+- [ ] **Step 4: Run tests, full suite, commit**
+
+```bash
+.venv/bin/pytest tests/test_needs_attention.py -q && .venv/bin/pytest -q
+git add -A && git commit -m "overview: needs-attention card (incomplete/failed/needs-human triage)"
 ```

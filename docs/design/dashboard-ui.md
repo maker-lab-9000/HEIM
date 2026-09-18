@@ -375,7 +375,17 @@ inline SVG (heights precomputed server-side, viewBox fixed) — no JS, no chart 
 Below the chart one mono summary line: `14d: <total> · busiest <weekday> <date> (<n>)`.
 Empty state: "No token usage recorded yet."
 
-## 12. Still out of scope
+## 12. Needs attention (overview card)
+
+An overview card for investigations that did NOT finish cleanly — status ∈ {incomplete,
+failed, needs_human} — the operator's triage queue. Placed directly under the KPI row's
+health card (bad news travels first). Latest 6, newest first, each row: status pill ·
+host badge · `#id` link · the reason in one muted line (incomplete_reason, or the
+outcome for needs_human) · rel time · a `RE-RUN` action (the existing retrigger form).
+More than 6 → a quiet `all (N)` link to /investigations?status=… . Empty state stays
+visible as good news: "Nothing needs attention." in --ink-3 with the ok dot.
+
+## 13. Still out of scope
 
 Nothing — as of this revision every previously deferred dashboard item is specced
 above.
