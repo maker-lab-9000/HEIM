@@ -1,4 +1,4 @@
-<img src="docs/logo.svg" alt="HEIM logo — a minimal line-drawn tall house with a chimney, round attic window and arched door, in ember orange" width="72" align="right">
+<img src="docs/logo-lockup.svg" alt="HEIM wordmark — the H drawn as a house with a roof, chimney and four-pane window, flanked by a small sun and crescent moon over grass, in ember orange" width="280">
 
 # HEIM — Homelab Event & Incident Monitor
 

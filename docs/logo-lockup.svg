@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 276 124" fill="none" stroke="#E88C3A" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+  <!-- H posts + crossbar -->
+  <path d="M48 46v62M92 46v62M48 84h44"/>
+  <!-- chimney (solid, under the roof stroke) -->
+  <g fill="#E88C3A" stroke="none">
+    <rect x="91" y="22" width="13" height="18" rx="1.5"/>
+    <rect x="88" y="16" width="19" height="7" rx="2"/>
+  </g>
+  <!-- roof over the H -->
+  <path d="M26 58 70 20l44 38" stroke-width="11"/>
+  <!-- window panes (filled) -->
+  <g fill="#E88C3A" stroke="none">
+    <rect x="56" y="52" width="11" height="10" rx="2"/>
+    <rect x="72" y="52" width="11" height="10" rx="2"/>
+    <rect x="56" y="66" width="11" height="10" rx="2"/>
+    <rect x="72" y="66" width="11" height="10" rx="2"/>
+  </g>
+  <!-- sun -->
+  <circle cx="16" cy="30" r="6" fill="#E88C3A" stroke="none"/>
+  <path d="M16 18v-4M16 46v-4M4 30H1M31 30h-3M7 21l-2.5-2.5M25 39l2.5 2.5M25 21l2.5-2.5M7 39l-2.5 2.5" stroke-width="3"/>
+  <!-- crescent moon -->
+  <path d="M134 18a13 13 0 1 0 11 20a10 10 0 1 1-11-20z" fill="#E88C3A" stroke="none"/>
+  <!-- E I M -->
+  <path d="M132 52v56M132 54h28M132 79h24M132 108h28"/>
+  <path d="M178 54v54"/>
+  <path d="M200 108V52l22 34 22-34v56"/>
+  <!-- grass -->
+  <path d="M30 108q-2-7-6-9M36 108q1-6 5-8M104 108q-2-6-5-8M110 108q2-6 6-7" stroke-width="3.5"/>
+</svg>
