@@ -521,8 +521,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         ]
         feedback = reader.read(lambda s: s.latest_tool_feedback())
         tool_usage = _tool_usage(reader.read(lambda s: s.tool_usage(limit=12)), feedback)
+        # the weekly rhythm (spec §11): 14 zero-filled days, turned into bar
+        # geometry here so the template only places already-computed numbers
+        token_chart = fmt.bar_chart(reader.read(lambda s: s.daily_token_totals(14)))
         return page(
             request, "overview.html", page_title="overview", kpis=kpis,
+            token_chart=token_chart,
             latest_run=latest, run_list=run_list,
             health=_health_card(latest, sev_counts, cfg, open_incidents),
             tool_usage=tool_usage,

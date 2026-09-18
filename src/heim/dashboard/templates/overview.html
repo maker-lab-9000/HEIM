@@ -122,6 +122,43 @@
   {%- endif %}
 </section>
 
+{#- the weekly rhythm (spec §11): one ember mark per day for the last 14, today
+    rightmost. Single series, so no legend — the card title names it — and the
+    labels are selective: only the busiest bar prints its number, while every
+    bar carries a title tooltip with the date and the exact count. Heights are
+    precomputed server-side (fmt.bar_chart); the viewBox is fixed and there is
+    no script. The bars are drawn 4px too tall and clipped at the baseline, so
+    the corner radius rounds the top only. -#}
+<section class="card">
+  <h2 class="eyebrow">token usage</h2>
+  {%- if token_chart.total %}
+  <svg class="tchart" width="{{ token_chart.width }}" height="{{ token_chart.height }}"
+       viewBox="0 0 {{ token_chart.width }} {{ token_chart.height }}" role="img"
+       aria-label="Tokens spent per day over the last 14 days, busiest day {{ token_chart.busiest.date }}">
+    <defs><clipPath id="tchart-clip"><rect x="0" y="0"
+      width="{{ token_chart.width }}" height="{{ token_chart.baseline }}"/></clipPath></defs>
+    <g clip-path="url(#tchart-clip)">
+      {%- for b in token_chart.bars %}
+      <rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.rh }}"
+            rx="{{ token_chart.radius }}" fill="var(--ember)"><title>{{ b.title }}</title></rect>
+      {%- endfor %}
+    </g>
+    <line class="base" x1="0" y1="{{ token_chart.baseline + 0.5 }}"
+          x2="{{ token_chart.width }}" y2="{{ token_chart.baseline + 0.5 }}"/>
+    {%- for b in token_chart.bars %}
+    <text class="wd" x="{{ b.mid }}" y="{{ token_chart.label_y }}" text-anchor="middle">{{ b.weekday }}</text>
+    {%- if b.is_max %}
+    <text class="val" x="{{ b.mid }}" y="{{ b.y - 5 }}" text-anchor="middle">{{ b.label }}</text>
+    {%- endif %}
+    {%- endfor %}
+  </svg>
+  <p class="tsum mono">14d: {{ token_chart.total|tokens }} · busiest {{ token_chart.busiest.weekday }}
+    {{ token_chart.busiest.date }} ({{ token_chart.busiest.value|tokens }})</p>
+  {%- else %}
+  <p class="empty">No token usage recorded yet.</p>
+  {%- endif %}
+</section>
+
 <section class="card">
   <h2 class="eyebrow">recent investigations</h2>
   {%- if investigations %}

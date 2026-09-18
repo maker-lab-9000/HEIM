@@ -386,6 +386,85 @@ def burn_segments(steps: list[dict]) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- bar chart
+
+#: Geometry of the daily bar charts (spec §11), in SVG user units, which the
+#: template emits 1:1 so the mono labels land on the CSS type scale (11px =
+#: 0.6875rem). One slot per day: a thin ember mark with a 2px gap to the next.
+CHART_SLOT = 24          # one day
+CHART_GAP = 2            # spec §11: 2px gaps
+CHART_TOP = 16           # tallest bar's top edge (headroom for its label)
+CHART_BASELINE = 62      # the hairline every bar sits on
+CHART_HEIGHT = 84        # viewBox height: baseline + the weekday letters
+CHART_LABEL_Y = 76       # weekday letters
+CHART_STUB = 2           # a zero day still shows, so the axis stays readable
+CHART_RADIUS = 4         # spec §11: 4px rounded tops
+
+
+def _exact(value) -> str:
+    return f"{int(value):,}"
+
+
+def bar_chart(points: list[dict], *, value_key: str = "tokens",
+              unit: str = "tokens", fmt_label=None, fmt_exact=None) -> dict:
+    """Precomputed geometry for a single-series daily bar chart (spec §11).
+
+    Pure: takes already-aggregated ``{"date", "weekday", <value_key>}`` points
+    oldest→newest and returns everything the template needs to emit a fixed
+    ``viewBox`` SVG — no JS, no chart library, no clock read. Bars are scaled to
+    the window's own max (a single series needs no shared axis), zero days get a
+    ``CHART_STUB`` mark, and labelling is selective: only the max bar carries an
+    inline label, while *every* bar carries a ``title`` tooltip with the date and
+    the exact amount.
+
+    The series is a parameter, not a hard-coded key, so a second series (the
+    cost-by-day chart) reuses the same geometry and stylesheet with its own
+    formatters — ``fmt_label`` for the one inline label, ``fmt_exact`` for the
+    tooltips.
+
+    Bars carry ``h`` (the visible height) and ``rh`` — the height to draw, which
+    overshoots below the baseline so a rect's ``rx`` rounds only the top; the
+    template clips at the baseline.
+    """
+    fmt_label = fmt_label or tokens
+    fmt_exact = fmt_exact or _exact
+    points = list(points or [])
+    span = CHART_BASELINE - CHART_TOP
+    values = [max(float(p.get(value_key) or 0), 0.0) for p in points]
+    top = max(values) if values else 0.0
+    peak = values.index(top) if values and top > 0 else -1
+    bars = []
+    for i, (point, value) in enumerate(zip(points, values)):
+        h = max(round(span * value / top), CHART_STUB) if top > 0 else CHART_STUB
+        amount = fmt_exact(value)
+        bars.append({
+            "date": str(point.get("date") or ""),
+            "weekday": str(point.get("weekday") or ""),
+            "value": value,
+            "x": i * CHART_SLOT + CHART_GAP // 2,
+            "w": CHART_SLOT - CHART_GAP,
+            "y": CHART_BASELINE - h,
+            "h": h,
+            "rh": h + CHART_RADIUS,
+            "mid": i * CHART_SLOT + CHART_SLOT // 2,
+            "is_max": i == peak,
+            "label": fmt_label(value) if i == peak else "",
+            "title": f"{point.get('date') or ''} · {amount} {unit}".rstrip(),
+        })
+    return {
+        "bars": bars,
+        "width": len(bars) * CHART_SLOT,
+        "height": CHART_HEIGHT,
+        "baseline": CHART_BASELINE,
+        "label_y": CHART_LABEL_Y,
+        "radius": CHART_RADIUS,
+        "span": span,
+        "max": int(top) if float(top).is_integer() else top,
+        "total": int(sum(values)) if all(float(v).is_integer() for v in values) else sum(values),
+        "busiest": bars[peak] if peak >= 0 else None,
+    }
+
+
 # ------------------------------------------------------------------ statuses
 
 #: status -> (icon, css class, label) — meaning is never carried by color alone

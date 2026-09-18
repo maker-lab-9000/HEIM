@@ -37,8 +37,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+#: weekday initials for the token chart's x labels (spec §11), Monday first —
+#: ``date.weekday()`` order, so the list is indexed by it directly.
+_WEEKDAYS = ["mo", "tu", "we", "th", "fr", "sa", "su"]
 
 #: Closed jobs are receipts for the queue UI, not history — they are pruned on
 #: the shorter of the retention window and this many days.
@@ -413,6 +417,44 @@ class IncidentStore:
         for r in rows:
             r["blocked"] = bool(r["blocked"])
         return rows
+
+    def daily_token_totals(self, days: int = 14,
+                           now_iso: str | None = None) -> list[dict]:
+        """Tokens spent per calendar day over the last ``days`` (spec §11).
+
+        Both places HEIM spends tokens count: investigations by ``started_at``
+        and runs by ``run_at``, input + output. The window is zero-filled, so
+        the caller always gets exactly ``days`` entries oldest→newest and a
+        quiet Sunday is a visible gap rather than a missing bar.
+
+        Days are the stored timestamps' own calendar days (``substr(ts,1,10)``),
+        which is how they are written and read everywhere else in the store, and
+        ``now_iso`` makes the window a fact about the argument rather than about
+        this machine's clock.
+        """
+        days = max(int(days), 1)
+        try:
+            today = date.fromisoformat(str(now_iso or "")[:10])
+        except ValueError:
+            today = datetime.now(timezone.utc).date()
+        window = [today - timedelta(days=n) for n in range(days - 1, -1, -1)]
+        first, last = window[0].isoformat(), window[-1].isoformat()
+
+        totals: dict[str, int] = {d.isoformat(): 0 for d in window}
+        for table, column in (("investigations", "started_at"), ("runs", "run_at")):
+            cur = self._db.execute(
+                f"SELECT substr({column}, 1, 10) AS d, "
+                f"COALESCE(SUM(input_tokens + output_tokens), 0) AS n "
+                f"FROM {table} WHERE substr({column}, 1, 10) BETWEEN ? AND ? "
+                f"GROUP BY d",
+                (first, last),
+            )
+            for row in cur.fetchall():
+                key = str(row["d"] or "")
+                if key in totals:
+                    totals[key] += int(row["n"] or 0)
+        return [{"date": d.isoformat(), "weekday": _WEEKDAYS[d.weekday()],
+                 "tokens": totals[d.isoformat()]} for d in window]
 
     def usage_totals(self) -> dict:
         """Lifetime tokens and cost across investigations *and* runs (§5.6).
