@@ -4,8 +4,12 @@
     heim daily [--dry-run]             run the daily analysis pipeline once
     heim poll [--dry-run]              run one alert-poller cycle
     heim investigate --host H ...      run one investigation
+    heim investigate --fingerprint FP  ... rebuilt from the stored incident
     heim incidents [--all]             show the incident store
+    heim incidents mute FP [--days N]  suppress a false-positive fingerprint
+    heim incidents unmute FP           lift a suppression
     heim investigations [--show ID]    list / inspect tracked investigations
+    heim jobs [--limit N]              show the investigation job queue
     heim dashboard [--host] [--port]   serve the read-only web dashboard
     heim daemon                        run scheduler + poller + approvals
 
@@ -125,19 +129,54 @@ async def _cmd_poll(args) -> int:
     return 0
 
 
+def _request_from_incident(rt, incident: dict, role: str | None) -> "object":
+    """Build an InvestigationRequest out of a stored incident row (§5.5)."""
+    from heim.pipelines.investigate import InvestigationRequest
+
+    host = str(incident.get("host") or "")
+    host_cfg = rt.config.hosts.get(host)
+    return InvestigationRequest(
+        host=host,
+        host_role=role or (host_cfg.role if host_cfg else "guest"),
+        fingerprint=str(incident.get("fingerprint") or ""),
+        findings=[{
+            "severity": incident.get("severity", ""),
+            "host": host,
+            "metric": incident.get("metric", ""),
+            "trend": "",
+            "detail": incident.get("description", ""),
+            "recommendation": "",
+        }],
+    )
+
+
 async def _cmd_investigate(args) -> int:
     from heim.pipelines.investigate import InvestigationRequest, run_investigation
     from heim.runtime import build_runtime
 
+    if not args.host and not args.fingerprint:
+        print("error: one of --host or --fingerprint is required")
+        return 2
+
     rt = build_runtime(dry_run=args.dry_run)
-    host_cfg = rt.config.hosts.get(args.host)
-    role = args.role or (host_cfg.role if host_cfg else "guest")
-    findings = []
-    if args.finding:
-        findings = [{"severity": args.severity, "host": args.host, "metric": args.metric or "",
-                     "trend": "", "detail": args.finding, "recommendation": ""}]
-    req = InvestigationRequest(host=args.host, host_role=role,
-                               fingerprint=args.fingerprint or "", findings=findings)
+    if not args.host:
+        # --fingerprint alone: pull the subject out of the incident store
+        incident = rt.store.incident(args.fingerprint)
+        if incident is None:
+            print(f"no incident with fingerprint {args.fingerprint!r}")
+            return 1
+        req = _request_from_incident(rt, incident, args.role)
+        print(f"investigating {req.host} from incident {args.fingerprint} "
+              f"[{incident.get('severity')}] {incident.get('metric')}")
+    else:
+        host_cfg = rt.config.hosts.get(args.host)
+        role = args.role or (host_cfg.role if host_cfg else "guest")
+        findings = []
+        if args.finding:
+            findings = [{"severity": args.severity, "host": args.host, "metric": args.metric or "",
+                         "trend": "", "detail": args.finding, "recommendation": ""}]
+        req = InvestigationRequest(host=args.host, host_role=role,
+                                   fingerprint=args.fingerprint or "", findings=findings)
     result = await run_investigation(rt, req, require_approval=False if args.no_approval else None)
     if result is None:
         print("declined / timed out — nothing ran")
@@ -152,6 +191,10 @@ async def _cmd_incidents(args) -> int:
     from heim.runtime import build_runtime
 
     rt = build_runtime(dry_run=True)
+    action = getattr(args, "action", None)
+    if action in ("mute", "unmute"):
+        return _incidents_mute(rt, action, args)
+
     rows = rt.store.all_rows() if args.all else rt.store.open_rows()
     if not rows:
         print("no incidents" if args.all else "no open incidents")
@@ -160,6 +203,55 @@ async def _cmd_incidents(args) -> int:
         inv = "🔒" if r["investigated"] else "  "
         print(f"{inv} [{r['status']:8s}] {r['severity']:8s} {r['fingerprint']:55s} "
               f"seen×{r['timesSeen']} missed:{r['missedRuns']} last:{str(r['lastSeen'])[:16]}")
+    return 0
+
+
+def _incidents_mute(rt, action: str, args) -> int:
+    """``heim incidents mute|unmute <fingerprint>`` — the CLI half of §5.4.
+
+    Same suppression semantics as marking a finding a false positive, minus
+    the finding verdict (there is no finding here, just a fingerprint)."""
+    from heim.pipelines.suppression import suppress_fingerprint
+
+    fingerprint = args.fingerprint
+    if not fingerprint:
+        print(f"error: `heim incidents {action}` needs a fingerprint")
+        return 2
+    if action == "unmute":
+        if not rt.store.unsuppress(fingerprint):
+            print(f"{fingerprint} was not suppressed")
+            return 1
+        incident = rt.store.incident(fingerprint)
+        if incident and incident.get("status") == "suppressed":
+            rt.store.set_incident_status(fingerprint, "open")
+        print(f"unmuted {fingerprint}")
+        return 0
+
+    days = args.days if args.days is not None else rt.config.settings.suppression_days
+    res = suppress_fingerprint(rt.store, fingerprint, days=days,
+                               reason=args.reason or "", now=rt.now())
+    print(f"muted {fingerprint} until {res['until'] or 'forever'}"
+          + ("" if res["incident_updated"] else " (no incident row yet)"))
+    return 0
+
+
+async def _cmd_jobs(args) -> int:
+    from heim.runtime import build_runtime
+
+    rt = build_runtime(dry_run=True)
+    rows = rt.store.jobs(limit=args.limit, status=args.status)
+    if not rows:
+        print("no jobs queued or recorded")
+        return 0
+    for r in rows:
+        payload = r.get("payload") or {}
+        inv = f"inv:#{r['investigation_id']}" if r["investigation_id"] else ""
+        retry = f"retry-of:#{r['retry_of']}" if r["retry_of"] else ""
+        print(f"#{r['id']:<5d} [{r['status']:11s}] {r['kind']:11s} "
+              f"{str(payload.get('host') or '-'):16s} by:{(r['requested_by'] or '-'):9s} "
+              f"{inv:10s} {retry:14s} {str(r['created_at'])[:19]}"
+              + (f"  ⚠️ {r['error']}" if r["error"] else ""))
+    print(f"\n{rt.store.queued_count()} queued")
     return 0
 
 
@@ -235,7 +327,7 @@ async def _cmd_daemon(args) -> int:
     return 0
 
 
-def main() -> None:
+def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="heim", description="HEIM — Homelab Event & Incident Monitor")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -249,7 +341,7 @@ def main() -> None:
     pl.add_argument("--dry-run", action="store_true")
 
     inv = sub.add_parser("investigate", help="run one investigation")
-    inv.add_argument("--host", required=True)
+    inv.add_argument("--host", help="host to investigate (or use --fingerprint alone)")
     inv.add_argument("--role", choices=["guest", "hypervisor", "ha-guest"])
     inv.add_argument("--finding", help="free-text finding to investigate")
     inv.add_argument("--metric", default="")
@@ -258,8 +350,20 @@ def main() -> None:
     inv.add_argument("--no-approval", action="store_true")
     inv.add_argument("--dry-run", action="store_true")
 
-    ic = sub.add_parser("incidents", help="show the incident store")
+    ic = sub.add_parser("incidents", help="show the incident store / mute fingerprints")
+    # Optional positionals keep `heim incidents` and `heim incidents --all`
+    # working exactly as before while adding the mute/unmute verbs.
+    ic.add_argument("action", nargs="?", choices=["mute", "unmute"],
+                    help="mute / unmute a fingerprint (omit to list incidents)")
+    ic.add_argument("fingerprint", nargs="?", help="fingerprint for mute/unmute")
     ic.add_argument("--all", action="store_true", help="include resolved")
+    ic.add_argument("--days", type=int, default=None,
+                    help="mute window in days (0 = forever; default: settings.suppression_days)")
+    ic.add_argument("--reason", default="", help="why it is a false positive (shown to the analyst)")
+
+    jb = sub.add_parser("jobs", help="show the investigation job queue")
+    jb.add_argument("--limit", type=int, default=20)
+    jb.add_argument("--status", choices=["queued", "running", "done", "failed", "interrupted"])
 
     iv = sub.add_parser("investigations", help="list / inspect tracked investigations")
     iv.add_argument("--limit", type=int, default=20)
@@ -271,14 +375,17 @@ def main() -> None:
     db.add_argument("--port", type=int, default=8300)
 
     sub.add_parser("daemon", help="run scheduler + poller + approval listener")
+    return p
 
-    args = p.parse_args()
+
+def main() -> None:
+    args = _build_parser().parse_args()
     _setup_logging(args.verbose)
     handler = {
         "check": _cmd_check, "daily": _cmd_daily, "poll": _cmd_poll,
         "investigate": _cmd_investigate, "incidents": _cmd_incidents,
-        "investigations": _cmd_investigations, "dashboard": _cmd_dashboard,
-        "daemon": _cmd_daemon,
+        "investigations": _cmd_investigations, "jobs": _cmd_jobs,
+        "dashboard": _cmd_dashboard, "daemon": _cmd_daemon,
     }[args.cmd]
     try:
         sys.exit(asyncio.run(handler(args)))

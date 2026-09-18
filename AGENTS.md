@@ -27,7 +27,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (340 tests). Design
+covered by golden tests against the original JavaScript behavior (394 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -36,12 +36,12 @@ edges** (tools, channels, pipelines).
 | Area | Features |
 |---|---|
 | Detection | 49-query trend catalog · per-day averages, change %, warn/crit flags · Prometheus alert rules with `qid` labels (fast path) · anti-flap hysteresis (2 clear polls / 2 missed runs) |
-| Incidents | SQLite store · deterministic fingerprints (`host\|qid\|name`) · open/clearing/resolved lifecycle · warn→crit escalation · per-fingerprint dispatch lock · poller-vs-daily ownership split (`[alert]` prefix) |
+| Incidents | SQLite store · deterministic fingerprints (`host\|qid\|name`) · open/clearing/resolved lifecycle · warn→crit escalation · per-fingerprint dispatch lock · poller-vs-daily ownership split (`[alert]` prefix) · false-positive verdicts + timed/forever suppression (pipeline-level, analyst hint) |
 | Agent | Anthropic-native tool loop · soft prompt budget + hard in-loop step cap · retries · real token accounting · output salvage (`## Summary` contract, leaked-tool-call detection) |
 | Tools | Guarded read-only SSH · PromQL instant/range with token-compact encoding · metric discovery · GET-allowlisted HA and Proxmox APIs · per-call Telegram live feed + local `audit.jsonl` |
-| Human loop | Telegram inline-button approvals (long-poll, no inbound ports) · decline/timeout → re-proposed next run · outcome confirm (Resolved / Needs human) |
+| Human loop | Telegram inline-button approvals (long-poll, no inbound ports) raced against a store-written decision (dashboard/CLI, works with no Telegram at all) · decline/timeout → re-proposed next run · outcome confirm (Resolved / Needs human) |
 | Delivery | n8n-faithful HTML dashboard email · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
-| Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · Docker/compose deployment (outbound-only, plus the optional dashboard port) · `.env` interpolation for all deployment identity |
+| Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · crash-safe investigation job queue (`heim jobs`, restart sweep, re-trigger with `retry_of`) · Docker/compose deployment (outbound-only, plus the optional dashboard port) · `.env` interpolation for all deployment identity |
 | Dashboard | Read-only web UI (`heim dashboard`, FastAPI + Jinja + vendored htmx): overview KPIs, investigations list/filters, the agent-transcript detail page with burn line, incidents, findings history, host cards · optional HTTP basic auth · one SQLite reader (WAL), never a writer |
 
 ---
@@ -50,7 +50,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 340 tests, must stay green
+.venv/bin/pytest -q                    # 394 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -135,14 +135,15 @@ Honest assessment of where the current design's limits are:
   real cost ceiling is LLM tokens, not compute.
 
 **Known limits (accepted for a homelab, fixable if outgrown)**
-- **Single process, single node.** Scheduler, poller, approvals, and investigations all
-  live in one daemon. A crash mid-investigation loses that session (the incident's
-  dispatch lock re-proposes it after the next decline/timeout cycle). Fix path:
-  persist investigation state (roadmap §5.2) and/or split poller and investigator into
-  separate processes sharing the SQLite (WAL).
+- **Single process, single executor.** Scheduler, poller, approvals, the queue worker
+  and investigations all live in one daemon. A crash mid-investigation still loses that
+  *session* — on restart `sweep_interrupted()` marks it failed and the job
+  `interrupted` (it is not auto-resumed); the incident's dispatch lock re-proposes it
+  after the next decline/timeout cycle. Other processes (dashboard, CLI) may now
+  *enqueue* work into the `jobs` table (§5.2), but the daemon stays the only executor.
 - **Investigation concurrency** is capped (`max_concurrent_investigations`, default 2 —
   a global semaphore around the agent+delivery phase; approval waits don't hold a slot).
-  A crash-safe job queue remains roadmap §5.2.
+  The queue worker runs one job at a time on top of that cap.
 - **One Telegram bot = one getUpdates consumer.** Two daemons on the same token
   conflict. Multi-instance setups need per-instance bots or a webhook receiver.
 - **Self-monitoring blind spot** (inherited): HEIM can't alert on the box *it runs on*
@@ -189,13 +190,23 @@ records every step (tool, args, preview, size, blocked flag, per-call duration) 
 needs_human), token totals and the report. `audit.jsonl` stays as the tamper-evident
 low-level trail. CLI: `heim investigations [--limit N] [--show ID]`.
 
-### 5.2 Job queue for investigations
+### 5.2 Job queue for investigations — ✅ implemented
 
 Make dispatch go through a small `jobs` table instead of bare `asyncio.create_task`:
 requested → approved → running → done, with a concurrency semaphore and crash recovery
 (on daemon start, re-queue `running` jobs as `interrupted`). This gives: restart-safe
 investigations, a re-trigger primitive, and a write path the dashboard can use without
 being a second SQLite writer (the daemon polls the queue; the dashboard only inserts).
+
+Shipped: `jobs(kind, payload_json, status, requested_by, retry_of, investigation_id,
+error, created_at/started_at/finished_at)` in `incidents/store.py`, claimed atomically
+(`BEGIN IMMEDIATE` + `busy_timeout=5000`, so a second writer never double-claims);
+`daemon._queue_worker` drains it every 4 s through the normal `run_investigation` path
+(cap, approval, tracking and delivery unchanged) and `store.sweep_interrupted()` runs on
+daemon start. Enqueue helpers live in `pipelines/queue.py`
+(`enqueue_investigation` / `enqueue_retry` / `request_from_payload`); CLI: `heim jobs`.
+Scheduled daily/poller dispatch still goes straight to `asyncio.create_task` —
+the queue is the path for *requested* work.
 
 ### 5.3 The HEIM dashboard (self-contained web UI) — ✅ read-only v1 shipped
 
@@ -238,7 +249,7 @@ deliberately deferred to the jobs queue in §5.2, §5.4 and §5.5; the pages res
 spots (outcome line, verdict column). Also deferred: the Recommendations page, "load 50
 more" pagination (lists cap at 200 rows), and the live Telegram-feed stream.
 
-### 5.4 False-positive handling
+### 5.4 False-positive handling — ✅ implemented
 
 - `verdict=false_positive` on a finding sets `status=suppressed` on its incident
   (new status) with `muted_until` (or forever). Reconcile and poller skip re-opening
@@ -249,13 +260,30 @@ more" pagination (lists cap at 200 rows), and the live Telegram-feed stream.
   the token budget).
 - CLI parity: `heim incidents mute <fingerprint> [--days N]` / `unmute`.
 
-### 5.5 Re-trigger & manual trigger
+Shipped: a `suppressions(fingerprint, until, reason, created_at)` table plus
+`pipelines/suppression.py`, whose **pure** filters (`filter_reconcile`,
+`filter_decision`, `filter_incident_events`) are applied *in the pipelines* — the golden
+`reconcile.py` / `poller_logic.py` stay byte-identical. A muted fingerprint is never
+upserted (so a stored `suppressed` row is neither resurrected nor mutated), dispatched,
+notified or emitted as an incident event; the bounded hint is appended to the analyst's
+**user** message, not the cached system prompt. `mark_false_positive(store, finding_id,
+days)` does verdict + mute + `status=suppressed` in one call; default window
+`settings.suppression_days` (90, 0 = forever). Not done: the "2 suppressed" muted line
+in the daily email (it would mean editing the golden `reports/daily_dashboard.py`).
+
+### 5.5 Re-trigger & manual trigger — ✅ implemented
 
 `heim investigate --fingerprint <fp>` (pull host/findings from the store instead of
 flags) + the dashboard button, both enqueueing via §5.2. Re-triggered runs link to their
 predecessor (`investigations.retry_of`) so the detail view can diff "what changed since
 last time" — and optionally prepend the prior report's root cause to the brief as
 context ("verify whether this earlier conclusion still holds").
+
+Shipped: `heim investigate --fingerprint` runs directly (no queue) off the incident row;
+`queue.enqueue_retry(store, investigation_id, requested_by)` re-queues a past
+investigation with the same host/role/fingerprint, findings re-synthesized from the
+incident row, and threads `retry_of` through `InvestigationRequest` into the new
+`investigations` row. Not done: prepending the prior root cause to the brief.
 
 ### 5.6 Deeper agent observability
 
@@ -273,8 +301,12 @@ context ("verify whether this earlier conclusion still holds").
 - **Dead-man's switch**: ping healthchecks.io (or HA) after each poll; closes the
   "who watches the watcher" gap for real.
 - **Investigation concurrency cap** — ✅ implemented (`max_concurrent_investigations`).
-- **Web approvals**: approve/decline in the dashboard as an alternative to Telegram
-  (same jobs table; Telegram remains for push).
+- **Web approvals** — ✅ backend implemented: the approval wait races the Telegram
+  button against a 5 s poll of `investigations.approval_decision`, which any other
+  process may write; the loser is cancelled. With no Telegram configured the store poll
+  *is* the gate (a dashboard-only deployment keeps its human in the loop instead of
+  silently skipping approval); `--dry-run` still auto-approves. The dashboard's
+  approve/decline buttons are the remaining UI half.
 - **Retention**: prune resolved incidents/findings/investigation steps after N days;
   vacuum job.
 - **Multi-model agent loop**: an OpenAI-compatible tool-calling backend in
@@ -294,7 +326,7 @@ rollback design; multi-tenant SaaS-ification; replacing Grafana for time-series 
 ## 6. Notes for AI agents working here
 
 - Read `docs/ARCHITECTURE.md` first; it maps every module to its n8n source node.
-- Run `.venv/bin/pytest -q` before and after your change; 287 must not regress.
+- Run `.venv/bin/pytest -q` before and after your change; 394 must not regress.
 - Ported modules (docstring names an n8n node) are behavior-frozen — see §2.
 - Never log, commit, or email secrets; deployment identity comes from `.env` via
   `${VAR}` interpolation and must stay out of the tree.

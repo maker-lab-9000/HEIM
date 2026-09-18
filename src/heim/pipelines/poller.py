@@ -16,6 +16,7 @@ import httpx
 from heim.incidents.poller_logic import diff_and_decide
 from heim.incidents.state import compute_state
 from heim.pipelines.investigate import dispatch_all
+from heim.pipelines.suppression import filter_decision
 from heim.runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,15 @@ async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     if dec.aborted:
         log.warning("poll aborted: %s (no writes, no resolves)", dec.aborted)
         return {"aborted": dec.aborted}
+
+    # Muted fingerprints (§5.4) are dropped from everything the poller would
+    # do with them — the golden diff logic above stays untouched.
+    try:
+        dec, dropped = filter_decision(dec, rt.store.active_suppressions(run_at))
+        if dropped:
+            log.info("suppression: poller dropped %s", dropped)
+    except Exception:
+        log.exception("applying suppressions failed — running unfiltered")
 
     if dec.rows_to_upsert:
         rt.store.upsert(dec.rows_to_upsert)

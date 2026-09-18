@@ -80,6 +80,9 @@ class Settings(BaseModel):
     # approval wait does NOT occupy a slot). Guards the token budget against a
     # pathological run dispatching many agents simultaneously.
     max_concurrent_investigations: int = 2
+    # Default mute window applied when a finding is marked a false positive
+    # (roadmap §5.4) — 0 means forever. Overridable per call (`--days`).
+    suppression_days: int = 90
     # instance-label address prefix -> host name (used by the alert poller to
     # attribute a firing alert's `instance` label to a configured host)
     instance_host_map: dict[str, str] = {}
