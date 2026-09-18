@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close out the HEIM dashboard's deferred items: list pagination, the Recommendations page, light mode, per-investigation model choice, the token-usage-by-weekday chart, and the needs-attention card.
+**Goal:** Close out the HEIM dashboard's deferred items: list pagination, the Recommendations page, light mode, per-investigation model choice, the token-usage-by-weekday chart, the needs-attention card, and the cost monitor.
 
 **Architecture:** All four are dashboard-layer changes on the existing FastAPI + Jinja + htmx app (`src/heim/dashboard/`), plus one new SQLite action table for recommendation states. No pipeline/daemon changes. Pure logic gets unit tests; routes get TestClient tests.
 
@@ -587,4 +587,80 @@ Store: two small queries (WHERE status IN (...) ORDER BY started_at DESC LIMIT ?
 ```bash
 .venv/bin/pytest tests/test_needs_attention.py -q && .venv/bin/pytest -q
 git add -A && git commit -m "overview: needs-attention card (incomplete/failed/needs-human triage)"
+```
+
+---
+
+### Task 8: Cost monitor page
+
+**Files:**
+- Modify: `src/heim/incidents/store.py` (aggregation query), `src/heim/dashboard/app.py` (route + nav), `src/heim/dashboard/static/heim.css`
+- Create: `src/heim/dashboard/templates/costs.html`
+- Test: `tests/test_costs_page.py` (new)
+
+**Interfaces:**
+- Consumes: `investigations` (model, input_tokens, output_tokens, cost, started_at), `runs` (model_used, input_tokens, output_tokens, cost, run_at), `heim.costing.cost_of`, `settings.model_prices`, `settings.currency`, `fmt.money`, and the §11 token-chart SVG helper (REUSE it — extract to a shared helper if it is currently inline in the token-chart code).
+- Produces: `store.cost_by_model(since_iso: str | None) -> list[dict]` — one entry per (model, role) with `{"model", "role", "calls", "tokens_in", "tokens_out", "cost"}`, where role is "investigator" for investigation rows and "analyst" for run rows; `store.cost_by_day(days: int, now_iso: str | None) -> list[dict]` — `{"date", "weekday", "cost"}` zero-filled like §11.
+
+**Spec:** `docs/design/dashboard-ui.md` §13 (and §11 for the chart conventions).
+
+NOTE: `config/settings.example.yaml` now carries REAL prices (Anthropic public rates, verified 2026-06-24) for the fable/opus/sonnet/haiku families plus a zero-cost OpenRouter free-tier example. Do not invent or change prices; read them from settings.
+
+- [ ] **Step 1: Failing store tests**
+
+```python
+# tests/test_costs_page.py
+def test_cost_by_model_groups_and_sums(tmp_path):
+    from heim.incidents.store import IncidentStore
+    s = IncidentStore(tmp_path / "c.sqlite3")
+    s.create_investigation(fingerprint="a", host="h", trigger="daily", status="complete",
+                           model="claude-sonnet-4-6", started_at="2026-09-18T10:00:00",
+                           input_tokens=100000, output_tokens=4000, cost=0.36)
+    s.create_investigation(fingerprint="b", host="h", trigger="daily", status="complete",
+                           model="claude-sonnet-4-6", started_at="2026-09-18T11:00:00",
+                           input_tokens=50000, output_tokens=2000, cost=0.18)
+    s.insert_run(kind="daily", run_at="2026-09-18T22:00:00", overall="healthy",
+                 model_used="claude-opus-4-6", duration_s=1.0, counts_json="{}",
+                 input_tokens=20000, output_tokens=1500, cost=0.14)
+    rows = s.cost_by_model(since_iso=None)
+    inv = next(r for r in rows if r["model"] == "claude-sonnet-4-6")
+    assert inv["calls"] == 2 and inv["tokens_in"] == 150000 and round(inv["cost"], 2) == 0.54
+    assert inv["role"] == "investigator"
+    run = next(r for r in rows if r["model"] == "claude-opus-4-6")
+    assert run["role"] == "analyst" and run["calls"] == 1
+    # window filter
+    assert s.cost_by_model(since_iso="2026-09-19T00:00:00") == []
+    s.close()
+```
+
+- [ ] **Step 2: Run to verify failure** → FAIL
+
+- [ ] **Step 3: Implement the store aggregations** (two grouped queries + merge; empty model string grouped as "unknown"), run Step 1 → PASS, commit.
+
+- [ ] **Step 4: Failing page tests**
+
+```python
+def test_costs_page_renders_models_and_total(seeded_client):
+    html = seeded_client.get("/costs").text
+    assert "claude-sonnet-4-6" in html and "investigator" in html
+    assert "$0.54" in html and "$0.68" in html          # model row and window total
+    assert 'class="sharebar"' in html or "share" in html
+    assert 'href="/costs?window=7d"' in html            # window switcher
+
+def test_costs_page_flags_unpriced_models(unpriced_client):
+    html = unpriced_client.get("/costs").text
+    assert "no price" in html and "add it to model_prices" in html
+    assert "$0.00" not in html                          # unpriced renders —, never zero
+
+def test_nav_has_costs(seeded_client):
+    assert 'href="/costs"' in seeded_client.get("/").text
+```
+
+- [ ] **Step 5: Run to verify failure**, **Step 6: Implement route + template** per spec §13 (window param 7d/30d/all → since_iso; header totals; by-model table with share bars; by-day cost chart reusing the §11 SVG helper; unpriced warning line; nav entry after Metrics).
+
+- [ ] **Step 7: Run tests, full suite, commit**
+
+```bash
+.venv/bin/pytest tests/test_costs_page.py -q && .venv/bin/pytest -q
+git add -A && git commit -m "dashboard: cost monitor page — spend by model and by day"
 ```

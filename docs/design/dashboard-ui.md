@@ -385,6 +385,26 @@ outcome for needs_human) · rel time · a `RE-RUN` action (the existing retrigge
 More than 6 → a quiet `all (N)` link to /investigations?status=… . Empty state stays
 visible as good news: "Nothing needs attention." in --ink-3 with the ok dot.
 
+## 13. Cost monitor (`/costs`)
+
+Where the money goes, by model. Nav after Metrics. Windows: `7d | 30d | all`
+(query param, default 30d; a quiet segmented control of three GET links).
+
+- **Header:** total spend for the window in mono (`$4.82`), calls, tokens in → out,
+  and "prices from settings — models without a price render —".
+- **By model** — the main table, one row per model actually used in the window:
+  model (mono) · role chip (investigator / analyst — derived from which table the rows
+  came from) · calls · tokens in · tokens out · cost · a share bar (that model's cost as
+  a fraction of the window total; single-hue ember magnitude encoding, identity carried
+  by the model name). Sorted by cost desc, unpriced models last with a `—` cost and a
+  `no price` chip.
+- **By day** — the existing 14-day bar chart pattern (spec §11), but bars are cost; the
+  two charts share their SVG helper.
+- **Unpriced warning:** when any model in the window lacks a price entry, one muted line:
+  `N call(s) on <model> have no price — add it to model_prices in settings.yaml.`
+- Costs never invent numbers: a missing price means `—`, not 0 (a $0 row is only shown
+  when the configured price IS 0, e.g. a free OpenRouter tier).
+
 ## 13. Still out of scope
 
 Nothing — as of this revision every previously deferred dashboard item is specced
