@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% import "partials/_macros.html" as m %}
+{% import "partials/_macros.html" as m with context %}
 {% block content %}
 
 {%- if cards %}
@@ -18,6 +18,9 @@
       <a class="mono" href="/investigations/{{ c.investigation.id }}">#{{ c.investigation.id }}</a>
       {{ m.pill(c.investigation.status) }} <span class="ink3 mono">{{ c.investigation.started_at|rel }}</span>
       {%- else %}<span class="eyebrow">last investigation</span> <span class="ink3">none yet</span>{% endif %}</p>
+    {%- with host = c.name %}
+    {% include "partials/_host_acts.html" %}
+    {%- endwith %}
   </article>
   {%- endfor %}
 </section>

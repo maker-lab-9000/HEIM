@@ -22,6 +22,11 @@ from heim.llm import analyst_complete, parse_analysis
 from heim.metrics.aggregate import aggregate
 from heim.metrics.queries import build_window, load_queries
 from heim.pipelines.investigate import dispatch_all
+from heim.pipelines.suppression import (
+    filter_incident_events,
+    filter_reconcile,
+    suppression_prompt_block,
+)
 from heim.reports.render import daily_email
 from heim.runtime import Runtime
 
@@ -95,6 +100,16 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     log.info("aggregated: overall=%s crit=%s warn=%s na=%s", payload["overall"],
              payload["counts"]["crit"], payload["counts"]["warn"], payload["counts"]["naQueries"])
 
+    # 1b. suppressions (§5.4) — read once and used for both the analyst hint
+    # and the post-reconcile filtering below.
+    suppressed: set[str] = set()
+    sup_rows: list[dict] = []
+    try:
+        suppressed = rt.store.active_suppressions(run_at)
+        sup_rows = [r for r in rt.store.suppressed() if r["fingerprint"] in suppressed]
+    except Exception:
+        log.exception("reading suppressions failed — running unfiltered")
+
     # 2. LLM analysis
     if cfg.analyst is None:
         raise RuntimeError("no analyst agent configured (config/agents/daily_analyst.yaml)")
@@ -105,6 +120,11 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
         "values). Respond with the strict JSON object defined in the system prompt and nothing else.\n\n"
         + json.dumps(payload, ensure_ascii=False)
     )
+    # The suppression hint rides on the *user* message: the system prompt is a
+    # committed, cacheable template and must not grow per-deployment state.
+    block = suppression_prompt_block(sup_rows)
+    if block:
+        user += "\n\n" + block
     text, model_used = await analyst_complete(cfg.analyst, system, user)
     analysis = parse_analysis(text)
     if analysis is None:
@@ -116,6 +136,11 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     open_rows = rt.store.open_rows()
     payload_rows = _flatten_rows(payload)
     rec = reconcile(analysis, payload_rows, open_rows, run_at, cfg.routing())
+    # Suppressed fingerprints never reach the store or the investigator — the
+    # golden reconcile stays untouched, the policy lives here (§5.4).
+    rec, dropped = filter_reconcile(rec, suppressed)
+    if dropped:
+        log.info("suppression: dropped %s (%d muted fingerprint(s))", dropped, len(suppressed))
     rt.store.upsert(rec.rows_to_write)
     counts = (rec.summary or {}).get("counts") or {}
     log.info("reconcile: %s", counts)
@@ -154,7 +179,9 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     })
 
     # 6. Loki emits (findings, categories, incidents, run state)
-    events = finding_and_category_events(analysis, payload) + incident_events(rec.summary or {})
+    events = finding_and_category_events(analysis, payload) + filter_incident_events(
+        incident_events(rec.summary or {}), suppressed
+    )
     events.append(compute_state(rt.store.open_rows(), routing=cfg.routing(), trigger="run",
                                 last_run_ms=int(time.time() * 1000)))
     await rt.emit_loki(events)

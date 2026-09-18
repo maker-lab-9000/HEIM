@@ -1,0 +1,11 @@
+{% import "partials/_macros.html" as m with context %}
+<div class="acts">
+  {%- if inv.status == 'pending_approval' %}
+  {{ m.act('/actions/approval', 'APPROVE', {'investigation_id': inv.id, 'decision': 'approve'},
+           cls='ember') }}
+  {{ m.act('/actions/approval', 'DECLINE', {'investigation_id': inv.id, 'decision': 'decline'}) }}
+  {%- endif %}
+  {{ m.act('/actions/retrigger', 'RE-RUN', {'investigation_id': inv.id},
+           confirm='Re-run investigation #' ~ inv.id ~ ' with fresh evidence?') }}
+  {% include "partials/_flash.html" %}
+</div>

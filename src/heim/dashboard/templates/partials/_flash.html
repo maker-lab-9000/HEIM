@@ -1,0 +1,5 @@
+{#- the inline feedback line an action panel re-renders with (spec §5):
+    mono, --ink-2, no toast, no JS state. -#}
+{%- if flash %}
+<p class="flash mono{{ ' err' if flash.err }}" role="status">{{ flash.text }}</p>
+{%- endif %}

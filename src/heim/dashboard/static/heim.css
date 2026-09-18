@@ -45,7 +45,9 @@ a:hover { text-decoration: underline; }
   color: var(--ink); font: 1.0625rem/1 var(--mono); letter-spacing: .12em;
 }
 .mark:hover { text-decoration: none; }
-.spark { color: var(--ember); width: 17px; height: 22px; flex: none; }
+.spark { color: var(--ember); width: 17px; height: 22px; flex: none; display: none; }
+.lockup { color: var(--ember); width: 128px; height: auto; flex: none; }
+.visually-hidden { position: absolute; left: -9999px; }
 .nav { list-style: none; margin: 0; padding: 0; flex: 1; }
 .nav a {
   display: flex; gap: 10px; align-items: center; padding: 7px 16px;
@@ -160,8 +162,11 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
   display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 6px 16px; margin: 10px 0 0;
 }
+/* the grid places whole pairs: label and value can never split across columns */
+.imeta .kv { min-width: 0; }
 .imeta dt { margin: 0; }
-.imeta dd { margin: 0 0 4px; font-size: 0.8125rem; word-break: break-all; }
+.imeta dd { margin: 0 0 4px; font-size: 0.8125rem; overflow-wrap: anywhere; }
+.brief { margin-top: 8px; }
 .ihost { margin: 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
 .burn {
@@ -218,7 +223,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .host .hline { margin: 6px 0 0; font-size: 0.8125rem; color: var(--ink-2); display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
 
 .prose { color: var(--ink-2); font-size: 0.875rem; margin: 6px 0; }
-.prose h2, .prose h3 { color: var(--ink); font: 1.0625rem/1.3 var(--sans); margin: 16px 0 6px; }
+.prose h1, .prose h2, .prose h3 { color: var(--ink); font: 1.0625rem/1.3 var(--sans); margin: 16px 0 6px; }
 .prose h2:first-child { margin-top: 4px; }
 .prose code, .prose pre { background: var(--raised); border-radius: 4px; font-family: var(--mono); font-size: 0.8125rem; }
 .prose code { padding: 1px 4px; }
@@ -254,12 +259,33 @@ details > summary:hover { color: var(--ink); }
 .filters button:hover { border-color: var(--ember-dim); }
 .filters .clear { font: 0.8125rem/2.2 var(--mono); }
 
+/* actions (spec §5) — one quiet button style everywhere */
+
+.acts { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-top: 8px; }
+.vacts { margin-top: 4px; }
+form.act { display: inline-block; margin: 0; }
+.btn {
+  background: none; border: 1px solid var(--line); border-radius: 4px;
+  padding: 2px 8px; color: var(--ink-2); cursor: pointer;
+  font: 0.6875rem/1.6 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+}
+.btn:hover { border-color: var(--ember); color: var(--ember); }
+.btn.ember { border-color: var(--ember-dim); color: var(--ember); }
+.btn[disabled] { color: var(--ink-3); cursor: not-allowed; }
+.btn[disabled]:hover { border-color: var(--line); color: var(--ink-3); }
+.flash { flex-basis: 100%; margin: 2px 0 0; font-size: 0.6875rem; color: var(--ink-2); }
+.flash.err { color: var(--serious); }
+.ghost td { color: var(--ink-3); }
+.ghost:hover { background: none; }
+
 /* responsive */
 
 @media (max-width: 900px) {
   .rail { width: 56px; }
   .mark { justify-content: center; padding: 4px 0 16px; }
   .mark .word, .nav .lbl, .daemon .lbl { position: absolute; left: -9999px; }
+  .lockup { display: none; }
+  .spark { display: block; }
   .nav a { justify-content: center; padding: 10px 0; }
   .daemon { justify-content: center; padding: 12px 0 0; }
   .topbar, main { margin-left: 56px; }

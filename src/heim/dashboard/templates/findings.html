@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% import "partials/_macros.html" as m %}
+{% import "partials/_macros.html" as m with context %}
 {% block content %}
 
 {%- if groups %}
@@ -12,8 +12,9 @@
     {%- for f in g.findings %}
     <li>
       <p class="fhead">{{ m.sev(f.severity) }} <span class="mono ink2">{{ f.host }}{% if f.metric %} · {{ f.metric }}{% endif %}</span>
-        <span class="fsum">{{ f.summary }}</span>
-        {%- if f.verdict %} <span class="verdict">{{ f.verdict|replace('_', ' ') }}</span>{% endif %}</p>
+        <span class="fsum">{{ f.summary }}</span></p>
+      {#- outside the <p>: an action is a real form, which no paragraph may hold -#}
+      {% include "partials/_verdict.html" %}
       {%- if f.detail or f.recommendation %}
       <details>
         <summary>detail &amp; recommendation</summary>

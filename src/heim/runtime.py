@@ -103,8 +103,10 @@ class Runtime:
         return None
 
     async def push_ha(self, entity_suffix: str, state: str, attributes: dict) -> None:
+        # State writes via the HA REST API require an ADMIN user; the agent tool's
+        # HA_TOKEN is deliberately non-admin, so pushes prefer HA_PUSH_TOKEN.
         ha = self.config.settings.home_assistant
-        token = env("HA_TOKEN")
+        token = env("HA_PUSH_TOKEN") or env("HA_TOKEN")
         if self.dry_run or ha is None or not token:
             log.info("HA push suppressed (sensor.pam_%s)", entity_suffix)
             return

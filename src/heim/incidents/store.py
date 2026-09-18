@@ -11,10 +11,19 @@ analyst's per-host findings, which previously survived only in the email),
 the agent's full tool timeline). WAL is enabled so a second *reader* (CLI,
 dashboard) can query while the daemon writes; the daemon stays the sole writer
 of these tables.
+
+Roadmap §5.2/§5.4/§5.5 add two *action* tables — ``jobs`` (the crash-safe
+investigation queue the dashboard and the CLI insert into and the daemon
+drains) and ``suppressions`` (muted fingerprints) — plus the
+``investigations.approval_decision`` column used for approvals that arrive
+from outside Telegram. These are the one place where a second process writes,
+so the connection also sets ``busy_timeout``.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 _SCHEMA = """
@@ -92,9 +101,45 @@ CREATE TABLE IF NOT EXISTS investigation_steps (
     duration_ms      INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS jobs (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind             TEXT NOT NULL DEFAULT 'investigate',
+    payload_json     TEXT NOT NULL DEFAULT '{}',
+    status           TEXT NOT NULL DEFAULT 'queued',  -- queued|running|done|failed|interrupted
+    requested_by     TEXT NOT NULL DEFAULT '',        -- 'dashboard' | 'cli'
+    retry_of         INTEGER NOT NULL DEFAULT 0,      -- investigation re-run, 0 = none
+    investigation_id INTEGER NOT NULL DEFAULT 0,      -- filled when executed
+    error            TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL DEFAULT '',
+    started_at       TEXT NOT NULL DEFAULT '',
+    finished_at      TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS suppressions (
+    fingerprint TEXT PRIMARY KEY,
+    until       TEXT NOT NULL DEFAULT '',   -- '' = forever
+    reason      TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_steps_investigation ON investigation_steps (investigation_id, seq);
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings (run_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status, id);
 """
+
+#: Columns added to tables that already exist in deployed databases. Applied
+#: idempotently on every connect (PRAGMA table_info → ALTER TABLE ADD COLUMN),
+#: which keeps adding a column a one-line change here. SQLite's ADD COLUMN
+#: needs a constant default, which every entry below has.
+_ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "investigations": [
+        ("retry_of", "INTEGER NOT NULL DEFAULT 0"),
+        ("approval_decision", "TEXT NOT NULL DEFAULT ''"),
+        # the findings that triggered the run, as the pipeline received them —
+        # the provenance the dashboard's "triggered by" card reads
+        ("findings_json", "TEXT NOT NULL DEFAULT ''"),
+    ],
+}
 
 _COLS = [
     "fingerprint", "host", "metric", "severity", "status", "firstSeen",
@@ -106,7 +151,8 @@ _COLS = [
 _INVESTIGATION_COLS = [
     "fingerprint", "host", "host_role", "agent_name", "model", "trigger", "status",
     "started_at", "finished_at", "input_tokens", "output_tokens", "n_steps",
-    "brief_md", "report_md", "incomplete_reason", "outcome",
+    "brief_md", "report_md", "incomplete_reason", "outcome", "retry_of",
+    "approval_decision", "findings_json",
 ]
 
 _RUN_COLS = ["run_at", "kind", "overall", "model_used", "duration_s", "counts_json"]
@@ -123,10 +169,22 @@ class IncidentStore:
         self._db.row_factory = sqlite3.Row
         try:
             self._db.execute("PRAGMA journal_mode=WAL")
+            # The dashboard/CLI now *write* (jobs, verdicts, suppressions), so a
+            # writer can meet a locked db: wait instead of failing immediately.
+            self._db.execute("PRAGMA busy_timeout=5000")
         except sqlite3.Error:  # e.g. an in-memory or read-only FS db — not fatal
             pass
         self._db.executescript(_SCHEMA)
+        self._migrate()
         self._db.commit()
+
+    def _migrate(self) -> None:
+        """Add any column in ``_ADDED_COLUMNS`` missing from a deployed db."""
+        for table, columns in _ADDED_COLUMNS.items():
+            have = {r["name"] for r in self._db.execute(f"PRAGMA table_info({table})")}
+            for name, decl in columns:
+                if name not in have:
+                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
     @staticmethod
     def _to_dict(row: sqlite3.Row) -> dict:
@@ -157,6 +215,22 @@ class IncidentStore:
                 values,
             )
         self._db.commit()
+
+    def incident(self, fingerprint: str) -> dict | None:
+        row = self._db.execute(
+            "SELECT * FROM incidents WHERE fingerprint = ?", (fingerprint,)
+        ).fetchone()
+        return self._to_dict(row) if row is not None else None
+
+    def set_incident_status(self, fingerprint: str, status: str) -> bool:
+        """Direct status write (used by the suppression path, which must not go
+        through reconcile). Returns True when a row was touched."""
+        cur = self._db.execute(
+            "UPDATE incidents SET status = ?, updatedAt = datetime('now') WHERE fingerprint = ?",
+            (str(status), fingerprint),
+        )
+        self._db.commit()
+        return cur.rowcount > 0
 
     def set_investigated(self, fingerprint: str, value: bool) -> None:
         self._db.execute(
@@ -308,7 +382,197 @@ class IncidentStore:
         cur = self._db.execute("SELECT * FROM findings ORDER BY id DESC LIMIT ?", (limit,))
         return [dict(r) for r in cur.fetchall()]
 
+    def finding(self, finding_id: int) -> dict | None:
+        row = self._db.execute("SELECT * FROM findings WHERE id = ?", (finding_id,)).fetchone()
+        return dict(row) if row is not None else None
+
+    def set_finding_verdict(self, finding_id: int, verdict: str) -> dict | None:
+        """Set a finding's verdict (confirmed | false_positive | NULL-ish).
+        Returns the updated row, or None when there is no such finding."""
+        cur = self._db.execute(
+            "UPDATE findings SET verdict = ? WHERE id = ?",
+            (str(verdict) if verdict else None, int(finding_id)),
+        )
+        self._db.commit()
+        if cur.rowcount == 0:
+            return None
+        return self.finding(finding_id)
+
+    # ---------------------------------------------------------- jobs (§5.2)
+
+    def enqueue_job(
+        self,
+        kind: str = "investigate",
+        payload: dict | None = None,
+        requested_by: str = "",
+        retry_of: int = 0,
+        created_at: str = "",
+    ) -> int:
+        cur = self._db.execute(
+            """INSERT INTO jobs (kind, payload_json, status, requested_by, retry_of, created_at)
+               VALUES (?, ?, 'queued', ?, ?, ?)""",
+            (str(kind), json.dumps(payload or {}, ensure_ascii=False, default=str),
+             str(requested_by), int(retry_of or 0), created_at or self._now()),
+        )
+        self._db.commit()
+        return int(cur.lastrowid or 0)
+
+    def claim_next_job(self, now: str = "") -> dict | None:
+        """Atomically take the oldest queued job (queued → running).
+
+        ``BEGIN IMMEDIATE`` grabs SQLite's write lock before the SELECT, so two
+        claimers — even in different processes — can never read the same row as
+        queued; the loser waits out ``busy_timeout`` and then sees the row as
+        running. Returns the claimed row (with ``payload`` parsed) or None.
+        """
+        if self._db.in_transaction:
+            self._db.commit()
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._db.execute(
+                "SELECT * FROM jobs WHERE status = 'queued' ORDER BY id LIMIT 1"
+            ).fetchone()
+            if row is None:
+                self._db.execute("ROLLBACK")
+                return None
+            job_id = int(row["id"])
+            started = now or self._now()
+            self._db.execute(
+                "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?",
+                (started, job_id),
+            )
+            self._db.execute("COMMIT")
+        except BaseException:
+            try:
+                self._db.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+        out = self._job_dict(row)
+        out["status"] = "running"
+        out["started_at"] = started
+        return out
+
+    def finish_job(
+        self,
+        job_id: int,
+        status: str,
+        investigation_id: int = 0,
+        error: str = "",
+        now: str = "",
+    ) -> None:
+        self._db.execute(
+            """UPDATE jobs SET status = ?, investigation_id = ?, error = ?, finished_at = ?
+               WHERE id = ?""",
+            (str(status), int(investigation_id or 0), str(error or ""),
+             now or self._now(), int(job_id)),
+        )
+        self._db.commit()
+
+    def job(self, job_id: int) -> dict | None:
+        row = self._db.execute("SELECT * FROM jobs WHERE id = ?", (int(job_id),)).fetchone()
+        return self._job_dict(row) if row is not None else None
+
+    def jobs(self, limit: int = 50, status: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM jobs"
+        params: list = []
+        if status:
+            sql += " WHERE status = ?"
+            params.append(status)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        return [self._job_dict(r) for r in self._db.execute(sql, params).fetchall()]
+
+    def queued_count(self) -> int:
+        row = self._db.execute("SELECT COUNT(*) AS n FROM jobs WHERE status = 'queued'").fetchone()
+        return int(row["n"]) if row else 0
+
+    def sweep_interrupted(self, now: str = "") -> int:
+        """Crash recovery: nothing can still be running right after a restart.
+
+        Marks ``running`` jobs as ``interrupted`` and the investigations that
+        were mid-flight (running / pending_approval) as failed. Returns the
+        number of rows touched across both tables.
+        """
+        stamp = now or self._now()
+        touched = self._db.execute(
+            "UPDATE jobs SET status = 'interrupted', finished_at = ?, "
+            "error = 'interrupted by daemon restart' WHERE status = 'running'",
+            (stamp,),
+        ).rowcount
+        touched += self._db.execute(
+            "UPDATE investigations SET status = 'failed', finished_at = ?, "
+            "incomplete_reason = 'interrupted by daemon restart' "
+            "WHERE status IN ('running', 'pending_approval')",
+            (stamp,),
+        ).rowcount
+        self._db.commit()
+        return int(touched)
+
+    # -------------------------------------------------- suppressions (§5.4)
+
+    def suppress(self, fingerprint: str, until: str = "", reason: str = "",
+                 created_at: str = "") -> None:
+        """Mute a fingerprint. ``until`` == '' means forever; it must be written
+        on the same clock that ``active_suppressions`` is later queried with
+        (the pipelines use ``Runtime.now_iso``)."""
+        self._db.execute(
+            """INSERT INTO suppressions (fingerprint, until, reason, created_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(fingerprint) DO UPDATE SET
+                 until = excluded.until, reason = excluded.reason,
+                 created_at = excluded.created_at""",
+            (str(fingerprint), str(until or ""), str(reason or ""),
+             created_at or self._now()),
+        )
+        self._db.commit()
+
+    def unsuppress(self, fingerprint: str) -> bool:
+        cur = self._db.execute("DELETE FROM suppressions WHERE fingerprint = ?", (fingerprint,))
+        self._db.commit()
+        return cur.rowcount > 0
+
+    def suppressed(self) -> list[dict]:
+        cur = self._db.execute("SELECT * FROM suppressions ORDER BY created_at DESC, fingerprint")
+        return [dict(r) for r in cur.fetchall()]
+
+    def active_suppressions(self, now_iso: str) -> set[str]:
+        """Fingerprints muted *right now* — ``until`` empty (forever) or in the
+        future relative to ``now_iso`` (ISO-8601 strings compare lexically)."""
+        cur = self._db.execute(
+            "SELECT fingerprint FROM suppressions WHERE until = '' OR until > ?", (str(now_iso),)
+        )
+        return {str(r["fingerprint"]) for r in cur.fetchall()}
+
+    # ------------------------------------------- approvals from outside TG
+
+    def set_approval_decision(self, investigation_id: int, decision: str) -> None:
+        self._db.execute(
+            "UPDATE investigations SET approval_decision = ? WHERE id = ?",
+            (str(decision or ""), int(investigation_id)),
+        )
+        self._db.commit()
+
+    def approval_decision(self, investigation_id: int) -> str:
+        row = self._db.execute(
+            "SELECT approval_decision FROM investigations WHERE id = ?", (int(investigation_id),)
+        ).fetchone()
+        return str(row["approval_decision"] or "") if row is not None else ""
+
     # ------------------------------------------------------------- internals
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    @staticmethod
+    def _job_dict(row: sqlite3.Row) -> dict:
+        d = dict(row)
+        try:
+            d["payload"] = json.loads(d.get("payload_json") or "{}")
+        except (TypeError, ValueError):
+            d["payload"] = {}
+        return d
 
     @staticmethod
     def _pick(fields: dict, allowed: list[str], what: str) -> dict:

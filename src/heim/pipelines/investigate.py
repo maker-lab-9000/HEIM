@@ -6,11 +6,19 @@ Decline / timeout / needs-human all reset the incident's ``investigated``
 flag so it is re-proposed on the next run.
 
 Every investigation is also *persisted* (roadmap §5.1): a row is created before
-the approval is asked and carries its status through the flow, while the
+the approval is asked — carrying its provenance (the triggering ``findings``
+and the rendered brief) from the start, so a pending or declined run still
+shows what it was about — and carries its status through the flow, while the
 runner's ``on_step`` callback streams the agent's tool timeline into
 ``investigation_steps`` as it happens. The agent phase runs under a
 process-wide semaphore (``settings.max_concurrent_investigations``) acquired
 *after* approval, so a six-hour approval wait never occupies a slot.
+
+The approval itself is *not* Telegram-only (roadmap §5.7 "web approvals"): the
+Telegram button races a poll of ``investigations.approval_decision``, which any
+other process (the dashboard) can write. With no Telegram configured the store
+poll becomes the whole gate, so a dashboard-only deployment still gets a human
+in the loop instead of silently skipping the approval.
 """
 from __future__ import annotations
 
@@ -41,6 +49,7 @@ class InvestigationRequest:
     host_role: str = "guest"          # guest | hypervisor | ha-guest
     fingerprint: str = ""
     findings: list[dict] = field(default_factory=list)
+    retry_of: int = 0                 # investigation id this one re-runs (§5.5)
 
     @property
     def tag(self) -> str:
@@ -134,23 +143,115 @@ def _step_recorder(rt: Runtime, investigation_id: int):
     return on_step
 
 
+#: How often the approval wait re-reads ``investigations.approval_decision``.
+APPROVAL_POLL_SECONDS = 5.0
+
+_APPROVE = {"approve", "approved", "yes", "true"}
+_DECLINE = {"decline", "declined", "no", "false"}
+
+
+async def _store_decision(rt: Runtime, investigation_id: int, timeout_s: float,
+                          poll_s: float | None = None) -> bool | None:
+    """Poll the investigation row for a decision written by another process.
+
+    Returns True/False once ``approval_decision`` says so, None on timeout.
+    A read failure is logged and retried — a flaky read must not decline an
+    investigation by accident.
+    """
+    # read at call time so the interval stays tunable (and testable)
+    poll_s = APPROVAL_POLL_SECONDS if poll_s is None else poll_s
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, float(timeout_s))
+    while True:
+        try:
+            decision = str(rt.store.approval_decision(investigation_id) or "").strip().lower()
+        except Exception:
+            log.exception("reading approval_decision for #%s failed", investigation_id)
+            decision = ""
+        if decision in _APPROVE:
+            return True
+        if decision in _DECLINE:
+            return False
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return None
+        await asyncio.sleep(min(poll_s, remaining))
+
+
+async def _await_approval(rt: Runtime, investigation_id: int, text: str,
+                          timeout_s: float) -> tuple[bool | None, str]:
+    """Race the Telegram button against the store decision (dashboard/CLI).
+
+    Whichever answers first wins; the loser is cancelled, so a Telegram reply
+    that arrives after the dashboard already decided is ignored. Returns
+    ``(answer, source)`` with answer None meaning "timed out".
+    """
+    tasks: dict[asyncio.Task, str] = {
+        asyncio.create_task(_store_decision(rt, investigation_id, timeout_s)): "store",
+    }
+    if rt.telegram is not None:
+        tasks[asyncio.create_task(rt.telegram.ask(text, timeout_s=timeout_s))] = "telegram"
+    else:
+        log.info("no Telegram configured — investigation #%s waits on a store decision "
+                 "(dashboard) for up to %.1fh", investigation_id, timeout_s / 3600)
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    results: list[tuple[str, bool | None]] = []
+    for t in done:
+        try:
+            results.append((tasks[t], t.result()))
+        except Exception:
+            log.exception("approval wait (%s) failed", tasks[t])
+    for source, answer in results:
+        if answer is not None:
+            return answer, source
+    return None, (results[0][0] if results else "")
+
+
 async def run_investigation(
     rt: Runtime,
     req: InvestigationRequest,
     *,
     require_approval: bool | None = None,
     trigger: str = "manual",
+    on_start=None,
 ) -> dict | None:
-    """Returns a result summary dict, or None if declined/timed out/failed."""
+    """Returns a result summary dict, or None if declined/timed out/failed.
+
+    ``on_start(investigation_id)`` is called as soon as the tracking row
+    exists, so a caller that needs the id even on the declined/failed paths
+    (the queue worker) can capture it.
+    """
     cfg = rt.config
     agent_cfg = cfg.agents["investigator"]
     jenv = Environment(loader=FileSystemLoader(cfg.prompts_dir))
     ftext = findings_text(req.findings)
     generated_at = rt.now_iso()
 
+    # The brief is pure template rendering with no side effects, so it is built
+    # *before* the approval gate and stored with the row: the human deciding on
+    # a pending investigation — and anyone reading a declined one later — can
+    # see exactly what the agent was going to be asked. The same string is
+    # handed to the agent below, unchanged.
+    template = _ROLE_TEMPLATE.get(req.host_role, "guest")
+    brief = expand_env(
+        jenv.get_template(f"briefs/{template}.md.j2").render(
+            host=req.host, findings_text=ftext, is_temperature=bool(_TEMP_RE.search(ftext)),
+        ),
+        source=f"briefs/{template}.md.j2",
+    )
+
     # --------------------------------------------------- tracking row (§5.1)
     require = cfg.settings.approvals.require if require_approval is None else require_approval
-    will_ask = bool(require and not rt.dry_run and rt.telegram is not None)
+    # A human gate is needed whenever approvals are required and this is not a
+    # dry run — Telegram is one way to answer it, the store (dashboard/CLI) the
+    # other. With neither channel the wait simply times out into "declined",
+    # which is the safe direction.
+    will_ask = bool(require and not rt.dry_run)
     inv_id = rt.store.create_investigation(
         fingerprint=req.fingerprint,
         host=req.host,
@@ -160,25 +261,37 @@ async def run_investigation(
         trigger=trigger,
         status="pending_approval" if will_ask else "running",
         started_at=generated_at,
+        retry_of=req.retry_of,
+        brief_md=brief,
+        findings_json=json.dumps(req.findings, ensure_ascii=False, default=str),
     )
+    if on_start is not None:
+        try:
+            on_start(inv_id)
+        except Exception:
+            log.exception("on_start callback failed for investigation #%s", inv_id)
 
     # ------------------------------------------------------------- approval
     if will_ask:
         await rt.emit_loki([_action(req.host, "approval_requested", req.fingerprint,
                                     f"Approval requested for {req.host}", generated_at)])
-        answer = await rt.telegram.ask(
-            _approval_text(req, ftext),
-            timeout_s=cfg.settings.approvals.approve_timeout_hours * 3600,
+        answer, source = await _await_approval(
+            rt, inv_id, _approval_text(req, ftext),
+            cfg.settings.approvals.approve_timeout_hours * 3600,
         )
         if answer is not True:
-            log.info("investigation of %s declined/timed out", req.host)
-            rt.store.update_investigation(inv_id, status="declined", finished_at=rt.now_iso())
+            log.info("investigation of %s declined/timed out (%s)", req.host, source or "no answer")
+            rt.store.update_investigation(
+                inv_id, status="declined", finished_at=rt.now_iso(),
+                approval_decision="decline" if answer is False else "timeout",
+            )
             if req.fingerprint:
                 rt.store.set_investigated(req.fingerprint, False)
             await rt.emit_loki([_action(req.host, "declined", req.fingerprint,
                                         "Investigation declined", rt.now_iso())])
             return None
-        rt.store.update_investigation(inv_id, status="running")
+        log.info("investigation of %s approved via %s", req.host, source or "?")
+        rt.store.update_investigation(inv_id, status="running", approval_decision="approve")
     await rt.emit_loki([_action(req.host, "started", req.fingerprint,
                                 "Investigation started by AI agent", rt.now_iso())])
 
@@ -188,14 +301,6 @@ async def run_investigation(
     try:
         async with rt.investigation_slot():
             # -------------------------------------------------------- the agent
-            template = _ROLE_TEMPLATE.get(req.host_role, "guest")
-            brief = expand_env(
-                jenv.get_template(f"briefs/{template}.md.j2").render(
-                    host=req.host, findings_text=ftext, is_temperature=bool(_TEMP_RE.search(ftext)),
-                ),
-                source=f"briefs/{template}.md.j2",
-            )
-            rt.store.update_investigation(inv_id, brief_md=brief)
             system = _build_system_prompt(rt, jenv, req)
             ctx = ToolContext(config=cfg, tag=req.tag, feed=rt.feed, audit=rt.audit)
             tools = load_tools(agent_cfg.tools, cfg, ctx)

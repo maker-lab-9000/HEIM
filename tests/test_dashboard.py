@@ -43,7 +43,18 @@ def _seed(db_path: Path) -> dict:
         fingerprint="ubuntu-server|mem_used|Memory climbing", host="ubuntu-server",
         host_role="guest", agent_name="investigator", model="claude-sonnet-4-6",
         trigger="poller", status="running", started_at=_iso(4),
-        input_tokens=128_000, output_tokens=4_200, n_steps=3)
+        input_tokens=128_000, output_tokens=4_200, n_steps=3,
+        # provenance, written when the row is created (pipelines/investigate)
+        findings_json=json.dumps([
+            {"severity": "critical", "host": "ubuntu-server", "metric": "Memory used + Swap",
+             "trend": "up", "detail": "Working set grew 18% over three days.",
+             "recommendation": "Cap the PhotoPrism container."},
+            {"severity": "warning", "host": "ubuntu-server", "metric": "Load average",
+             "trend": "up", "detail": "1.8x the three-day baseline."},
+        ]),
+        brief_md="Investigate the following alert(s) on host \"ubuntu-server\".\n\n"
+                 "DETECTED FINDINGS:\n1. [critical] Memory used + Swap (up) — "
+                 "Working set grew 18% over three days.\n")
     store.add_step(ids["running"], 1, "prometheus_query",
                    args_json=json.dumps({"promql": 'topk(10, container_memory_working_set_bytes{name!=""})'}),
                    result_preview="10 series · photoprism-photoprism-1 2.90 GiB",
@@ -72,12 +83,15 @@ def _seed(db_path: Path) -> dict:
                    args_json=json.dumps({"pattern": "smartmon_.*"}),
                    result_preview="7 matching metrics", result_bytes=512, duration_ms=210)
 
-    # --- a declined one (no steps, no report)
+    # --- a declined one (no steps, no report): started by hand, so no findings
+    #     — but it still has the brief, which is stored at creation time
     ids["declined"] = store.create_investigation(
         fingerprint="ubuntu-server|cpu_load|CPU saturated", host="ubuntu-server",
         host_role="guest", agent_name="investigator", model="claude-sonnet-4-6",
         trigger="manual", status="declined", started_at=_iso(600),
-        finished_at=_iso(599), n_steps=0)
+        finished_at=_iso(599), n_steps=0,
+        brief_md="Investigate the general health of host \"ubuntu-server\".\n\n"
+                 "Do **not** stop at the symptom.\n")
 
     # --- a daily run + its findings
     run_at = _iso(5)
@@ -291,6 +305,53 @@ def test_investigation_detail_declined_has_no_steps(client, ids):
     assert "Declined — re-proposed next run" in html
 
 
+def test_triggered_by_card_shows_findings_and_brief(client, ids):
+    """The provenance card: what the agent was asked about, and the brief it got."""
+    html = client.get(f"/investigations/{ids['running']}").text
+    assert "triggered by" in html
+    # one line per finding: severity icon + mono metric + detail, all in --ink-2
+    assert "Memory used + Swap" in html and "Load average" in html
+    assert "Working set grew 18% over three days." in html
+    assert "1.8x the three-day baseline." in html
+    assert 'class="sev st-crit"' in html and 'class="sev st-warn"' in html
+    # the card sits between the header and the transcript
+    assert html.index("triggered by") < html.index("transcript · 3 steps")
+    assert html.index('class="card head"') < html.index("triggered by")
+    # the brief is a native <details>, rendered through the markdown pipeline
+    assert "Brief sent to the agent" in html
+    assert "DETECTED FINDINGS" in html
+
+
+def test_triggered_by_is_explicit_when_there_are_no_findings(client, ids):
+    html = client.get(f"/investigations/{ids['declined']}").text
+    assert "triggered by" in html
+    assert "Manual investigation — no incident findings attached." in html
+
+
+def test_declined_investigation_still_shows_its_brief(client, ids):
+    """The brief is stored when the row is created, so a run that never got
+    approved still says what it would have asked."""
+    html = client.get(f"/investigations/{ids['declined']}").text
+    assert "Brief sent to the agent" in html
+    assert "Investigate the general health of host" in html
+    assert "<strong>not</strong>" in html          # markdown-rendered, like the report
+
+
+def test_header_meta_pairs_are_atomic_cells(client, ids):
+    """Fix for the wrapping header: each label/value pair is one grid cell, so
+    a value can never slide under the neighbouring column."""
+    html = client.get(f"/investigations/{ids['running']}").text
+    meta = html[html.index('<dl class="imeta">'):html.index("</dl>")]
+    # every dt/dd lives inside its own .kv wrapper
+    assert meta.count('<div class="kv">') == meta.count("<dt") == meta.count("<dd")
+    assert meta.count('<div class="kv">') >= 6
+    assert "<dt" not in meta.split('<div class="kv">')[0]
+    for cell in meta.split('<div class="kv">')[1:]:
+        assert cell.index("<dt") < cell.index("<dd") < cell.index("</div>")
+    css = client.get("/static/heim.css").text
+    assert ".imeta .kv" in css and "auto-fit" in css
+
+
 def test_transcript_partial_is_a_fragment(client, ids):
     r = client.get(f"/investigations/{ids['running']}/transcript")
     assert r.status_code == 200
@@ -360,10 +421,16 @@ def test_unreadable_store_says_what_to_check(tmp_path, monkeypatch):
 
 
 def test_weight_budget_and_no_cdn():
-    """The spec's quality floor: one hand-written CSS file under ~12 KB and a
-    vendored htmx — no runtime CDN reference anywhere in the templates."""
+    """The spec's quality floor: one hand-written CSS file and a vendored htmx —
+    no runtime CDN reference anywhere in the templates.
+
+    The budget was ~12 KB through v1; the actions slice (spec §5: button
+    language, feedback lines, ghost rows) deliberately grew it to 14 KB. It is
+    still one hand-written file with no build step, and still the only
+    stylesheet the pages load.
+    """
     static = Path(__file__).resolve().parent.parent / "src/heim/dashboard/static"
-    assert (static / "heim.css").stat().st_size <= 12_800
+    assert (static / "heim.css").stat().st_size <= 14_336
     assert (static / "htmx.min.js").stat().st_size > 10_000
     templates = (Path(__file__).resolve().parent.parent
                  / "src/heim/dashboard/templates")

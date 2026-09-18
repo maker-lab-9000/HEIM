@@ -173,9 +173,44 @@ count, last finding line, last investigation line. 2–3 col grid.
   (the wordmark spark is text/SVG inline). No layout shift: mono tabular numbers,
   fixed table column classes.
 
-## 5. Out of scope in v1 (read-only)
+## 5. Actions (v2 — the jobs queue slice)
 
-Actions (approve, re-trigger, verdicts) land with the jobs queue (AGENTS.md §5.2/§5.4/
-§5.5); the pages above already reserve their spots (outcome line, verdict column,
-disabled "Investigate" button on host cards with `title="coming with the job queue"` —
-omit entirely rather than tease if it feels noisy).
+The dashboard gains a narrow write path: it inserts **action rows only** (jobs,
+finding verdicts, suppressions, approval decisions) — the daemon remains the sole
+executor and the sole writer of pipeline tables. Every action is a real
+`<form method="post">` (works without JS), enhanced by htmx (`hx-post` +
+`hx-confirm` where marked ⚠, swapping the nearest panel).
+
+**Button language** — one quiet style everywhere: mono-caps 0.6875rem, transparent
+bg, 1px `--line` border, `--ink-2` text; hover: `--ember` border + text; focus: the
+standard ember outline. No filled/primary buttons — actions are deliberate, not
+promoted. Disabled = `--ink-3` text, no border hover, `title` says why.
+
+**Placement & copy** (sentence case, verb-first):
+- Host card footer → `INVESTIGATE` — enqueues a manual investigation for the host.
+- Incident expanded row → `INVESTIGATE NOW` (⚠ confirm) · `MARK FALSE POSITIVE`
+  (⚠ confirm; suppresses the fingerprint) · when suppressed: `UNMUTE` + a muted
+  pill `muted · until <date>` in `--ink-3`.
+- Investigation detail header → `RE-RUN` (⚠ confirm; enqueues with retry_of, the
+  new run links back: "re-run of #12"). When status is pending_approval:
+  `APPROVE` and `DECLINE` side by side (approve gets an ember border at rest —
+  the one exception to the quiet style, it's the human-in-the-loop moment).
+- Findings rows → inline verdict pair `✓ CONFIRM` / `✗ FALSE POSITIVE`; once set,
+  replaced by a verdict pill (confirmed = ok dot; false positive = `--ink-3` pill).
+
+**Feedback:** after a POST the affected panel re-renders with an inline status line
+(mono, `--ink-2`): "Queued as job #7 — the daemon picks it up within a few seconds."
+Errors follow the store-error copy rules. No toasts, no JS state.
+
+**Queue visibility:** the overview KPI row gains a fifth tile `QUEUED` (jobs
+waiting); the investigations list shows queued jobs as ghost rows (`--ink-3`,
+"queued · waiting for daemon") above running ones.
+
+**Weight:** this slice deliberately raises §4's CSS budget from ~12 KB to
+14 KB (one button style, a feedback line, ghost rows). Still one hand-written
+file, still no build step, still the only stylesheet the pages load.
+
+## 6. Still out of scope
+
+"Load 50 more" pagination (lists cap at 200 rows) and the Recommendations page —
+deferred; tracked in AGENTS.md §5.3.

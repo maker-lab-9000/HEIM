@@ -1,4 +1,4 @@
-<img src="docs/logo.svg" alt="HEIM logo — a minimal line-drawn tall house with a chimney, round attic window and arched door, in ember orange" width="72" align="right">
+<img src="docs/HEIM_logo_rustic.svg" alt="HEIM logo — a rustic wordmark where the H forms a house with a roof, chimney and four-pane window, with a sun, a crescent moon and small plants on a cream background" width="340">
 
 # HEIM — Homelab Event & Incident Monitor
 
@@ -99,7 +99,7 @@ heim/
 │       ├── poller.py               #   the fast-path poller (was PAM 11)
 │       └── investigate.py          #   the approval-gated investigation (was PAM 20)
 ├── Dockerfile · docker-compose.yml # container deployment (recommended) — see below
-├── src/heim/dashboard/             # the built-in web UI (FastAPI + htmx, read-only)
+├── src/heim/dashboard/             # the built-in web UI (FastAPI + htmx; reads + actions)
 ├── grafana/                        # the "Homelab AI Operations" dashboard + Loki datasource
 │   ├── dashboards/homelab-ai-operations.json · loki-alerts-findings.json
 │   └── provisioning/datasources/loki.yml
@@ -167,19 +167,27 @@ Notes:
 
 ### The built-in dashboard (web UI)
 
-A self-contained, read-only web UI focused on **tracking the agent's investigations** —
+A self-contained web UI focused on **tracking the agent's investigations** —
 every investigation shows its trigger, agent + model, real token usage, and a
 terminal-style transcript of each tool call ($ command, result preview, duration,
 blocked markers) with a "burn line" showing where the budget went. Plus incidents,
 findings history grouped by run, and per-host cards. Dark, dense, resource-light:
-system fonts, ~12 KB of CSS, vendored htmx, no build step, no chart library.
+system fonts, ~13 KB of CSS, vendored htmx, no build step, no chart library.
+
+It also *acts*, through plain forms (htmx is only an enhancement): queue an
+investigation from a host card or an incident, re-run one with fresh evidence,
+approve or decline a pending run without Telegram, judge a finding (confirm /
+false positive), and mute or unmute a fingerprint. The overview shows the queue
+depth and the investigations list shows queued jobs as ghost rows.
 
 ```bash
 heim dashboard                      # http://localhost:8300
 docker compose up -d dashboard      # or as the optional compose service
 ```
 
-It opens the SQLite store as a WAL *reader* — the daemon stays the sole writer. It is
+It opens the SQLite store over WAL and writes **action rows only** (jobs, approval
+decisions, verdicts, suppressions) — the daemon stays the sole executor and the sole
+writer of the pipeline tables. It is
 heim's only inbound port: keep it LAN/tailnet-only, and set `HEIM_DASHBOARD_TOKEN` in
 `.env` to require HTTP basic auth (any username, the token as password). Design spec:
 [`docs/design/dashboard-ui.md`](docs/design/dashboard-ui.md).

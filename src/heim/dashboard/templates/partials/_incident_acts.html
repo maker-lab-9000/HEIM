@@ -1,0 +1,14 @@
+{% import "partials/_macros.html" as m with context %}
+<div class="acts">
+  {%- if sup %}
+  {{ m.muted(sup) }}
+  {{ m.act('/actions/unmute', 'UNMUTE', {'fingerprint': r.fingerprint}) }}
+  {%- else %}
+  {{ m.act('/actions/investigate', 'INVESTIGATE NOW',
+           {'host': r.host, 'fingerprint': r.fingerprint},
+           confirm='Queue an investigation for ' ~ (r.host or 'this host') ~ ' now?') }}
+  {{ m.act('/actions/mute', 'MARK FALSE POSITIVE', {'fingerprint': r.fingerprint},
+           confirm='Mark this a false positive and mute the fingerprint?') }}
+  {%- endif %}
+  {% include "partials/_flash.html" %}
+</div>
