@@ -180,7 +180,11 @@ def test_costs_page_renders_models_and_total(seeded_client):
     html = seeded_client.get("/costs").text
     assert "claude-sonnet-4-6" in html and "investigator" in html
     assert "$0.54" in html and "$0.68" in html          # model row and window total
-    assert 'class="sharebar"' in html or "share" in html
+    # the share bars themselves, not just the column header: one magnitude bar
+    # per model row, each sized by that model's share of the window's spend
+    assert html.count('class="tubar"') == 2
+    assert 'class="seg" style="width:79.7%"' in html    # sonnet: 0.54 of 0.6775
+    assert 'class="seg" style="width:20.3%"' in html    # opus: the rest
     assert 'href="/costs?window=7d"' in html            # window switcher
 
 
@@ -208,6 +212,9 @@ def test_costs_page_charts_spend_by_day(seeded_client):
     assert 'class="tchart"' in html                      # the §11 chart, cost series
     assert html.count("<rect") >= 14                     # one bar per day incl. stubs
     assert "$0.50" in html or "$0.5" in html             # the busiest day's label
+    # the chart sums what each run booked, the table re-prices from settings —
+    # say so, so the two totals can never disagree in silence
+    assert "as booked when each run happened" in html
 
 
 def test_costs_free_tier_renders_zero_not_a_dash(free_client):

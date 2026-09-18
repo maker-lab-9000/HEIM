@@ -88,6 +88,9 @@
   <p class="tsum mono">14d: {{ cost_chart.total|money }} · busiest
     {{ cost_chart.busiest.weekday }} {{ cost_chart.busiest.date }}
     ({{ cost_chart.busiest.value|money }})</p>
+  {#- the table above re-prices from settings; this chart does not, so say which
+      number is which rather than letting the two totals disagree in silence -#}
+  <p class="tsum">Amounts as booked when each run happened.</p>
   {%- else %}
   <p class="empty">No spend recorded yet.</p>
   {%- endif %}
