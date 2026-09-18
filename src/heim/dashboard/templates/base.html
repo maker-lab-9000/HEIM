@@ -1,5 +1,8 @@
+{%- set theme = theme|default(request.state.theme, true) -%}
+{%- set next_theme = next_theme|default(request.state.next_theme, true) -%}
+{%- set theme_icon = theme_icon|default(request.state.theme_icon, true) -%}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ theme }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -36,6 +39,11 @@
   <div class="tmeta">
     <span class="chip">{{ env_chip }}</span>
     <span class="mono clock">{{ clock }}</span>
+    {#- no-JS theme switch: a GET form the server turns into a cookie + 303 (§10) -#}
+    <form class="themetoggle" method="get">
+      <button class="btn" name="theme" value="{{ next_theme }}"
+              title="theme: {{ theme }} — click for {{ next_theme }}">{{ theme_icon }}</button>
+    </form>
   </div>
 </header>
 

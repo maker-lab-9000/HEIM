@@ -13,6 +13,11 @@
      badge always prints the host name next to its dot. */
   --host-1: #C97A35; --host-2: #4A8AC2; --host-3: #C2609A;
   --host-4: #4F9E5A; --host-5: #8A6FD1;
+  /* the terminal islands (§10): command lines, result previews, code blocks.
+     They alias the dark surface here and are pinned to literal charcoal in
+     light mode — a terminal has no light mode. */
+  --term-bg: var(--raised); --term-ink: var(--ink);
+  --term-ink-2: var(--ink-2); --term-ember: var(--ember);
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --r: 6px; --pad: 8px;
@@ -228,14 +233,14 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .ehdr { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; margin: 0 0 4px; }
 .smeta { font-size: 0.6875rem; color: var(--ink-2); white-space: nowrap; }
 .cmd {
-  margin: 0 0 4px; padding: 4px 8px; background: var(--raised); border-radius: 4px;
-  font-size: 0.8125rem; color: var(--ink); white-space: pre-wrap; word-break: break-word;
+  margin: 0 0 4px; padding: 4px 8px; background: var(--term-bg); border-radius: 4px;
+  font-size: 0.8125rem; color: var(--term-ink); white-space: pre-wrap; word-break: break-word;
 }
-.cmd .prompt { color: var(--ember); }
+.cmd .prompt { color: var(--term-ember); }
 .rline { font-size: 0.8125rem; color: var(--ink-2); }
 .rfull {
-  margin: 6px 0 0; padding: 8px; background: var(--raised); border-radius: 4px;
-  font-size: 0.8125rem; color: var(--ink-2); white-space: pre-wrap; word-break: break-word;
+  margin: 6px 0 0; padding: 8px; background: var(--term-bg); border-radius: 4px;
+  font-size: 0.8125rem; color: var(--term-ink-2); white-space: pre-wrap; word-break: break-word;
   max-height: 22em; overflow: auto;
 }
 .entry-empty { padding: 8px 0; }
@@ -245,8 +250,8 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .fulltx .turn:first-of-type { border-top: 0; }
 .fulltx .turn > .eyebrow { margin: 0 0 4px; }
 .wrap {
-  margin: 0 0 6px; padding: 6px 8px; background: var(--raised); border-radius: 4px;
-  font-size: 0.8125rem; color: var(--ink-2); white-space: pre-wrap; word-break: break-word;
+  margin: 0 0 6px; padding: 6px 8px; background: var(--term-bg); border-radius: 4px;
+  font-size: 0.8125rem; color: var(--term-ink-2); white-space: pre-wrap; word-break: break-word;
   max-height: 20em; overflow: auto;
 }
 
@@ -286,7 +291,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .prose { color: var(--ink-2); font-size: 0.875rem; margin: 6px 0; }
 .prose h1, .prose h2, .prose h3 { color: var(--ink); font: 1.0625rem/1.3 var(--sans); margin: 16px 0 6px; }
 .prose h2:first-child { margin-top: 4px; }
-.prose code, .prose pre { background: var(--raised); border-radius: 4px; font-family: var(--mono); font-size: 0.8125rem; }
+.prose code, .prose pre { background: var(--term-bg); color: var(--term-ink-2); border-radius: 4px; font-family: var(--mono); font-size: 0.8125rem; }
 .prose code { padding: 1px 4px; }
 .prose pre { padding: 8px; overflow: auto; }
 .prose table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
@@ -384,3 +389,41 @@ a.btn:hover { text-decoration: none; }
 .runline.dim { color: var(--ink-2); }
 .qlink { color: var(--ember); text-decoration: none; }
 .qlink:hover { text-decoration: underline; }
+
+/* topbar theme toggle (§10): a one-button form, so it works with no JS */
+.themetoggle { margin: 0; display: flex; }
+.themetoggle .btn { font-size: 0.8125rem; letter-spacing: 0; padding: 0 6px; }
+
+/* ------------------------------------------------------------- light mode
+   §10 "morning ash": an override set, not a redesign. Cool-neutral ash
+   surfaces + neutral ink, ember the only warmth left glowing. The tool/host
+   identity slots and the fixed status colors are MODE-INVARIANT (validated on
+   both surfaces, always paired with a text label) — do not re-theme them.
+   The term-* slots pin the terminal islands to their native charcoal. */
+[data-theme="light"] {
+  --bg: #ECEEED; --panel: #FAFBFA; --raised: #E4E6E4; --line: #D6D9D6;
+  --ink: #22252B; --ink-2: #5B6169; --ink-3: #8B9199;
+  --ember: #B05E1A; --ember-dim: #E8D0B4;
+  --term-bg: #1B1917; --term-ink: #E9E2D4;
+  --term-ink-2: #A89E8C; --term-ember: #E88C3A;
+}
+/* auto mode: same override set when the OS asks for light and no explicit
+   theme cookie has pinned dark. Duplicated because a media query cannot join
+   a selector list. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #ECEEED; --panel: #FAFBFA; --raised: #E4E6E4; --line: #D6D9D6;
+    --ink: #22252B; --ink-2: #5B6169; --ink-3: #8B9199;
+    --ember: #B05E1A; --ember-dim: #E8D0B4;
+    --term-bg: #1B1917; --term-ink: #E9E2D4;
+    --term-ink-2: #A89E8C; --term-ember: #E88C3A;
+  }
+}
+
+/* token usage by weekday (spec §11): server-rendered SVG, single series, so
+   the only color is the ember accent and the card title is the legend. */
+.tchart { display: block; max-width: 100%; height: auto; margin: 2px 0 6px; }
+.tchart text { font-family: var(--mono); font-size: 11px; fill: var(--ink-3); }
+.tchart .val { fill: var(--ink-2); }
+.tchart .base { stroke: var(--line); stroke-width: 1; }
+.tsum { color: var(--ink-3); font-size: 0.8125rem; }

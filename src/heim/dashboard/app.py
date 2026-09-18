@@ -77,6 +77,13 @@ TOKEN_ENV = "HEIM_DASHBOARD_TOKEN"
 #: fingerprints, findings or report text (roadmap §5.6).
 AUTH_EXEMPT = frozenset({"/healthz", "/telemetry"})
 
+#: light mode (spec §10). ``auto`` renders no override and lets the CSS
+#: ``prefers-color-scheme`` mirror decide, so the OS preference needs no JS.
+THEME_COOKIE = "heim_theme"
+THEMES = frozenset({"auto", "light", "dark"})
+THEME_NEXT = {"auto": "light", "light": "dark", "dark": "auto"}
+THEME_ICON = {"auto": "◐", "light": "☀", "dark": "☾"}
+
 #: a daemon that has not recorded a run in this long is "quiet"
 DAEMON_FRESH_S = 20 * 60
 
@@ -345,6 +352,34 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     # ---------------------------------------------------------- middleware
 
+    # Registered BEFORE basic_auth so auth stays the outermost gate: a caller
+    # with no credentials cannot set a theme cookie.
+    @app.middleware("http")
+    async def theme(request: Request, call_next):
+        """Theme selection without JS (spec §10).
+
+        `?theme=<auto|light|dark>` from the topbar toggle form is stored in the
+        `heim_theme` cookie and answered with a 303 back to the same path, so a
+        no-JS browser lands on fresh server-rendered HTML. Everything else just
+        resolves the current theme onto the request for the templates; "auto"
+        is handled purely in CSS by a `prefers-color-scheme` mirror.
+        """
+        chosen = request.query_params.get("theme")
+        current = request.cookies.get(THEME_COOKIE, "")
+        resolved = chosen if chosen in THEMES else (
+            current if current in THEMES else "auto")
+        request.state.theme = resolved
+        request.state.next_theme = THEME_NEXT[resolved]
+        request.state.theme_icon = THEME_ICON[resolved]
+        if chosen in THEMES:
+            back = request.url.remove_query_params("theme")
+            target = back.path + (f"?{back.query}" if back.query else "")
+            reply = RedirectResponse(target, status_code=303)
+            reply.set_cookie(THEME_COOKIE, chosen, max_age=31_536_000,
+                             samesite="lax", path="/")
+            return reply
+        return await call_next(request)
+
     @app.middleware("http")
     async def basic_auth(request: Request, call_next):
         # read the env per request so a token can be added without a restart
@@ -369,6 +404,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             "env_chip": _env_chip(cfg, now),
             "daemon": _daemon_chip(reader),
             "nav": NAV,
+            # resolved by the theme middleware; here too so child templates
+            # (not just base.html) can read it (spec §10)
+            "theme": getattr(request.state, "theme", "auto"),
             # where action forms send a no-JS operator back to (spec §5)
             "back": request.url.path + (f"?{query}" if query else ""),
             # paging links keep whatever else is in the URL (filters included)
