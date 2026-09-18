@@ -290,10 +290,18 @@ match what the analyst saw.
 
 Investigations, incidents, and findings lists render the newest 50 rows and end with a
 single quiet button `LOAD 50 MORE` (the .btn style, full-width row, centered) when more
-rows exist. It is a plain GET link (`?offset=50`, preserving active filters) that
-renders the whole page with more rows; htmx enhances it (`hx-get` on the button,
-swapping itself for the next rows-fragment + a fresh button) so enhanced clients append
-in place. The button disappears when the store is exhausted. Ghost job rows are never
+rows exist. It is a plain GET link (`?offset=50`, preserving active filters) that renders
+the whole page at the next window; htmx enhances it by swapping the rows container for
+that window in place. The button disappears when the store is exhausted.
+
+RULING (2026-09-19, amended after implementation): this spec originally said enhanced
+clients *append* to the rows already on screen. The implementation SWAPS to the next
+window instead, for a concrete reason — the investigations table carries a 5-second live
+poll that re-renders its tbody, which would silently clobber appended rows and leave the
+operator staring at a list that shrank on its own. Swap also keeps the htmx path and the
+no-JS path showing the same thing, which append does not. The spec now describes the
+swap. If the label ever reads as a promise to append, rename the button ("NEXT 50")
+rather than reintroducing the clobber. Ghost job rows are never
 paginated (few, always shown).
 
 ## 9. Recommendations page
@@ -382,7 +390,14 @@ failed, needs_human} — the operator's triage queue. Placed directly under the 
 health card (bad news travels first). Latest 6, newest first, each row: status pill ·
 host badge · `#id` link · the reason in one muted line (incomplete_reason, or the
 outcome for needs_human) · rel time · a `RE-RUN` action (the existing retrigger form).
-More than 6 → a quiet `all (N)` link to /investigations?status=… . Empty state stays
+More than 6 → a quiet `all (N)` link to /investigations.
+
+RULING (2026-09-19): this line originally named `/investigations?status=…`, which cannot
+be honoured — the card spans three statuses (incomplete, failed, needs_human) and the
+filter accepts one, so any single query string would hide two-thirds of the queue behind
+a link that claims to show all of it. The link goes to the unfiltered list. The better
+fix is a filter that accepts a set of statuses; until then, unfiltered-but-complete beats
+filtered-but-lying. Empty state stays
 visible as good news: "Nothing needs attention." in --ink-3 with the ok dot.
 
 ## 13. Cost monitor (`/costs`)
