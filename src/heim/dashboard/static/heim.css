@@ -125,6 +125,9 @@ main { margin-left: 200px; max-width: 1280px; padding: 16px; }
   overflow: hidden; margin: 6px 0 0;
 }
 .tubar .seg { display: block; height: 100%; background: var(--ember); min-width: 1px; }
+/* the agent's own note about a tool: quiet, full width, under its row */
+.tufb td { border-top: 0; padding-top: 0; font-size: 0.8125rem; }
+.tufb-note { margin: 8px 0 0; font-size: 0.8125rem; }
 
 /* health card: the analyst's words, one step louder than the run lines */
 .health .htext { color: var(--ink); font-size: 0.9375rem; }

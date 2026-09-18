@@ -64,9 +64,11 @@ heim/
 │   ├── config.py                   # pydantic models + loader for everything under config/
 │   ├── runtime.py                  # wiring: store + channels + dry-run behavior
 │   ├── llm.py                      # analyst completion (OpenRouter primary → Anthropic fallback)
-│   ├── cli.py                      # `heim check|daily|poll|investigate|incidents|daemon`
+│   ├── cli.py                      # `heim check|daily|poll|investigate|incidents|replay|daemon`
 │   ├── daemon.py                   # APScheduler cron/interval jobs
-│   ├── agent/runner.py             # the Anthropic tool-use loop (budget, retries, real tokens)
+│   ├── agent/
+│   │   ├── runner.py               #   the Anthropic tool-use loop (budget, retries, real tokens)
+│   │   └── cassette.py             #   recorded tool results from a stored transcript (replay)
 │   ├── tools/                      # tool framework + one module per tool
 │   │   ├── base.py                 #   Tool base class, ToolContext (feed/audit), registry
 │   │   └── ssh_diagnostic.py · prometheus_query.py · discover_metrics.py · ha_api.py · proxmox_api.py
@@ -97,7 +99,8 @@ heim/
 │   └── pipelines/
 │       ├── daily.py                #   the daily run (was n8n PAM 10)
 │       ├── poller.py               #   the fast-path poller (was PAM 11)
-│       └── investigate.py          #   the approval-gated investigation (was PAM 20)
+│       ├── investigate.py          #   the approval-gated investigation (was PAM 20)
+│       └── replay.py               #   offline replay of a stored investigation (eval harness)
 ├── Dockerfile · docker-compose.yml # container deployment (recommended) — see below
 ├── src/heim/dashboard/             # the built-in web UI (FastAPI + htmx; reads + actions)
 ├── grafana/                        # the "Homelab AI Operations" dashboard + Loki datasource
@@ -105,7 +108,7 @@ heim/
 │   └── provisioning/datasources/loki.yml
 ├── loki/                           # docker-compose + config for the AI event store
 ├── prometheus/                     # docker-compose, scrape config, and alerts.yml (fast-path rules)
-├── tests/                          # 264 tests, incl. faithful-port golden cases
+├── tests/                          # 596 tests, incl. faithful-port golden cases
 └── docs/ARCHITECTURE.md            # design, data flow, n8n→module provenance map
 ```
 
@@ -177,7 +180,9 @@ where the token budget went. The pages:
 - **Overview** — KPI tiles (incidents, running/pending/queued, tokens + cost 24h), a
   **health card** (the latest analysis in words + a live per-host strip), the last 10
   daily runs with severity counts, a **tool usage** card (which tool, by which agent
-  and model: calls, blocked, avg time, tokens), recent investigations and findings.
+  and model: calls, blocked, avg time, tokens — plus the agent's own latest note on
+  what would make that tool more useful, written in its report's optional
+  `## Tooling feedback` section), recent investigations and findings.
 - **Investigations** — filterable list with live-polling running rows and queued ghost
   rows; the detail page is the transcript.
 - **Incidents** — the store with lifecycle, dispatch locks, and mute state.
@@ -222,6 +227,40 @@ heim's only inbound port: keep it LAN/tailnet-only, and set `HEIM_DASHBOARD_TOKE
   jobs are pruned past `retention_days` (120; jobs capped at 30). Suppressions and
   anything open or unfinished are never touched; the backup always runs first, and a
   failed backup skips the prune.
+
+### Replay — would another model have said the same thing?
+
+`heim replay` re-runs a **stored** investigation offline: same brief, same system
+prompt, and the original run's **recorded tool results** served back to the model from
+its stored transcript. Nothing is measured live — no SSH, no Prometheus/HA/Proxmox, no
+approval, no email/Telegram/HA/Loki — so the only thing that changes is the model or
+the prompt, which is the only way the comparison means anything (the disk that was full
+in March is not full today).
+
+```bash
+heim replay 42                                   # same model: reproducibility check
+heim replay 42 --model claude-haiku-4-6          # cheaper model, same evidence
+heim replay 42 --prompt-file prompts/candidate.md.j2
+```
+
+**Prerequisite:** the investigation must have a stored transcript, i.e. it ran with
+`store_transcripts: true` in `config/settings.yaml` (off by default — transcripts are
+large). Runs recorded before you switched it on cannot be replayed; the command says so.
+
+The output puts the two runs side by side — model, status, steps, tokens, cost — then
+the cassette hit rate and both `## Root cause` sections with a unified diff:
+
+- **exact** — the replay made the same call with the same arguments and got the
+  original's bytes;
+- **fuzzy** — same tool, different arguments: it got the oldest unused recording for
+  that tool, which is *plausible* evidence rather than an answer to the question it
+  asked, so a high fuzzy count means read the diff with more suspicion;
+- **missed** — nothing recorded left for that tool, so the model is handed an explicit
+  `{"replay": "no recorded result …"}` stub. A replay never invents output.
+
+The replay is stored as a normal investigation (`trigger: replay`) linked back to its
+original, so it shows up in the dashboard with its own steps, tokens, cost and
+transcript — and can itself be replayed.
 
 ### Alternative: bare systemd service
 
@@ -284,7 +323,7 @@ Two knobs are worth setting deliberately:
 | Setting | Effect |
 |---|---|
 | `model_prices` + `currency` | model id → `{input, output}` price **per million tokens**. Ships commented out with placeholder numbers — fill in your provider's current pricing and investigations, runs and the 24h tile start showing money. A model with no entry stays *unpriced*: the UI shows an em dash, never a made-up `$0.00`. |
-| `store_transcripts` | keep each agent's full message history with its investigation (capped at 512 KB, oldest turns dropped) for post-morteming a wrong root cause. Off by default — it is large. |
+| `store_transcripts` | keep each agent's full message history with its investigation (capped at 512 KB, oldest turns dropped) for post-morteming a wrong root cause, and the prerequisite for `heim replay` (the transcript is the cassette). Off by default — it is large. |
 
 ### `config/hosts/*.yaml` — add a host, add a file
 | Field | Meaning |

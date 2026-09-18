@@ -28,9 +28,13 @@ RETRY_WAIT_S = 3.0
 
 
 #: Each stored tool_result is clipped to this many characters in the optional
-#: transcript — enough to see what the agent saw, bounded so one chatty
-#: command cannot dominate the 512 KB the pipeline is willing to keep.
-TRANSCRIPT_RESULT_CHARS = 2000
+#: transcript, bounded so one chatty command cannot dominate the 512 KB the
+#: pipeline is willing to keep. 8192 = the 8 KB the tools themselves clip their
+#: output at (``config/tools/*.yaml``: ``clip_bytes``), which makes a stored
+#: transcript **lossless in practice** — that is what lets the replay harness
+#: (§5.6) serve the stored results back to another model as a cassette instead
+#: of feeding it a truncated version of the original's evidence.
+TRANSCRIPT_RESULT_CHARS = 8192
 
 
 @dataclass

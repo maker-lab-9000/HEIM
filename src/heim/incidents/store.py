@@ -24,7 +24,10 @@ Roadmap §5.6 adds the observability columns — per-step token attribution
 (``investigations.cost``, ``runs.input_tokens/output_tokens/cost``) and the
 optional full agent transcript (``investigations.transcript_json``) — all
 through the same ``_ADDED_COLUMNS`` migration map, plus ``usage_totals()`` for
-the ``/telemetry`` exposition.
+the ``/telemetry`` exposition. Its eval/replay harness adds
+``investigations.replay_of`` (the run this one replays offline) and the
+``tool_feedback`` table — the agent's own "this tool would be more useful if…"
+lines, latest-per-tool on the dashboard's tool-usage card.
 
 Roadmap §5.7 adds the two housekeeping operations the daemon runs nightly:
 ``backup_to`` (SQLite's online backup API — WAL-safe, unlike copying the file)
@@ -148,6 +151,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at      TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS tool_feedback (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    investigation_id INTEGER,
+    tool             TEXT NOT NULL DEFAULT '',
+    suggestion       TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS suppressions (
     fingerprint TEXT PRIMARY KEY,
     until       TEXT NOT NULL DEFAULT '',   -- '' = forever
@@ -156,6 +167,7 @@ CREATE TABLE IF NOT EXISTS suppressions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_steps_investigation ON investigation_steps (investigation_id, seq);
+CREATE INDEX IF NOT EXISTS idx_tool_feedback_tool ON tool_feedback (tool, id);
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings (run_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status, id);
 """
@@ -177,6 +189,10 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # §5.6: the agent's full message history, JSON, capped — only written
         # when settings.store_transcripts is on. '' = not collected.
         ("transcript_json", "TEXT NOT NULL DEFAULT ''"),
+        # §5.6 eval harness: the investigation this row REPLAYS offline
+        # (same brief, same recorded tool results, different model/prompt).
+        # 0 = not a replay. Distinct from retry_of, which re-runs for real.
+        ("replay_of", "INTEGER NOT NULL DEFAULT 0"),
     ],
     "investigation_steps": [
         # §5.6: usage of the assistant turn that requested this call. When one
@@ -210,7 +226,7 @@ _INVESTIGATION_COLS = [
     "fingerprint", "host", "host_role", "agent_name", "model", "trigger", "status",
     "started_at", "finished_at", "input_tokens", "output_tokens", "n_steps",
     "brief_md", "report_md", "incomplete_reason", "outcome", "retry_of",
-    "approval_decision", "findings_json", "cost", "transcript_json",
+    "approval_decision", "findings_json", "cost", "transcript_json", "replay_of",
 ]
 
 _RUN_COLS = ["run_at", "kind", "overall", "model_used", "duration_s", "counts_json",
@@ -436,6 +452,56 @@ class IncidentStore:
                  "avg_ms": float(r["avg_ms"] or 0.0),
                  "tokens": int(r["tokens"] or 0)}
                 for r in cur.fetchall()]
+
+    # ------------------------------------------------------- tool feedback
+
+    def add_tool_feedback(self, investigation_id: int, tool: str, suggestion: str,
+                          created_at: str = "") -> int:
+        """Record one ``tool: suggestion`` line the agent wrote about its toolbox.
+
+        Append-only: the point is the agent's *latest* opinion per tool, and
+        keeping the history means a suggestion can be traced to the run that
+        produced it. Empty tool or suggestion is a no-op (returns 0).
+        """
+        tool = str(tool or "").strip()
+        suggestion = str(suggestion or "").strip()
+        if not tool or not suggestion:
+            return 0
+        cur = self._db.execute(
+            """INSERT INTO tool_feedback (investigation_id, tool, suggestion, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (int(investigation_id or 0), tool, suggestion, created_at or self._now()),
+        )
+        self._db.commit()
+        return int(cur.lastrowid or 0)
+
+    def latest_tool_feedback(self) -> dict[str, dict]:
+        """The newest suggestion per tool, as ``{tool: row}`` — one query.
+
+        Newest by row id (the insert order is the run order), so a tool whose
+        feedback the agent stopped repeating keeps showing its last opinion
+        until something newer is written.
+        """
+        cur = self._db.execute(
+            """SELECT f.tool AS tool, f.suggestion AS suggestion,
+                      f.investigation_id AS investigation_id, f.created_at AS created_at
+               FROM tool_feedback f
+               JOIN (SELECT tool, MAX(id) AS id FROM tool_feedback GROUP BY tool) last
+                 ON last.id = f.id
+               ORDER BY f.tool"""
+        )
+        return {str(r["tool"]): {"tool": str(r["tool"]),
+                                 "suggestion": str(r["suggestion"] or ""),
+                                 "investigation_id": int(r["investigation_id"] or 0),
+                                 "created_at": str(r["created_at"] or "")}
+                for r in cur.fetchall()}
+
+    def tool_feedback(self, investigation_id: int) -> list[dict]:
+        cur = self._db.execute(
+            "SELECT * FROM tool_feedback WHERE investigation_id = ? ORDER BY id",
+            (int(investigation_id),),
+        )
+        return [dict(r) for r in cur.fetchall()]
 
     def counts_by_status(self) -> dict:
         cur = self._db.execute(
@@ -740,6 +806,12 @@ class IncidentStore:
 
         # children first, while their parents are still selectable
         _delete("investigation_steps",
+                "investigation_id IN (SELECT id FROM investigations "
+                "WHERE finished_at != '' AND finished_at < ?)", (cutoff,))
+        # tool feedback follows its investigation: the card links back to the
+        # run that produced the suggestion, and a link into deleted history is
+        # worse than an empty line.
+        _delete("tool_feedback",
                 "investigation_id IN (SELECT id FROM investigations "
                 "WHERE finished_at != '' AND finished_at < ?)", (cutoff,))
         _delete("investigations", "finished_at != '' AND finished_at < ?", (cutoff,))

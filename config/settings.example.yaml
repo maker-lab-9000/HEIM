@@ -80,6 +80,8 @@ retention_days: 120           # prune resolved incidents, findings, runs and fin
 
 # Keep the agent's full message history with each investigation — for
 # post-morteming wrong RCAs; large (capped at 512 KB per investigation).
+# Also the prerequisite for `heim replay <id>`: the stored transcript is the
+# cassette an offline replay serves back to another model.
 store_transcripts: false
 
 # Maps Prometheus `instance` label address prefixes to host names — used by the

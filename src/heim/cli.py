@@ -9,6 +9,8 @@
     heim incidents mute FP [--days N]  suppress a false-positive fingerprint
     heim incidents unmute FP           lift a suppression
     heim investigations [--show ID]    list / inspect tracked investigations
+    heim replay ID [--model M]         re-run a stored investigation offline
+                 [--prompt-file F]     against its recorded tool results
     heim jobs [--limit N]              show the investigation job queue
     heim dashboard [--host] [--port]   serve the read-only web dashboard
     heim daemon                        run scheduler + poller + approvals
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import difflib
 import json
 import logging
 import sys
@@ -184,6 +187,98 @@ async def _cmd_investigate(args) -> int:
     print(f"\n{'⚠️ INCOMPLETE' if result['incomplete'] else '✅ complete'} — {result['steps']} steps, "
           f"{result['input_tokens']:,} in / {result['output_tokens']:,} out tokens\n")
     print(result["report_md"])
+    return 0
+
+
+def _money(value: float | int | None) -> str:
+    """0 means the model has no price entry — unpriced, not free (§5.6)."""
+    return f"{float(value):.4f}" if value else "—"
+
+
+def replay_comparison(result: dict) -> str:
+    """Original vs replay, as the CLI prints it (pure, so it is testable).
+
+    The interesting output is the bottom half: the two root-cause sections in
+    full, then a unified diff of them. Everything above is the context needed
+    to read that diff honestly — which model, how many steps, and *how much of
+    the replay's evidence was really the original's* (the cassette line).
+    """
+    from heim.reports.render import extract_sections
+
+    orig = result.get("original") or {}
+    stats = result.get("cassette") or {}
+    o_sections = extract_sections(str(orig.get("report_md") or ""))
+    r_sections = extract_sections(str(result.get("report_md") or ""))
+
+    def row(label: str, left: str, right: str) -> str:
+        return f"{label:<12s} {left:<30s} {right}"
+
+    lines = [
+        f"replay #{result['id']} of investigation #{result['replay_of']} — {result['host']}",
+        "",
+        row("", "original", "replay"),
+        row("model", str(orig.get("model") or "—"), str(result.get("model") or "—")),
+        row("status", str(orig.get("status") or "—"), str(result.get("status") or "—")),
+        row("steps", str(orig.get("n_steps") or 0), str(result.get("steps") or 0)),
+        row("tokens",
+            f"{int(orig.get('input_tokens') or 0):,} in / {int(orig.get('output_tokens') or 0):,} out",
+            f"{result.get('input_tokens', 0):,} in / {result.get('output_tokens', 0):,} out"),
+        row("cost", _money(orig.get("cost")), _money(result.get("cost"))),
+        row("confidence", o_sections["confidence"] or "—", r_sections["confidence"] or "—"),
+        "",
+        f"cassette     {stats.get('recorded', 0)} recorded · {stats.get('exact', 0)} exact · "
+        f"{stats.get('fuzzy', 0)} fuzzy · {stats.get('missed', 0)} missed · "
+        f"{stats.get('unused', 0)} unused",
+    ]
+    if result.get("prompt_file"):
+        lines.append(f"prompt       {result['prompt_file']}")
+    if stats.get("fuzzy"):
+        lines.append("             (fuzzy = same tool, different arguments — the replay saw "
+                     "plausible evidence, not the answer to the call it made)")
+
+    o_rc = str(o_sections["root_cause"] or "").strip()
+    r_rc = str(r_sections["root_cause"] or "").strip()
+    lines += [
+        "",
+        "─" * 70,
+        "ROOT CAUSE — original",
+        "─" * 70,
+        o_rc or "(none)",
+        "",
+        "─" * 70,
+        f"ROOT CAUSE — replay ({result.get('model') or '?'})",
+        "─" * 70,
+        r_rc or "(none)",
+        "",
+        "─" * 70,
+        "DIFF (original → replay)",
+        "─" * 70,
+    ]
+    diff = list(difflib.unified_diff(
+        o_rc.splitlines(), r_rc.splitlines(),
+        fromfile="original", tofile="replay", lineterm="",
+    ))
+    lines += diff if diff else ["(identical root-cause text)"]
+    return "\n".join(lines)
+
+
+async def _cmd_replay(args) -> int:
+    from heim.pipelines.replay import ReplayError, run_replay
+    from heim.runtime import build_runtime
+
+    # dry_run: a replay opens no channels by construction, but this also keeps
+    # any incidental write (out/) local and matches operator expectations.
+    rt = build_runtime(dry_run=True)
+    try:
+        result = await run_replay(rt, args.id, model=args.model,
+                                  prompt_file=args.prompt_file)
+    except ReplayError as exc:
+        print(f"error: {exc}")
+        return 2
+    if result is None:
+        print("replay failed — see the log")
+        return 1
+    print(replay_comparison(result))
     return 0
 
 
@@ -376,6 +471,11 @@ def _build_parser() -> argparse.ArgumentParser:
     iv.add_argument("--show", type=int, metavar="ID",
                     help="print one investigation with its step timeline and report")
 
+    rp = sub.add_parser("replay", help="replay a stored investigation offline (eval harness)")
+    rp.add_argument("id", type=int, help="investigation id to replay")
+    rp.add_argument("--model", help="model to replay on (default: the investigator's)")
+    rp.add_argument("--prompt-file", help="candidate system prompt to replay with")
+
     db = sub.add_parser("dashboard", help="serve the read-only web dashboard")
     db.add_argument("--host", default="0.0.0.0")
     db.add_argument("--port", type=int, default=8300)
@@ -390,7 +490,7 @@ def main() -> None:
     handler = {
         "check": _cmd_check, "daily": _cmd_daily, "poll": _cmd_poll,
         "investigate": _cmd_investigate, "incidents": _cmd_incidents,
-        "investigations": _cmd_investigations, "jobs": _cmd_jobs,
+        "investigations": _cmd_investigations, "jobs": _cmd_jobs, "replay": _cmd_replay,
         "dashboard": _cmd_dashboard, "daemon": _cmd_daemon,
     }[args.cmd]
     try:

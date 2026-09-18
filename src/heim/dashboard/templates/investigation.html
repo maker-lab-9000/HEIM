@@ -26,6 +26,12 @@
     <div class="kv"><dt class="eyebrow">lineage</dt>
       <dd class="mono"><a href="/investigations/{{ inv.retry_of }}">re-run of #{{ inv.retry_of }}</a></dd></div>
     {%- endif %}
+    {#- a replay ran offline against #N's recorded tool results (§5.6): same
+        brief, same evidence, possibly another model or prompt -#}
+    {%- if inv.replay_of %}
+    <div class="kv"><dt class="eyebrow">lineage</dt>
+      <dd class="mono"><a href="/investigations/{{ inv.replay_of }}">replay of #{{ inv.replay_of }}</a></dd></div>
+    {%- endif %}
   </dl>
   {% include "partials/_inv_acts.html" %}
 </section>

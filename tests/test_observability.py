@@ -345,6 +345,12 @@ async def test_transcript_is_collected_only_when_asked(monkeypatch):
 
 
 async def test_transcript_tool_results_are_clipped(monkeypatch):
+    """The clip is 8 KB — the same ceiling the tools themselves apply to their
+    output (``clip_bytes``), so a stored transcript is lossless in practice
+    and can be served back as a replay cassette (§5.6 eval harness)."""
+    from heim.agent.runner import TRANSCRIPT_RESULT_CHARS
+
+    assert TRANSCRIPT_RESULT_CHARS == 8192
     _patch_client(monkeypatch, [
         _Resp([_ToolUse("a", "stub", {})], "tool_use"),
         _Resp([_Text(SUMMARY_OUTPUT)], "end_turn"),
@@ -352,7 +358,16 @@ async def test_transcript_tool_results_are_clipped(monkeypatch):
     res = await run_agent(_agent_cfg(), system="s", user_prompt="u",
                           tools=[StubTool("stub", result="z" * 50_000)],
                           collect_transcript=True)
-    assert res.transcript[2]["content"][0]["content"] == "z" * 2000
+    assert res.transcript[2]["content"][0]["content"] == "z" * 8192
+    # a realistic (already tool-clipped) result survives whole
+    _patch_client(monkeypatch, [
+        _Resp([_ToolUse("a", "stub", {})], "tool_use"),
+        _Resp([_Text(SUMMARY_OUTPUT)], "end_turn"),
+    ])
+    whole = await run_agent(_agent_cfg(), system="s", user_prompt="u",
+                            tools=[StubTool("stub", result="q" * 8192)],
+                            collect_transcript=True)
+    assert whole.transcript[2]["content"][0]["content"] == "q" * 8192
 
 
 def test_transcript_cap_keeps_the_newest_turns():

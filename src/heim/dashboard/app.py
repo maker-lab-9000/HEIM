@@ -474,11 +474,14 @@ def create_app(config: Config | None = None) -> FastAPI:
              "meta": "waiting for the daemon" if queued else "queue empty",
              "href": "/investigations"},
         ]
+        feedback = reader.read(lambda s: s.latest_tool_feedback())
+        tool_usage = _tool_usage(reader.read(lambda s: s.tool_usage(limit=12)), feedback)
         return page(
             request, "overview.html", page_title="overview", kpis=kpis,
             latest_run=latest, run_list=run_list,
             health=_health_card(latest, sev_counts, cfg, open_incidents),
-            tool_usage=_tool_usage(reader.read(lambda s: s.tool_usage(limit=12))),
+            tool_usage=tool_usage,
+            tool_feedback_general=_general_feedback(feedback, tool_usage),
             investigations=invs[:8], findings=findings[:6],
             # a recorded run is activity too — the page used to claim "no
             # activity yet" while the latest-runs card had something to say
@@ -859,25 +862,47 @@ def _counts_line(sev_counts: dict[str, int]) -> str:
     return f"{line} ({' · '.join(parts)})" if parts else line
 
 
-def _tool_usage(rows: list[dict]) -> list[dict]:
+def _tool_usage(rows: list[dict], feedback: dict[str, dict] | None = None) -> list[dict]:
     """The tool-usage card's rows: the store's grouping plus a share width.
 
     The bar is a single-hue magnitude encoding scaled to the busiest row —
     identity stays with the tool badge next to it (the repo's dataviz rule:
     color follows the entity, never the quantity), and the calls number is
     right there, so the bar is decoration on a fact rather than the fact.
+
+    ``feedback`` (``store.latest_tool_feedback()``) attaches the agent's own
+    latest note about that tool. The same tool can appear on several rows
+    (different agent/model); the note is attached to the FIRST — the busiest —
+    so the card says it once rather than repeating itself down the table.
     """
     top = max((int(r.get("calls") or 0) for r in rows), default=0)
+    seen: set[str] = set()
     out = []
     for r in rows:
         calls = int(r.get("calls") or 0)
+        tool = str(r.get("tool") or "")
+        note = (feedback or {}).get(tool) if tool not in seen else None
+        seen.add(tool)
         out.append({
             **r,
             "tool_key": fmt.tool_key(r.get("tool")),
             "model_short": fmt.short_model(r.get("model")),
             "share": round(calls / top * 100, 1) if top else 0.0,
+            "feedback": note,
         })
     return out
+
+
+def _general_feedback(feedback: dict[str, dict], rows: list[dict]) -> list[dict]:
+    """Feedback whose tool name matches no tool the card is showing.
+
+    A model that writes ``logs: …`` instead of a real tool name is telling you
+    something (usually that the prompt's tool list drifted), so it is shown as
+    a footnote rather than dropped — the alternative is silent data loss in the
+    one place the drift would be visible.
+    """
+    known = {str(r.get("tool") or "") for r in rows}
+    return [v for k, v in sorted(feedback.items()) if k not in known]
 
 
 def _host_health(cfg: Config, open_incidents: list[dict]) -> list[dict]:

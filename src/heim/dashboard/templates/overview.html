@@ -98,9 +98,25 @@
             not that the calls were free -#}
         <td class="num mono c-tok">{% if r.tokens %}{{ r.tokens|tokens }}{% else %}{{ DASH }}{% endif %}</td>
       </tr>
+      {#- the agent's own latest note on this tool, from the optional
+          '## Tooling feedback' report section — what would have made the
+          tool more useful, said by the thing that used it -#}
+      {%- if r.feedback %}
+      <tr class="tufb"><td colspan="7" class="ink3">💡 {{ r.feedback.suggestion }}
+        · <a class="mono" href="/investigations/{{ r.feedback.investigation_id }}">#{{ r.feedback.investigation_id }}</a>
+        · {{ m.when(r.feedback.created_at) }}</td></tr>
+      {%- endif %}
       {%- endfor %}
     </tbody>
   </table>
+  {%- if tool_feedback_general %}
+  {#- feedback naming something that is not one of the tools above: kept as a
+      footnote rather than dropped, because it is usually the prompt drifting -#}
+  {%- for f in tool_feedback_general %}
+  <p class="ink3 tufb-note">💡 general: {{ f.tool }}: {{ f.suggestion }}
+    · <a class="mono" href="/investigations/{{ f.investigation_id }}">#{{ f.investigation_id }}</a></p>
+  {%- endfor %}
+  {%- endif %}
   {%- else %}
   <p class="empty">No tool calls recorded yet — the first investigation fills this in.</p>
   {%- endif %}

@@ -27,7 +27,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (557 tests). Design
+covered by golden tests against the original JavaScript behavior (596 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -37,7 +37,7 @@ edges** (tools, channels, pipelines).
 |---|---|
 | Detection | 49-query trend catalog · per-day averages, change %, warn/crit flags · Prometheus alert rules with `qid` labels (fast path) · anti-flap hysteresis (2 clear polls / 2 missed runs) |
 | Incidents | SQLite store · deterministic fingerprints (`host\|qid\|name`) · open/clearing/resolved lifecycle · warn→crit escalation · per-fingerprint dispatch lock · poller-vs-daily ownership split (`[alert]` prefix) · false-positive verdicts + timed/forever suppression (pipeline-level, analyst hint) |
-| Agent | Anthropic-native tool loop · soft prompt budget + hard in-loop step cap · retries · real token accounting (run total **and** per-turn attribution per step) · per-run cost from a config price table · optional size-capped full transcript · output salvage (`## Summary` contract, leaked-tool-call detection) |
+| Agent | Anthropic-native tool loop · soft prompt budget + hard in-loop step cap · retries · real token accounting (run total **and** per-turn attribution per step) · per-run cost from a config price table · optional size-capped full transcript · output salvage (`## Summary` contract, leaked-tool-call detection) · offline replay of a stored run against another model/prompt from its recorded tool results (`heim replay`) · agent-written tooling feedback indexed per tool |
 | Tools | Guarded read-only SSH · PromQL instant/range with token-compact encoding · metric discovery · GET-allowlisted HA and Proxmox APIs · per-call Telegram live feed + local `audit.jsonl` |
 | Human loop | Telegram inline-button approvals (long-poll, no inbound ports) raced against a store-written decision (dashboard/CLI, works with no Telegram at all) · decline/timeout → re-proposed next run · outcome confirm (Resolved / Needs human) |
 | Delivery | n8n-faithful HTML dashboard email · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
@@ -50,7 +50,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 557 tests, must stay green
+.venv/bin/pytest -q                    # 596 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -296,7 +296,7 @@ investigation with the same host/role/fingerprint, findings re-synthesized from 
 incident row, and threads `retry_of` through `InvestigationRequest` into the new
 `investigations` row. Not done: prepending the prior root cause to the brief.
 
-### 5.6 Deeper agent observability — ✅ implemented (except the eval harness)
+### 5.6 Deeper agent observability — ✅ implemented
 
 - **Per-step token attribution** — ✅ implemented. The runner reads each API response's
   usage and hands it to `on_step(seq, tool, args, result, duration_ms, turn_in,
@@ -319,7 +319,9 @@ incident row, and threads `retry_of` through `InvestigationRequest` into the new
   the overview's `tokens 24h` tile.
 - **Full transcripts** — ✅ implemented. `settings.store_transcripts` (default off, it
   is large) makes `run_agent(..., collect_transcript=True)` serialize the message
-  history to plain dicts (text / tool_use / tool_result clipped to 2000 chars each)
+  history to plain dicts (text / tool_use / tool_result clipped to
+  `TRANSCRIPT_RESULT_CHARS` = **8192** chars each — the same 8 KB the tools clip their
+  own output at, so a stored transcript is lossless in practice and can be replayed)
   into `investigations.transcript_json`, capped at **512 KB by dropping the OLDEST
   turns** — the newest are the ones that produced the conclusion — with a marker entry
   recording how many went. The detail page renders it as a folded
@@ -335,9 +337,36 @@ incident row, and threads `retry_of` through `InvestigationRequest` into the new
   cannot carry the basic-auth password, and the payload is aggregates only — no
   hostnames, fingerprints or report text). `prometheus/prometheus.yml` carries the
   scrape job, commented out.
-- Still open — **an evaluation harness**: replay a stored brief + tool transcripts
-  against a new model/prompt and diff the conclusions (the PAM 90 test-bench habit,
-  systematized). The stored transcripts above are the input it was waiting for.
+- **Eval / replay harness** — ✅ implemented. `heim replay <id> [--model M]
+  [--prompt-file F]` re-runs a stored investigation **offline**: same brief, same system
+  prompt (rebuilt through `investigate.build_system_prompt`, or a candidate file put
+  through the same jinja + `${VAR}` treatment), and the *original's* tool results served
+  back from `transcript_json` as a **cassette** (`agent/cassette.py`) — so the question
+  it answers is "would model X have concluded the same thing on the same evidence?".
+  The only outbound call is the LLM: no SSH/Prometheus/HA/Proxmox (`CassetteTool`
+  carries the real tool's YAML definition but never imports the live class), no
+  approval, no email/Telegram/HA/Loki.
+  **Cassette semantics**, in tiers, each entry served exactly once: `exact` (same tool
+  + canonical-JSON-equal args), else `fuzzy` (the oldest unused entry for the same
+  tool — plausible evidence, not the answer to the call actually made, which is why it
+  is counted separately), else a marked stub `{"replay": "no recorded result …"}` —
+  never a fabricated result, since an invented `df` output would corrupt the very
+  comparison the replay exists to make. Pairing is **positional** (the §5.6
+  serialization carries no `tool_use_id`), and the tests build their fixtures by running
+  the real `run_agent`, so parser and format cannot drift apart silently.
+  The run is stored as a normal investigation with `trigger='replay'` and the new
+  `investigations.replay_of` column (the detail page shows "replay of #N"); the CLI
+  prints original-vs-replay model/status/steps/tokens/cost, the cassette hit stats, the
+  two `## Root cause` sections and a unified diff of them.
+- **Tooling feedback** — ✅ implemented. The investigator prompt's `[OUTPUT]` block now
+  allows an OPTIONAL final `## Tooling feedback` section: 0–3 `tool_name: suggestion`
+  lines about what would have made *this* investigation faster or more certain. The
+  section stays in the report (email/Telegram included); `reports.render
+  .extract_tool_feedback` also indexes it into the `tool_feedback` table
+  (`store.add_tool_feedback` / `latest_tool_feedback`), written by both pipelines for
+  complete **and** incomplete runs. The dashboard's tool-usage card shows the latest
+  suggestion per tool under its row (and unmatched names as a `💡 general:` footnote,
+  because a name that matches no tool is the prompt drifting, not noise to drop).
 
 ### 5.7 Smaller, high-value items
 
@@ -386,7 +415,7 @@ rollback design; multi-tenant SaaS-ification; replacing Grafana for time-series 
 ## 6. Notes for AI agents working here
 
 - Read `docs/ARCHITECTURE.md` first; it maps every module to its n8n source node.
-- Run `.venv/bin/pytest -q` before and after your change; 394 must not regress.
+- Run `.venv/bin/pytest -q` before and after your change; 596 must not regress.
 - Ported modules (docstring names an n8n node) are behavior-frozen — see §2.
 - Never log, commit, or email secrets; deployment identity comes from `.env` via
   `${VAR}` interpolation and must stay out of the tree.

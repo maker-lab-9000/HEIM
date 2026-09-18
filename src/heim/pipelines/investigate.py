@@ -13,7 +13,10 @@ runner's ``on_step`` callback streams the agent's tool timeline into
 ``investigation_steps`` as it happens, now with the per-turn token
 attribution and (optionally, ``settings.store_transcripts``) the agent's full
 message history, capped at 512 KB; the finished row also carries the run's
-cost in ``settings.currency`` (roadmap §5.6). The agent phase runs under a
+cost in ``settings.currency`` (roadmap §5.6). The report's optional
+``## Tooling feedback`` section — the agent's own notes on what would have
+made a tool more useful — is indexed into ``tool_feedback`` on the way past
+(``record_tool_feedback``, shared with the replay pipeline). The agent phase runs under a
 process-wide semaphore (``settings.max_concurrent_investigations``) acquired
 *after* approval, so a six-hour approval wait never occupies a slot.
 
@@ -30,6 +33,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -37,7 +41,12 @@ from heim.agent.runner import run_agent
 from heim.config import expand_env
 from heim.costing import cost_of
 from heim.channels.telegram import chunk_text
-from heim.reports.render import extract_sections, investigation_email, salvage
+from heim.reports.render import (
+    extract_sections,
+    extract_tool_feedback,
+    investigation_email,
+    salvage,
+)
 from heim.runtime import Runtime
 from heim.tools.base import ToolContext, load_tools
 
@@ -99,21 +108,41 @@ def _approval_text(req: InvestigationRequest, ftext: str) -> str:
     )
 
 
-def _build_system_prompt(rt: Runtime, jenv: Environment, req: InvestigationRequest) -> str:
+def build_system_prompt(rt: Runtime, jenv: Environment, host: str, *,
+                        prompt_file: str | Path | None = None) -> str:
+    """Render the investigator's system prompt for ``host``.
+
+    Factored out of the pipeline so the replay harness (§5.6) can rebuild a
+    *byte-identical* prompt for a stored investigation instead of an
+    approximation of one — and, with ``prompt_file``, swap in a candidate
+    prompt that still goes through the same jinja render + ``${VAR}``
+    expansion, so a prompt experiment differs from the baseline in exactly the
+    text being tested.
+    """
     cfg = rt.config
     agent = cfg.agents["investigator"]
-    ordered = sorted(cfg.hosts.values(), key=lambda h: (h.name != req.host, h.name))
+    ordered = sorted(cfg.hosts.values(), key=lambda h: (h.name != host, h.name))
     facts = "\n".join(h.facts.strip() for h in ordered if h.facts.strip())
     privileges = "\n".join(h.privileges.strip() for h in cfg.hosts.values() if h.privileges.strip())
+    if prompt_file:
+        source = str(prompt_file)
+        template = jenv.from_string(Path(prompt_file).read_text())
+    else:
+        source = agent.prompt
+        template = jenv.get_template(agent.prompt)
     return expand_env(
-        jenv.get_template(agent.prompt).render(
+        template.render(
             now=rt.now_iso(),
             facts=facts,
             privileges=privileges or "(no SSH privileges configured)",
             soft_step_budget=agent.soft_step_budget,
         ),
-        source=agent.prompt,
+        source=source,
     )
+
+
+def _build_system_prompt(rt: Runtime, jenv: Environment, req: InvestigationRequest) -> str:
+    return build_system_prompt(rt, jenv, req.host)
 
 
 def _action(host: str, phase: str, fingerprint: str, message: str, ts: str) -> dict:
@@ -154,6 +183,25 @@ def _step_recorder(rt: Runtime, investigation_id: int):
             output_tokens=int(turn_out or 0),
         )
     return on_step
+
+
+def record_tool_feedback(rt: Runtime, investigation_id: int, report_md: str) -> int:
+    """Persist the report's optional ``## Tooling feedback`` lines.
+
+    Called for complete *and* incomplete runs — an investigation that ran out
+    of evidence is exactly the one with something to say about its tools — and
+    from the replay pipeline through the same path, so a replayed model's
+    opinion lands next to the original's. Never raises: a suggestion is a nice
+    extra, not part of the report contract.
+    """
+    written = 0
+    try:
+        for tool, suggestion in extract_tool_feedback(report_md or ""):
+            written += 1 if rt.store.add_tool_feedback(
+                investigation_id, tool, suggestion, created_at=rt.now_iso()) else 0
+    except Exception:
+        log.exception("recording tool feedback for investigation #%s failed", investigation_id)
+    return written
 
 
 #: Hard ceiling on a stored transcript (roadmap §5.6). Transcripts exist for
@@ -359,6 +407,9 @@ async def run_investigation(
 
             # --------------------------------------------------------- rendering
             report = salvage(result.output_text, ftext)
+            # the agent's own notes on its toolbox (optional section) — kept in
+            # the report AND indexed per tool for the dashboard's usage card
+            record_tool_feedback(rt, inv_id, report.report_md)
             # §5.6: price the run. An unpriced model stores 0 — the dashboard
             # renders that as an em dash, never as "$0.00".
             cost = cost_of(agent_cfg.model, result.input_tokens, result.output_tokens,
