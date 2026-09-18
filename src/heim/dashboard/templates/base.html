@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ page_title }} · HEIM</title>
+<link rel="stylesheet" href="/static/heim.css">
+<script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<nav class="rail" aria-label="Sections">
+  <a class="mark" href="/"><span class="spark" aria-hidden="true">✳</span><span class="word">HEIM</span></a>
+  <ul class="nav">
+    {%- set path = request.url.path %}
+    {%- for item in nav %}
+    {%- set on = path == item.href or (item.href != '/' and path.startswith(item.href)) %}
+    <li><a href="{{ item.href }}"{% if on %} class="on" aria-current="page"{% endif %}><span
+      class="ico" aria-hidden="true">{{ item.icon }}</span><span class="lbl">{{ item.label }}</span></a></li>
+    {%- endfor %}
+  </ul>
+  <p class="daemon {{ 'live' if daemon.ok else 'quiet' }}">
+    <span class="dot" aria-hidden="true">{{ '●' if daemon.ok else '○' }}</span>
+    <span class="lbl">{{ daemon.label }}{% if daemon.when %} · {{ daemon.when }}{% endif %}</span>
+  </p>
+</nav>
+
+<header class="topbar">
+  <h1 class="ptitle">{{ page_title }}</h1>
+  <div class="tmeta">
+    <span class="chip">{{ env_chip }}</span>
+    <span class="mono clock">{{ clock }}</span>
+  </div>
+</header>
+
+<main id="main">
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

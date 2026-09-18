@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m %}
+{% block content %}
+
+{% if empty %}
+  <section class="card">
+    <p class="empty">No activity yet. The daemon records every run here — check back after the next poll.</p>
+  </section>
+{% else %}
+
+<section class="kpis" aria-label="Health tiles">
+  {%- for k in kpis %}
+  <div class="stat{{ ' is-running' if k.running }}">
+    <p class="eyebrow">{{ k.label }}</p>
+    {%- if k.href %}
+    <a class="hero mono" href="{{ k.href }}">{{ k.value }}</a>
+    {%- else %}
+    <p class="hero mono">{{ k.value }}</p>
+    {%- endif %}
+    <p class="meta">{{ k.meta }}</p>
+  </div>
+  {%- endfor %}
+</section>
+
+<section class="card">
+  <h2 class="eyebrow">latest daily run</h2>
+  {%- if latest_run %}
+  <p class="runline mono">daily · {{ latest_run.run_at|day }} {{ latest_run.run_at|clock }}
+    · {{ latest_run.model_used or DASH }} · overall {{ m.pill(latest_run.overall) }}
+    · {{ latest_run.duration_s|dur_s }}</p>
+  {%- if headline %}
+  <p class="headline">{{ m.sev(headline.severity) }} <strong>{{ headline.summary }}</strong>
+    <span class="mono ink2">{{ headline.host }}{% if headline.metric %} · {{ headline.metric }}{% endif %}</span></p>
+  {%- if headline.detail %}<p class="prose">{{ headline.detail }}</p>{% endif %}
+  <p><a href="/findings">All findings from this run</a></p>
+  {%- else %}
+  <p class="empty">That run reported no findings.</p>
+  {%- endif %}
+  {%- else %}
+  <p class="empty">No daily run recorded yet. The first scheduled run writes the headline here.</p>
+  {%- endif %}
+</section>
+
+<section class="card">
+  <h2 class="eyebrow">recent investigations</h2>
+  {%- if investigations %}
+  <table class="tbl">
+    <thead><tr>
+      <th scope="col" class="c-id">id</th><th scope="col">status</th>
+      <th scope="col">host</th><th scope="col">fingerprint</th>
+      <th scope="col" class="num">steps</th><th scope="col">started</th>
+    </tr></thead>
+    <tbody>
+      {%- for r in investigations %}
+      <tr>
+        <td class="c-id mono"><a href="/investigations/{{ r.id }}">#{{ r.id }}</a></td>
+        <td>{{ m.pill(r.status) }}</td>
+        <td>{{ r.host }}</td>
+        <td class="mono ink2" title="{{ r.fingerprint }}">{{ r.fingerprint|fp }}</td>
+        <td class="num mono">{{ r.n_steps }}</td>
+        <td>{{ m.when(r.started_at) }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  <p><a href="/investigations">All investigations</a></p>
+  {%- else %}
+  <p class="empty">No investigations yet. They start when an incident opens on an investigable host.</p>
+  {%- endif %}
+</section>
+
+<section class="card">
+  <h2 class="eyebrow">recent findings</h2>
+  {%- if findings %}
+  <ul class="flist">
+    {%- for f in findings %}
+    <li>{{ m.sev(f.severity) }} <span class="mono ink2">{{ f.host }}</span>
+      <span class="fsum">{{ f.summary }}</span>
+      <span class="ink3 mono">{{ f.run_at|rel }}</span></li>
+    {%- endfor %}
+  </ul>
+  <p><a href="/findings">Findings history</a></p>
+  {%- else %}
+  <p class="empty">No findings recorded yet. The daily analysis writes them here.</p>
+  {%- endif %}
+</section>
+
+{% endif %}
+{% endblock %}

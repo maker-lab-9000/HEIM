@@ -1,0 +1,40 @@
+{% import "partials/_macros.html" as m %}
+<div id="transcript"{% if inv.status == 'running' %} hx-get="/investigations/{{ inv.id }}/transcript" hx-trigger="every 5s" hx-swap="outerHTML"{% endif %}>
+
+  {%- if burn %}
+  <div class="burn" role="img"
+       aria-label="Tool-output share per step — {{ burn|length }} steps">
+    {%- for s in burn %}
+    <span class="seg t-{{ s.tool_key }}{{ ' blocked' if s.blocked }}"
+          style="width:{{ s.pct }}%" title="{{ s.title }}"></span>
+    {%- endfor %}
+  </div>
+  <p class="burn-note eyebrow">tool-output share per step</p>
+  {%- endif %}
+
+  <ol class="transcript">
+    {%- for s in steps %}
+    <li class="entry{{ ' blocked' if s.blocked }}">
+      <span class="seq mono">{{ '%02d'|format(s.seq) }}</span>
+      <div class="ebody">
+        <p class="ehdr">{{ m.tool(s.tool) }}<span class="smeta mono">{% if s.blocked %}<span
+          class="st-crit">⛔ blocked</span> · {% endif %}{{ s.duration_ms|dur_ms }} · {{ s.result_bytes|size }}</span></p>
+        <pre class="cmd mono"><span class="prompt" aria-hidden="true">$ </span>{{ s|command }}</pre>
+        {%- if s.result_preview %}
+        {%- set head = (s.result_preview.strip().splitlines()|first)|default('', true) %}
+        <details class="res">
+          <summary><span class="rline mono">→ {{ head|truncate(120, True, '…') }}</span><span class="exp">expand</span></summary>
+          <pre class="mono rfull">{{ s.result_preview }}</pre>
+        </details>
+        {%- else %}
+        <p class="rline mono ink3">→ no output recorded</p>
+        {%- endif %}
+      </div>
+    </li>
+    {%- else %}
+    <li class="entry-empty">
+      <p class="empty">{% if inv.status == 'running' %}Waiting for the agent's first tool call — this page follows along.{% else %}No steps recorded for this investigation.{% endif %}</p>
+    </li>
+    {%- endfor %}
+  </ol>
+</div>

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m %}
+{% block content %}
+
+<nav class="crumb" aria-label="Breadcrumb">
+  <a href="/investigations">investigations</a> <span aria-hidden="true">/</span>
+  <span class="mono">#{{ inv.id }}</span>
+</nav>
+
+<section class="card head">
+  <h2 class="ihost">{{ inv.host }} {{ m.pill(inv.status) }}</h2>
+  <dl class="imeta">
+    <dt class="eyebrow">trigger</dt><dd class="eyebrow">{{ inv.trigger or DASH }}</dd>
+    <dt class="eyebrow">agent</dt><dd class="mono">{{ inv.agent_name or 'investigator' }} · {{ inv.model or DASH }}</dd>
+    <dt class="eyebrow">tokens</dt><dd class="mono">{{ inv.input_tokens|tokens }} in → {{ inv.output_tokens|tokens }} out</dd>
+    <dt class="eyebrow">duration</dt><dd class="mono">{% if inv.status == 'running' %}{{ elapsed(inv.started_at) }} so far{% else %}{{ duration(inv.started_at, inv.finished_at) }}{% endif %}</dd>
+    <dt class="eyebrow">started</dt><dd>{{ m.when(inv.started_at) }}</dd>
+    <dt class="eyebrow">fingerprint</dt><dd class="mono ink2">{{ inv.fingerprint or DASH }}</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <h2 class="eyebrow">transcript · {{ steps|length }} step{{ '' if steps|length == 1 else 's' }}</h2>
+  {% include "partials/_transcript.html" %}
+</section>
+
+{% if report_html %}
+<section class="card">
+  <h2 class="eyebrow">report</h2>
+  <div class="prose">{{ report_html|safe }}</div>
+</section>
+{% elif inv.status == 'running' or inv.status == 'pending_approval' %}
+<section class="card">
+  <h2 class="eyebrow">report</h2>
+  <p class="empty">No report yet — it is written when the agent finishes.</p>
+</section>
+{% endif %}
+
+{% if outcome %}
+<p class="outcome {{ outcome.cls }}"><span class="dot" aria-hidden="true">{{ outcome.icon }}</span>{{ outcome.text }}</p>
+{% endif %}
+{% endblock %}

@@ -115,8 +115,11 @@ _FINDING_FIELDS = ["host", "metric", "severity", "trend", "summary", "detail", "
 
 
 class IncidentStore:
-    def __init__(self, path: str | Path):
-        self._db = sqlite3.connect(str(path))
+    def __init__(self, path: str | Path, *, check_same_thread: bool = True):
+        # ``check_same_thread=False`` is used by the read-only dashboard, whose
+        # connection is created at startup and read from the server's event
+        # loop thread; it serializes its own access (see dashboard/app.py).
+        self._db = sqlite3.connect(str(path), check_same_thread=check_same_thread)
         self._db.row_factory = sqlite3.Row
         try:
             self._db.execute("PRAGMA journal_mode=WAL")

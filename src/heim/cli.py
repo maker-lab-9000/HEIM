@@ -6,6 +6,7 @@
     heim investigate --host H ...      run one investigation
     heim incidents [--all]             show the incident store
     heim investigations [--show ID]    list / inspect tracked investigations
+    heim dashboard [--host] [--port]   serve the read-only web dashboard
     heim daemon                        run scheduler + poller + approvals
 
 --dry-run keeps side effects local: emails become HTML files under out/,
@@ -213,6 +214,20 @@ async def _cmd_investigations(args) -> int:
     return 0
 
 
+async def _cmd_dashboard(args) -> int:
+    import uvicorn  # heavy + optional at import time; keep it in the handler
+
+    from heim.dashboard.app import create_app
+
+    app = create_app(load_config())
+    print(f"dashboard on http://{args.host}:{args.port} "
+          f"({'basic auth on' if env('HEIM_DASHBOARD_TOKEN') else 'no auth — keep it LAN-only'})",
+          flush=True)
+    server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, log_level="info"))
+    await server.serve()
+    return 0
+
+
 async def _cmd_daemon(args) -> int:
     from heim.daemon import run_daemon
 
@@ -251,6 +266,10 @@ def main() -> None:
     iv.add_argument("--show", type=int, metavar="ID",
                     help="print one investigation with its step timeline and report")
 
+    db = sub.add_parser("dashboard", help="serve the read-only web dashboard")
+    db.add_argument("--host", default="0.0.0.0")
+    db.add_argument("--port", type=int, default=8300)
+
     sub.add_parser("daemon", help="run scheduler + poller + approval listener")
 
     args = p.parse_args()
@@ -258,7 +277,8 @@ def main() -> None:
     handler = {
         "check": _cmd_check, "daily": _cmd_daily, "poll": _cmd_poll,
         "investigate": _cmd_investigate, "incidents": _cmd_incidents,
-        "investigations": _cmd_investigations, "daemon": _cmd_daemon,
+        "investigations": _cmd_investigations, "dashboard": _cmd_dashboard,
+        "daemon": _cmd_daemon,
     }[args.cmd]
     try:
         sys.exit(asyncio.run(handler(args)))

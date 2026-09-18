@@ -1,0 +1,20 @@
+{% import "partials/_macros.html" as m %}
+<tbody id="inv-rows"{% if live %} hx-get="/investigations/rows{{ query }}" hx-trigger="every 5s" hx-swap="outerHTML"{% endif %}>
+  {%- if rows %}
+  {%- for r in rows %}
+  <tr>
+    <td class="c-id mono"><a href="/investigations/{{ r.id }}">#{{ r.id }}</a></td>
+    <td>{{ m.pill(r.status) }}</td>
+    <td class="eyebrow">{{ r.trigger or DASH }}</td>
+    <td>{{ r.host or DASH }}</td>
+    <td class="mono ink2" title="{{ r.fingerprint }}">{{ r.fingerprint|fp }}</td>
+    <td class="num mono">{{ r.n_steps }}</td>
+    <td class="num mono">{{ r.input_tokens|tokens }} → {{ r.output_tokens|tokens }}</td>
+    <td class="num mono">{{ elapsed(r.started_at) if r.status == 'running' else duration(r.started_at, r.finished_at) }}</td>
+    <td>{{ m.when(r.started_at) }}</td>
+  </tr>
+  {%- endfor %}
+  {%- else %}
+  <tr><td colspan="9"><p class="empty">No investigations match these filters. Clear them to see everything the store has.</p></td></tr>
+  {%- endif %}
+</tbody>

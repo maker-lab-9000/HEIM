@@ -17,6 +17,8 @@ dependencies = [
     "asyncssh>=2.14",
     "apscheduler>=3.10,<4",
     "python-dotenv>=1.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
 
 [project.optional-dependencies]
@@ -29,7 +31,12 @@ heim = "heim.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-heim = ["reports/templates/*"]
+heim = [
+    "reports/templates/*",
+    "dashboard/templates/*",
+    "dashboard/templates/partials/*",
+    "dashboard/static/*",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

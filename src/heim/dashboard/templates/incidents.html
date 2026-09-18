@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m %}
+{% block content %}
+
+<section class="card">
+  {%- if rows %}
+  <table class="tbl dense">
+    <thead><tr>
+      <th scope="col">severity</th>
+      <th scope="col">status</th>
+      <th scope="col">host</th>
+      <th scope="col">metric</th>
+      <th scope="col">fingerprint</th>
+      <th scope="col" class="num">seen</th>
+      <th scope="col" class="num">missed</th>
+      <th scope="col">first seen</th>
+      <th scope="col">last seen</th>
+    </tr></thead>
+    <tbody>
+      {%- for r in rows %}
+      <tr>
+        <td>{{ m.sev(r.severity) }}</td>
+        <td>{{ m.pill(r.status) }}{% if r.investigated %} <span class="lock"
+            title="investigated — the dispatch lock is held">🔒</span>{% endif %}</td>
+        <td>{{ r.host or DASH }}</td>
+        <td class="mono ink2">{{ r.metric or DASH }}</td>
+        <td class="mono ink2" title="{{ r.fingerprint }}">{{ r.fingerprint|fp }}</td>
+        <td class="num mono">×{{ r.timesSeen }}</td>
+        <td class="num mono">{{ r.missedRuns }}</td>
+        <td>{{ m.when(r.firstSeen) }}</td>
+        <td>{{ m.when(r.lastSeen) }}</td>
+      </tr>
+      <tr class="xrow">
+        <td colspan="9">
+          <details>
+            <summary>what this incident says</summary>
+            <p class="prose">{{ r.description or 'No description stored for this incident.' }}</p>
+            {%- if r.investigations %}
+            <p class="eyebrow">linked investigations</p>
+            <ul class="links">
+              {%- for i in r.investigations %}
+              <li><a class="mono" href="/investigations/{{ i.id }}">#{{ i.id }}</a>
+                {{ m.pill(i.status) }} <span class="mono ink2">{{ i.trigger }}</span>
+                {{ m.when(i.started_at) }}</li>
+              {%- endfor %}
+            </ul>
+            {%- else %}
+            <p class="empty">No investigation ran for this fingerprint yet.</p>
+            {%- endif %}
+          </details>
+        </td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- else %}
+  <p class="empty">No incidents in the store. The poller and the daily run open them as they detect trouble.</p>
+  {%- endif %}
+</section>
+{% endblock %}
