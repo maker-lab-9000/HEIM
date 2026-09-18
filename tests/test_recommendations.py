@@ -1,8 +1,21 @@
-"""§9 recommendations: the stable key, the collection logic, the state table."""
-import pytest
+"""§9 recommendations: the stable key, the collection logic, the state table,
+and the page that turns all three into the operator's to-do list."""
+import re
+from collections import Counter
+from pathlib import Path
 
+import pytest
+from fastapi.testclient import TestClient
+
+from heim.dashboard.app import create_app
 from heim.dashboard.recommendations import collect, rec_key
 from heim.incidents.store import IncidentStore
+from test_dashboard import _config, _iso
+
+FP_MEM = "ubuntu-server|mem_used|Memory climbing"
+FP_TEMP = "homelab|drive_temp|Drive temperature high"
+
+HX = {"HX-Request": "true"}
 
 
 def test_rec_key_stable_and_normalized():
@@ -131,3 +144,161 @@ def test_store_rejects_unknown_state(tmp_path):
         s.set_recommendation_state("k1", "snoozed")
     assert s.recommendation_states() == {}
     s.close()
+
+
+# ------------------------------------------------------------------- the page
+
+
+def _seed(db_path: Path) -> dict:
+    """The three shapes the page has to render: an open incident's finding, a
+    complete investigation whose report repeats a remediation line, and a
+    complete investigation that never recorded a finish time."""
+    store = IncidentStore(db_path)
+    ids = {}
+    run_at = _iso(30)
+    ids["run"] = store.insert_run(run_at=run_at, kind="daily", overall="warning")
+    store.insert_findings(ids["run"], run_at, "daily", [
+        {"host": "ubuntu-server", "metric": "mem_used", "severity": "critical",
+         "trend": "up", "summary": "Memory climbing on ubuntu-server",
+         "detail": "Working set grew 18%.", "recommendation": "Cap it"},
+    ], fingerprints=[FP_MEM])
+    store.upsert([
+        {"fingerprint": FP_MEM, "host": "ubuntu-server", "metric": "mem_used",
+         "severity": "critical", "status": "open", "firstSeen": _iso(4000),
+         "lastSeen": _iso(30), "timesSeen": 7, "missedRuns": 0,
+         "description": "Working set grew 18% over three days."},
+    ])
+    ids["inv"] = store.create_investigation(
+        fingerprint=FP_TEMP, host="homelab", host_role="hypervisor",
+        agent_name="investigator", model="claude-sonnet-4-6", trigger="daily",
+        status="complete", started_at=_iso(200), finished_at=_iso(190),
+        report_md="## Summary\nHot drive.\n## Recommended remediation\n"
+                  "1. Raise the fan curve\n2. Raise the fan curve\n"
+                  "3. Add a temperature alert\n")
+    # complete, but no finished_at: `at` is empty and must still render
+    ids["unstamped"] = store.create_investigation(
+        fingerprint=FP_TEMP, host="homelab", host_role="hypervisor",
+        trigger="manual", status="complete", started_at=_iso(300),
+        report_md="## Recommended remediation\n- Replace the drive\n")
+    store.close()
+    return ids
+
+
+@pytest.fixture()
+def seeded(tmp_path, monkeypatch):
+    cfg = _config(tmp_path, monkeypatch)
+    db = tmp_path / "heim.sqlite3"
+    cfg.settings.db_path = str(db)
+    ids = _seed(db)
+    with TestClient(create_app(cfg)) as client:
+        yield client, ids, db
+
+
+@pytest.fixture()
+def seeded_client(seeded):
+    return seeded[0]
+
+
+@pytest.fixture()
+def empty_client(tmp_path, monkeypatch):
+    cfg = _config(tmp_path, monkeypatch)
+    cfg.settings.db_path = str(tmp_path / "empty.sqlite3")
+    with TestClient(create_app(cfg)) as client:
+        yield client
+
+
+def test_recommendations_page_lists_and_acts(seeded_client):
+    c = seeded_client
+    html = c.get("/recommendations").text
+    assert "Cap it" in html and "investigation #" in html
+    assert "DONE" in html and "DISMISS" in html
+    key = re.search(r'name="key" value="([0-9a-f]{40})"', html).group(1)
+    r = c.post("/actions/recommendation",
+               data={"key": key, "state": "done", "back": "/recommendations"},
+               follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/recommendations"
+    html2 = c.get("/recommendations").text
+    assert "handled (1)" in html2
+
+
+def test_recommendations_page_sources_and_links(seeded_client):
+    html = seeded_client.get("/recommendations").text
+    assert 'href="/findings"' in html and 'href="/investigations/1"' in html
+    assert "Raise the fan curve" in html and "Add a temperature alert" in html
+    assert "ubuntu-server" in html and "homelab" in html
+
+
+def test_recommendations_dedupes_a_repeated_remediation_line(seeded_client):
+    """One report repeating itself is one to-do: same key, one row — otherwise
+    ticking one of the twins would leave its identical sibling behind."""
+    html = seeded_client.get("/recommendations").text
+    assert html.count("Raise the fan curve") == 1
+    keys = re.findall(r'name="key" value="([0-9a-f]{40})"', html)
+    # two buttons per row, so every key appears exactly twice and no more
+    assert set(Counter(keys).values()) == {2}
+
+
+def test_recommendations_renders_a_missing_timestamp_as_a_dash(seeded_client):
+    """A complete investigation with no finished_at still has advice to give;
+    its age cell is the dash every other page uses, never an empty box."""
+    html = seeded_client.get("/recommendations").text
+    assert "Replace the drive" in html
+    row = html.split("Replace the drive", 1)[1].split("</tr>", 1)[0]
+    assert "—" in row
+
+
+def test_recommendation_dismiss_moves_the_row_and_state_persists(seeded_client, seeded):
+    html = seeded_client.get("/recommendations").text
+    key = re.search(r'name="key" value="([0-9a-f]{40})"', html).group(1)
+    seeded_client.post("/actions/recommendation",
+                       data={"key": key, "state": "dismissed"})
+    html2 = seeded_client.get("/recommendations").text
+    assert "handled (1)" in html2 and "dismissed" in html2
+    probe = IncidentStore(seeded[2])
+    assert probe.recommendation_states()[key]["state"] == "dismissed"
+    probe.close()
+
+
+def test_recommendation_action_is_idempotent(seeded_client):
+    html = seeded_client.get("/recommendations").text
+    key = re.search(r'name="key" value="([0-9a-f]{40})"', html).group(1)
+    for _ in range(3):
+        seeded_client.post("/actions/recommendation", data={"key": key, "state": "done"})
+    assert "handled (1)" in seeded_client.get("/recommendations").text
+
+
+def test_recommendation_htmx_returns_a_fragment_with_the_flash(seeded_client):
+    html = seeded_client.get("/recommendations").text
+    key = re.search(r'name="key" value="([0-9a-f]{40})"', html).group(1)
+    r = seeded_client.post("/actions/recommendation",
+                           data={"key": key, "state": "done"}, headers=HX)
+    assert r.status_code == 200
+    assert "Marked done." in r.text and "<html" not in r.text
+
+
+def test_recommendation_bad_state_400(seeded_client):
+    assert seeded_client.post("/actions/recommendation",
+                              data={"key": "x" * 40, "state": "nope"}).status_code == 400
+
+
+def test_recommendation_bad_key_400(seeded_client):
+    assert seeded_client.post("/actions/recommendation",
+                              data={"key": "not a key", "state": "done"}).status_code == 400
+    assert seeded_client.post("/actions/recommendation",
+                              data={"state": "done"}).status_code == 400
+
+
+def test_recommendation_state_of_a_vanished_source_is_ignored(seeded_client):
+    """Spec §9: a state row whose recommendation no longer exists just sits
+    there — it must not invent a handled row out of nothing."""
+    seeded_client.post("/actions/recommendation",
+                       data={"key": "a" * 40, "state": "done"})
+    assert "handled (" not in seeded_client.get("/recommendations").text
+
+
+def test_nav_has_recommendations(seeded_client):
+    assert 'href="/recommendations"' in seeded_client.get("/").text
+
+
+def test_recommendations_empty_state(empty_client):
+    assert "Nothing to act on." in empty_client.get("/recommendations").text

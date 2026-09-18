@@ -492,6 +492,11 @@ _STATUS = {
     "crit": ("✳", "st-crit", "crit"),
     "na": ("·", "st-muted", "n/a"),
     "timeout": ("◌", "st-muted", "timed out"),
+    # recommendation states (spec §9): done reads as ok, dismissed as muted —
+    # the operator ticked it off either way, the difference is whether it was
+    # worth doing.
+    "done": ("✓", "st-ok", "done"),
+    "dismissed": ("○", "st-muted", "dismissed"),
 }
 
 

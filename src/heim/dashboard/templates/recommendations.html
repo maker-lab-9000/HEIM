@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m with context %}
+{% block content %}
+
+<section class="card">
+  {%- if active %}
+  <p class="eyebrow subhead">{{ active|length }} open · newest first</p>
+  <table class="tbl dense rtbl">
+    <thead><tr>
+      <th scope="col" class="c-host">host</th>
+      <th scope="col">recommendation</th>
+      <th scope="col" class="c-src">source</th>
+      <th scope="col" class="c-when">age</th>
+      <th scope="col" class="c-acts">action</th>
+    </tr></thead>
+    <tbody>
+      {%- for r in active %}
+      <tr>
+        <td class="c-host">{{ m.hostbadge(r.host) }}</td>
+        <td class="rectext">{{ r.text }}</td>
+        <td class="c-src mono ink2"><a class="qlink" href="{{ r.source_href }}">{{ r.source }}</a></td>
+        {#- an investigation that never recorded a finish time has no age to
+            show; `rel` already answers that with the dash the rest of the UI
+            uses, so the cell is never blank -#}
+        <td class="c-when mono ink2">{{ r.at|rel }}</td>
+        <td class="c-acts">{% include "partials/_rec_acts.html" %}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- else %}
+  <p class="empty">Nothing to act on. Findings with recommendations and
+    investigation remediations land here.</p>
+  {%- endif %}
+</section>
+
+{%- if handled %}
+<section class="card">
+  <details class="handled">
+    <summary>handled ({{ handled|length }})</summary>
+    <table class="tbl dense rtbl">
+      <tbody>
+        {%- for r in handled %}
+        <tr>
+          <td class="c-host">{{ m.hostbadge(r.host) }}</td>
+          <td class="rectext ink2">{{ r.text }}</td>
+          <td class="c-src mono ink2"><a class="qlink" href="{{ r.source_href }}">{{ r.source }}</a></td>
+          <td class="c-when mono ink2">{{ r.acted_at|rel }}</td>
+          <td class="c-acts">{{ m.pill(r.state) }}</td>
+        </tr>
+        {%- endfor %}
+      </tbody>
+    </table>
+  </details>
+</section>
+{%- endif %}
+{% endblock %}

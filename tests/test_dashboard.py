@@ -441,7 +441,8 @@ def test_weight_budget_and_no_cdn():
     """
     static = Path(__file__).resolve().parent.parent / "src/heim/dashboard/static"
     # §11's token chart adds ~0.4 KB of SVG styling (7 rules), so 17.5 -> 20 KB
-    assert (static / "heim.css").stat().st_size <= 20_480
+    # §9's recommendations table adds 6 column rules, so 20 -> 20.25 KB
+    assert (static / "heim.css").stat().st_size <= 20_736
     assert (static / "htmx.min.js").stat().st_size > 10_000
     templates = (Path(__file__).resolve().parent.parent
                  / "src/heim/dashboard/templates")

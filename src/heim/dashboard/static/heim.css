@@ -273,6 +273,15 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .ftbl td .acts { margin: 0; flex-direction: column; align-items: flex-start; gap: 4px; }
 .ftbl details { margin-top: 2px; }
 
+/* the recommendations table (§9): the advice absorbs the slack, the two
+   actions stay on one line at the end of the row */
+.rtbl .c-host { width: 12em; }
+.rtbl .c-src { width: 14em; }
+.rtbl .c-when { width: 7em; }
+.rtbl .c-acts { width: 15em; }
+.rtbl .rectext { color: var(--ink); }
+.rtbl td .acts { margin: 0; }
+
 .flist { list-style: none; margin: 0; padding: 0; }
 .flist > li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 0.8125rem; }
 .flist > li:last-child { border-bottom: 0; }

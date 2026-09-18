@@ -1,0 +1,16 @@
+{#- the action cell of one recommendation row (spec §9).
+
+    Re-rendered on its own after an htmx POST, which is why it carries the
+    state pill too: the row keeps its place until the next full page load
+    moves it into the handled section, and the pill says what just happened
+    there and then. `r.state` is unset on an active row. -#}
+{% import "partials/_macros.html" as m with context %}
+<div class="acts">
+  {%- if r.state %}
+  {{ m.pill(r.state) }}
+  {%- else %}
+  {{ m.act('/actions/recommendation', 'DONE', {'key': r.key, 'state': 'done'}) }}
+  {{ m.act('/actions/recommendation', 'DISMISS', {'key': r.key, 'state': 'dismissed'}) }}
+  {%- endif %}
+  {% include "partials/_flash.html" %}
+</div>

@@ -8,7 +8,8 @@ the data each page needs.
 remains the sole executor and the sole writer of the pipeline tables
 (AGENTS.md §2 invariants); the dashboard's entire write surface is the
 allow-list in ``_ACTION_HELPERS``: queue a job, decide an approval, judge a
-finding, mute/unmute a fingerprint. No route ever touches ``incidents``,
+finding, mute/unmute a fingerprint, tick off a recommendation. No route ever
+touches ``incidents``,
 ``investigations``, ``runs`` or ``jobs`` outside those helpers. WAL (enabled by
 ``IncidentStore``) is what makes this second connection safe alongside the
 running daemon.
@@ -27,6 +28,7 @@ import binascii
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -49,6 +51,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from heim.config import Config, load_config
 from heim.dashboard import format as fmt
+from heim.dashboard.recommendations import collect as collect_recommendations
 from heim.incidents.store import IncidentStore
 from heim.metrics.aggregate import aggregate
 from heim.metrics.queries import build_window, load_queries
@@ -109,6 +112,9 @@ _ACTION_HELPERS = (
     "enqueue_investigation", "enqueue_retry", "set_approval_decision",
     "set_finding_verdict", "mark_false_positive", "suppress", "unsuppress",
     "set_incident_status",   # only via suppress/unsuppress, mirroring the CLI
+    # §9: the one table the dashboard owns outright — the pipeline never reads
+    # or writes it, it only records which recommendation the operator ticked.
+    "set_recommendation_state",
 )
 
 
@@ -178,6 +184,10 @@ def _auth_ok(header: str | None, token: str) -> bool:
 # first thing to do.
 
 
+#: what ``recommendations.rec_key`` produces — a sha1 hexdigest
+_REC_KEY_RE = re.compile(r"[0-9a-f]{40}")
+
+
 class ActionError(Exception):
     """A rejected action: rendered through the standard error template.
 
@@ -245,6 +255,21 @@ def _text_field(fields: dict, name: str, what: str) -> str:
     return value
 
 
+def _rec_key_field(fields: dict) -> str:
+    """The recommendation key a §9 action acts on: 40 lowercase hex chars.
+
+    Shape-checked rather than looked up (the key is a content hash of advice
+    that may already be gone), so the check is all that keeps a forged POST
+    from writing arbitrary strings into the one table this app owns.
+    """
+    value = str(fields.get("key") or "").strip()
+    if not _REC_KEY_RE.fullmatch(value):
+        raise ActionError(
+            "That is not a recommendation key.",
+            "The form must post the 40-character key the page rendered.", 400)
+    return value
+
+
 def _back_to(request: Request, fields: dict) -> str:
     """Where a plain (non-htmx) form POST returns to.
 
@@ -271,6 +296,8 @@ APPROVED = "Approved — the daemon starts the investigation within a few second
 DECLINED = "Declined — nothing runs; it is re-proposed next run."
 CONFIRMED = "Confirmed — kept in the findings history."
 UNMUTED = "Unmuted — the pipelines report this fingerprint again."
+MARKED_DONE = "Marked done."
+DISMISSED = "Dismissed."
 
 
 # ------------------------------------------------------------------- app
@@ -638,6 +665,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         return page(request, "findings.html", page_title="findings", groups=groups,
                     total=len(rows), offset=offset, next_offset=next_offset)
 
+    @app.get("/recommendations", response_class=HTMLResponse)
+    async def recommendations_page(request: Request):
+        """The operator's to-do list (spec §9) — nothing here is new data.
+
+        Every row is something HEIM already said, re-read on each request:
+        advice on findings whose incident is still open, and the remediation
+        lists of complete investigations. The only thing the page owns is
+        which of them the operator has ticked off.
+        """
+        active, handled = _recommendation_rows(reader)
+        return page(request, "recommendations.html", page_title="recommendations",
+                    active=active, handled=handled)
+
     @app.get("/metrics", response_class=HTMLResponse)
     async def metrics_page(request: Request, host: str = "", category: str = "",
                            refresh: str = ""):
@@ -790,6 +830,26 @@ def create_app(config: Config | None = None) -> FastAPI:
             {"text": UNMUTED},
             **_incident_ctx(reader, fingerprint))
 
+    @app.post("/actions/recommendation")
+    async def action_recommendation(request: Request):
+        """Tick a recommendation off, or wave it away (spec §9).
+
+        The subject is a content hash, not a row id, so there is nothing to
+        look up and nothing to 404 on: a key whose recommendation has since
+        vanished simply never appears again, and its state row is ignored.
+        That also makes the action idempotent — the same POST twice is the
+        same single row.
+        """
+        fields = await _fields(request)
+        # state first: a form that posts an impossible state is the error
+        # worth reporting, even when the key is malformed too
+        state = _choice_field(fields, "state", ("done", "dismissed"))
+        key = _rec_key_field(fields)
+        reader.write(lambda s: s.set_recommendation_state(key, state))
+        flash = {"text": MARKED_DONE if state == "done" else DISMISSED}
+        return respond(request, fields, "partials/_rec_acts.html", flash,
+                       r={"key": key, "state": state})
+
     return app
 
 
@@ -872,6 +932,7 @@ NAV = [
     {"href": "/investigations", "label": "investigations", "icon": "▣"},
     {"href": "/incidents", "label": "incidents", "icon": "▲"},
     {"href": "/findings", "label": "findings", "icon": "▤"},
+    {"href": "/recommendations", "label": "recommendations", "icon": "✓"},
     {"href": "/metrics", "label": "metrics", "icon": "▥"},
     {"href": "/hosts", "label": "hosts", "icon": "▢"},
 ]
@@ -1309,6 +1370,48 @@ def _finding_from_incident(incident: dict) -> dict:
         "detail": incident.get("description", ""),
         "recommendation": "",
     }
+
+
+#: how far back the recommendations page looks. Findings are read wide (a busy
+#: day writes dozens per run and only the newest per open incident survives
+#: ``collect``); investigations are the last hundred, which is far more history
+#: than a to-do list of *current* work needs.
+REC_FINDINGS = 500
+REC_INVESTIGATIONS = 100
+
+
+def _recommendation_rows(reader: StoreReader) -> tuple[list[dict], list[dict]]:
+    """The §9 page's two lists: still to do, and already handled.
+
+    Deduplicated by key on the way through. A report that repeats the same
+    remediation line yields two rows with the same content hash, and they are
+    one to-do, not two: rendering both would put two buttons on one item,
+    where ticking either marks — and hides — both.
+
+    A state row whose recommendation is gone (incident resolved, run pruned)
+    drops out with it: ``handled`` is built from what ``collect`` still
+    returns, never from the state table.
+    """
+    rows = collect_recommendations(
+        reader.read(lambda s: s.open_rows()),
+        reader.read(lambda s: s.recent_findings(limit=REC_FINDINGS)),
+        reader.read(lambda s: s.investigations(limit=REC_INVESTIGATIONS)),
+    )
+    states = reader.read(lambda s: s.recommendation_states())
+    active: list[dict] = []
+    handled: list[dict] = []
+    seen: set[str] = set()
+    for row in rows:
+        if row["key"] in seen:
+            continue
+        seen.add(row["key"])
+        state = states.get(row["key"])
+        if state:
+            handled.append({**row, "state": state.get("state", ""),
+                            "acted_at": state.get("created_at", "")})
+        else:
+            active.append(row)
+    return active, handled
 
 
 def _suppressions(reader: StoreReader) -> dict:
