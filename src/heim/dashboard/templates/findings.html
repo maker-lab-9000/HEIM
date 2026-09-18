@@ -3,7 +3,8 @@
 {% block content %}
 
 {%- if groups %}
-<p class="eyebrow subhead">{{ total }} finding{{ '' if total == 1 else 's' }} · newest first</p>
+{#- a window, not a total: say which findings these are, newest first -#}
+<p class="eyebrow subhead">showing finding{{ '' if total == 1 else 's' }} {{ offset + 1 }}{{ '' if total == 1 else '–' ~ (offset + total) }} · newest first</p>
 <div class="rows-and-more">
 {%- for g in groups %}
 <section class="card"{% if g.run %} id="run-{{ g.run.id }}"{% endif %}>

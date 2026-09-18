@@ -272,8 +272,13 @@ class IncidentStore:
         return [self._to_dict(r) for r in cur.fetchall()]
 
     def all_rows(self, limit: int = 200, offset: int = 0) -> list[dict]:
+        # fingerprint is the primary key, so it is the tiebreak that makes this
+        # order total: a poll batch upserts many incidents with one identical
+        # lastSeen, and LIMIT/OFFSET over a tie can repeat or skip a row
+        # between windows when the sort has nothing left to decide with.
         cur = self._db.execute(
-            "SELECT * FROM incidents ORDER BY lastSeen DESC LIMIT ? OFFSET ?",
+            "SELECT * FROM incidents ORDER BY lastSeen DESC, fingerprint DESC "
+            "LIMIT ? OFFSET ?",
             (limit, offset))
         return [self._to_dict(r) for r in cur.fetchall()]
 

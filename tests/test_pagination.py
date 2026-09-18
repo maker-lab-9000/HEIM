@@ -56,6 +56,26 @@ def test_incidents_offset(store):
     assert len(store.all_rows(limit=4, offset=4)) == 2
 
 
+def test_incidents_offset_is_stable_across_a_tied_lastSeen(store):
+    """A poll batch upserts every incident with the same lastSeen, so the sort
+    needs a unique tiebreak or windows can repeat and skip rows."""
+    store.upsert([{"fingerprint": f"host|metric-{i}|Same second", "host": "h",
+                   "metric": f"m{i}", "severity": "warning", "status": "open",
+                   "firstSeen": "2026-09-19T00:00:00", "lastSeen": "2026-09-19T00:00:00",
+                   "resolvedAt": "", "timesSeen": 1, "missedRuns": 0, "description": "d",
+                   "investigated": False} for i in range(9)])
+    first = store.all_rows(limit=4)
+    second = store.all_rows(limit=4, offset=4)
+    third = store.all_rows(limit=4, offset=8)
+    seen = [r["fingerprint"] for r in first + second + third]
+    assert len(first) == 4 and len(second) == 4 and len(third) == 1
+    assert len(set(seen)) == 9                       # no row shown twice
+    assert set(seen) == {r["fingerprint"] for r in store.all_rows(limit=50)}
+    # and the order is deterministic: the same read twice gives the same window
+    assert [r["fingerprint"] for r in store.all_rows(limit=4, offset=4)] == \
+        [r["fingerprint"] for r in second]
+
+
 def test_findings_and_runs_offset(store):
     run_id = store.insert_run(kind="daily", run_at="2026-09-18T00:00:00")
     store.insert_findings(run_id, "2026-09-18T00:00:00", "daily",
@@ -213,6 +233,36 @@ def test_findings_page_paginates_on_run_boundaries(client_with_60_findings):
     assert "run 1 finding 0" in page2 and "run 0 finding 4" in page2
     assert "run 2 finding 0" not in page2
     assert "LOAD 50 MORE" not in page2
+
+
+def test_findings_header_describes_the_window_not_a_total(client_with_60_findings):
+    """The subhead must not read as a grand total once the page is windowed."""
+    c = client_with_60_findings
+    html = c.get("/findings").text
+    assert "showing findings 1–50 · newest first" in html
+    assert "60 findings" not in html
+    page2 = c.get("/findings?offset=50").text
+    assert "showing findings 51–60 · newest first" in page2
+
+
+def test_incidents_page_paginates_over_a_tied_lastSeen(tmp_path, monkeypatch):
+    """The route-level half of the tiebreak: two windows, every incident once."""
+    def seed(s):
+        s.upsert([{"fingerprint": f"ubuntu-server|m{i}|Same second", "host": "ubuntu-server",
+                   "metric": f"m{i}", "severity": "warning", "status": "open",
+                   "firstSeen": "2026-09-19T00:00:00", "lastSeen": "2026-09-19T00:00:00",
+                   "resolvedAt": "", "timesSeen": 1, "missedRuns": 0, "description": "d",
+                   "investigated": False} for i in range(60)])
+    with _client(tmp_path, monkeypatch, seed) as c:
+        first = c.get("/incidents").text
+        second = c.get("/incidents?offset=50").text
+        shown = {f"m{i}" for i in range(60)
+                 if f'>m{i}<' in first or f'>m{i}<' in second}
+        assert first.count('class="xrow"') == 50
+        assert second.count('class="xrow"') == 10
+        assert len(shown) == 60
+        overlap = {f"m{i}" for i in range(60) if f'>m{i}<' in first and f'>m{i}<' in second}
+        assert not overlap
 
 
 def test_findings_page_never_splits_a_run(tmp_path, monkeypatch):

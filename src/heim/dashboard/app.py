@@ -589,8 +589,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         for group in groups:  # worst first inside a run, like the daily email
             group["findings"].sort(key=lambda f: _SEV_RANK.get(
                 str(f.get("severity") or "").lower(), 3))
+        # `total` is this window's size — the header says which findings these
+        # are ("showing findings 51–94"), never a grand total it cannot know
         return page(request, "findings.html", page_title="findings", groups=groups,
-                    total=len(rows), next_offset=next_offset)
+                    total=len(rows), offset=offset, next_offset=next_offset)
 
     @app.get("/metrics", response_class=HTMLResponse)
     async def metrics_page(request: Request, host: str = "", category: str = "",
