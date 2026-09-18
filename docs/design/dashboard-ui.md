@@ -224,6 +224,18 @@ waiting); the investigations list shows queued jobs as ghost rows (`--ink-3`,
 14 KB (one button style, a feedback line, ghost rows). Still one hand-written
 file, still no build step, still the only stylesheet the pages load.
 
+### 5.1 Model choice at trigger time
+
+Every investigate trigger (host card, incident row, CLI) may choose the model. The
+dashboard's INVESTIGATE forms gain a compact `<select name="model">` beside the button:
+first option `default (<configured model>)` with empty value, then the entries of the new
+settings list `investigator_models` (exact Anthropic model ids; empty list = no select
+rendered, everything uses the default). The chosen model travels in the job payload and
+overrides the investigator agent config for that run only; the investigation row's
+`model` column records what actually ran, so the tool-usage and cost breakdowns segment
+by it automatically. Approval prompts (Telegram and the pending screen) name the model
+when it differs from the default.
+
 ## 6. Metrics page (the daily email's data, live)
 
 `/metrics` shows everything the daily report email shows — per-host metric detail over

@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close out the HEIM dashboard's deferred items: list pagination, the Recommendations page, and light mode.
+**Goal:** Close out the HEIM dashboard's deferred items: list pagination, the Recommendations page, light mode, and per-investigation model choice.
 
-**Architecture:** All three are dashboard-layer changes on the existing FastAPI + Jinja + htmx app (`src/heim/dashboard/`), plus one new SQLite action table for recommendation states. No pipeline/daemon changes. Pure logic gets unit tests; routes get TestClient tests.
+**Architecture:** All four are dashboard-layer changes on the existing FastAPI + Jinja + htmx app (`src/heim/dashboard/`), plus one new SQLite action table for recommendation states. No pipeline/daemon changes. Pure logic gets unit tests; routes get TestClient tests.
 
 **Tech Stack:** Python 3.11+, FastAPI, Jinja2, htmx (vendored), sqlite3, pytest.
 
-**Spec:** `docs/design/dashboard-ui.md` §8 (pagination), §9 (recommendations), §10 (light mode). §1–4 define the design system every task must match.
+**Spec:** `docs/design/dashboard-ui.md` §8 (pagination), §9 (recommendations), §10 (light mode), §5.1 (model choice). §1–4 define the design system every task must match.
 
 ## Global Constraints
 
@@ -400,4 +400,74 @@ Run: `.venv/bin/pytest tests/test_light_mode.py -q && .venv/bin/pytest -q` → g
 ```bash
 git add -A src/heim/dashboard tests/test_light_mode.py
 git commit -m "dashboard: light mode — warm paper tokens, cookie toggle, auto via media query"
+```
+
+---
+
+### Task 5: Model choice at trigger time
+
+**Files:**
+- Modify: `src/heim/config.py` (Settings.investigator_models: list[str] = []), `config/settings.example.yaml` + `config/settings.yaml` (commented key, keep identical)
+- Modify: `src/heim/pipelines/investigate.py` (InvestigationRequest.model_override; agent-cfg copy — REUSE the override mechanism the replay slice added, do not duplicate), `src/heim/pipelines/queue.py` (payload carries `model`), `src/heim/daemon.py` only if the worker builds requests there
+- Modify: `src/heim/dashboard/app.py` (`/actions/investigate` accepts optional `model`, validated against settings.investigator_models), `templates/partials/_host_acts.html`, `_incident_acts.html` (the select), `partials/_macros.html` if the act macro needs an extra-fields slot
+- Modify: `src/heim/cli.py` (`heim investigate --model X`)
+- Test: `tests/test_model_choice.py` (new)
+
+**Interfaces:**
+- Consumes: the replay slice's model-override path in run_agent/run_investigation (read it first; reuse its exact mechanism).
+- Produces: job payload key `"model"`; `InvestigationRequest.model_override: str = ""`; investigations.model records the model that ran.
+
+**Spec:** `docs/design/dashboard-ui.md` §5.1.
+
+- [ ] **Step 1: Failing tests**
+
+```python
+# tests/test_model_choice.py
+def test_request_model_override_reaches_client(stubbed_investigation_env):
+    # run a stubbed investigation with model_override="claude-opus-4-6";
+    # assert the stubbed anthropic client received that model AND the stored
+    # investigation row's model column says "claude-opus-4-6".
+    ...  # build on test_tracking.py's stub pattern — the stub records kwargs["model"]
+
+def test_dashboard_investigate_accepts_allowed_model(actions_client):
+    r = actions_client.post("/actions/investigate",
+        data={"host": "ubuntu-server", "model": "claude-opus-4-6", "back": "/hosts"},
+        follow_redirects=False)
+    assert r.status_code == 303
+    job = store_of(actions_client).jobs()[0]
+    assert '"model": "claude-opus-4-6"' in job["payload_json"]
+
+def test_dashboard_rejects_unlisted_model(actions_client):
+    assert actions_client.post("/actions/investigate",
+        data={"host": "ubuntu-server", "model": "gpt-99"}).status_code == 400
+
+def test_select_rendered_only_when_configured(actions_client, plain_client):
+    assert '<select name="model"' in actions_client.get("/hosts").text      # models configured
+    assert '<select name="model"' not in plain_client.get("/hosts").text    # empty list
+```
+
+(Replace the `...` with the concrete stub wiring copied from how test_tracking.py fakes run_agent/the anthropic client — the test must assert the model kwarg end-to-end, not a mock of our own code.)
+
+- [ ] **Step 2: Run to verify failure** → FAIL
+
+- [ ] **Step 3: Implement**
+
+Settings + yamls: `investigator_models: []` with comment "exact model ids offered in the dashboard's investigate dropdown; empty = default only". Request plumbing: `InvestigationRequest.model_override: str = ""`; where run_investigation resolves the agent cfg, apply the override exactly the way the replay pipeline overrides the model (import/shared helper — no duplication). Persist the ACTUAL model on the investigation row. queue.enqueue_investigation gains `model=""` → payload; request_from_payload restores it. Dashboard action: validate `model` ∈ settings.investigator_models (else 400); template select (first option `default (<cfg model>)`, value=""):
+
+```html
+{%- if models %}
+<select class="mselect mono" name="model">
+  <option value="">default ({{ default_model }})</option>
+  {%- for mid in models %}<option value="{{ mid }}">{{ mid }}</option>{% endfor %}
+</select>
+{%- endif %}
+```
+
+Approval texts: append ` · model: <id>` when overridden (Telegram ask + pending screen header already show inv.model — verify it shows the override). CLI: `--model` choice-validated the same way.
+
+- [ ] **Step 4: Run tests, full suite, commit**
+
+```bash
+.venv/bin/pytest tests/test_model_choice.py -q && .venv/bin/pytest -q
+git add -A && git commit -m "investigations: per-trigger model choice (dashboard select, CLI --model)"
 ```
