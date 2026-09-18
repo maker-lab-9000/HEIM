@@ -138,37 +138,15 @@ def investigation_email(
     return subject, html
 
 
-_STATUS_COLOR = {"healthy": "#16a34a", "warning": "#d97706", "critical": "#dc2626"}
-_FLAG_ICON = {"ok": "✅", "warn": "⚠️", "crit": "🔴", "na": "ℹ️"}
-
-
 def daily_email(
     *,
-    analysis: dict,
+    analysis: dict | None,
     payload: dict,
     incident_summary: dict | None,
     generated_at: str,
 ) -> tuple[str, str]:
-    overall = str(analysis.get("overallHealth") or payload.get("overall") or "healthy").lower()
-    subject = f"🩺 Homelab Health Report — {overall.upper()} — {generated_at[:10]}"
-    inc = incident_summary or {}
-    counts = inc.get("counts") or {}
-    html = _env.get_template("daily.html.j2").render(
-        overall=overall,
-        overall_color=_STATUS_COLOR.get(overall, "#64748b"),
-        headline=analysis.get("headline", ""),
-        executive=analysis.get("executiveSummary", ""),
-        categories=analysis.get("categories", {}) or {},
-        findings=analysis.get("findings", []) or [],
-        watchlist=analysis.get("watchlist", []) or [],
-        top_alerts=(payload.get("topAlerts") or [])[:10],
-        flag_icon=_FLAG_ICON,
-        incidents_new=inc.get("new", []) or [],
-        incidents_resolved=inc.get("resolved", []) or [],
-        counts={"new": counts.get("new", 0), "ongoing": counts.get("ongoing", 0),
-                "resolved": counts.get("resolved", 0), "open": counts.get("open", 0)},
-        generated_at=generated_at.replace("T", " ")[:16],
-        hosts=payload.get("hosts", []),
-        na_queries=(payload.get("counts") or {}).get("naQueries", 0),
-    )
-    return subject, html
+    """The daily report email — faithful port of the n8n dashboard
+    (see heim.reports.daily_dashboard for the builder)."""
+    from heim.reports.daily_dashboard import build_daily_email
+
+    return build_daily_email(analysis, payload, incident_summary, generated_at)

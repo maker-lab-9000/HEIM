@@ -48,7 +48,7 @@ request {host, role, fingerprint, findings}
 | PAM 10 Build Queries | `config/queries/daily.yaml` + `metrics/queries.py` | test_queries |
 | PAM 10 Aggregate & Summarize | `metrics/aggregate.py` | test_aggregate |
 | PAM 10 Basic LLM Chain (+ fallback) | `llm.py` + `config/prompts/analyst.md` | — |
-| PAM 10 Build Dashboard HTML | `reports/render.daily_email` (lighter template) | test_render |
+| PAM 10 Build Dashboard HTML + Add Incident Band | `reports/daily_dashboard.py` (faithful port) | test_daily_dashboard |
 | PAM 10 Findings/Incidents → Loki | `incidents/loki_events.py` | test_integration |
 | PAM 10 Format report for HA / Send to HA | `pipelines/daily._ha_report_md` + `channels/ha.py` | — |
 | PAM 11 Diff & Decide | `incidents/poller_logic.py` | test_poller_logic |

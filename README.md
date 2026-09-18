@@ -307,9 +307,6 @@ The repo ships the full self-hosted observability layer HEIM plugs into — depl
 
 ## Divergences to know about (v0.1)
 
-- The daily email is a **lighter template** than the n8n dashboard email (status header,
-  incident band, categories, findings, top alerts, watchlist — but no per-host filesystem
-  bars or full metric tables yet).
 - The SSH tool writes the audit trail **locally** (`audit.jsonl`) + the Telegram feed;
   the remote `session.log` append on the target host was dropped.
 - Approval prompts don't survive a daemon restart (an in-flight approval is lost; the

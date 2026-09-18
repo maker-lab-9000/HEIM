@@ -94,8 +94,10 @@ def test_daily_email_renders():
                "resolved": []}
     subject, html = daily_email(analysis=analysis, payload=payload, incident_summary=summary,
                                 generated_at="2026-09-16T07:00:00")
-    assert "WARNING" in subject
-    assert "Memory climbing" in html and "🆕 1 new" in html and "39.5%" in html
+    assert subject.startswith("Homelab Health Report — 2026-09-16 — WARNING")
+    assert "Memory climbing" in html          # headline
+    assert "🆕" in html and "1 new" in html   # incident band
+    assert "Category status" in html          # dashboard sections present
 
 
 def test_chunk_text_short_single():
