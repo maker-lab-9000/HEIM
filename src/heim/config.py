@@ -76,6 +76,10 @@ class Settings(BaseModel):
     timezone: str = "Europe/Berlin"
     db_path: str = "heim.sqlite3"
     audit_log: str = "audit.jsonl"
+    # Upper bound on investigations running their agent phase at once (the
+    # approval wait does NOT occupy a slot). Guards the token budget against a
+    # pathological run dispatching many agents simultaneously.
+    max_concurrent_investigations: int = 2
     # instance-label address prefix -> host name (used by the alert poller to
     # attribute a firing alert's `instance` label to a configured host)
     instance_host_map: dict[str, str] = {}

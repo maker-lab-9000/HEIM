@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m %}
+{% block content %}
+
+{%- if cards %}
+<section class="cards">
+  {%- for c in cards %}
+  <article class="card host">
+    <h2 class="hname mono">{{ c.name }}</h2>
+    <p class="chip role">{{ c.role }}</p>
+    <p class="hopen">{% if c.open %}<a href="/incidents">{{ m.sev('critical' if c.open|selectattr('severity', 'equalto', 'critical')|list else 'warning') }}
+      <span class="mono">{{ c.open|length }}</span> open incident{{ '' if c.open|length == 1 else 's' }}</a>
+      {%- else %}<span class="ink3">no open incidents</span>{% endif %}</p>
+    <p class="hline">{% if c.finding %}<span class="eyebrow">last finding</span>
+      {{ m.sev(c.finding.severity) }} {{ c.finding.summary }} <span class="ink3 mono">{{ c.finding.run_at|rel }}</span>
+      {%- else %}<span class="eyebrow">last finding</span> <span class="ink3">none recorded</span>{% endif %}</p>
+    <p class="hline">{% if c.investigation %}<span class="eyebrow">last investigation</span>
+      <a class="mono" href="/investigations/{{ c.investigation.id }}">#{{ c.investigation.id }}</a>
+      {{ m.pill(c.investigation.status) }} <span class="ink3 mono">{{ c.investigation.started_at|rel }}</span>
+      {%- else %}<span class="eyebrow">last investigation</span> <span class="ink3">none yet</span>{% endif %}</p>
+  </article>
+  {%- endfor %}
+</section>
+{%- else %}
+<section class="card">
+  <p class="empty">No hosts configured. Add a file under config/hosts/ and restart the daemon.</p>
+</section>
+{%- endif %}
+{% endblock %}

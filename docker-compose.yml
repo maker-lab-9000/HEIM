@@ -27,3 +27,28 @@ services:
       - ${HEIM_SSH_KEY_FILE:-/dev/null}:/secrets/ssh_key:ro
     # the daemon exits on SIGTERM without ceremony; don't wait long
     stop_grace_period: 10s
+
+  # Optional read-only web UI (heim's only inbound port). It opens the same
+  # SQLite file as a *reader* (WAL) — the daemon above stays the sole writer.
+  # Keep it LAN/tailnet-only and never expose it publicly; set
+  # HEIM_DASHBOARD_TOKEN in .env to require HTTP basic auth (any username,
+  # the token as the password). Remove this service if you don't want it.
+  dashboard:
+    build: .
+    image: heim:latest
+    container_name: heim-dashboard
+    restart: unless-stopped
+    command: ["dashboard", "--host", "0.0.0.0", "--port", "8300"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      HEIM_SSH_KEY: /secrets/ssh_key
+    ports:
+      - "8300:8300"
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/data
+      - ${HEIM_SSH_KEY_FILE:-/dev/null}:/secrets/ssh_key:ro
+    stop_grace_period: 10s

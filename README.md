@@ -1,3 +1,5 @@
+<img src="docs/logo.svg" alt="HEIM logo — a minimal line-drawn tall house with a chimney, round attic window and arched door, in ember orange" width="72" align="right">
+
 # HEIM — Homelab Event & Incident Monitor
 
 **HEIM** (German: *home*) is a standalone Python port of the n8n **Prometheus Agentic Monitor** stack: a daily AI-written
@@ -97,6 +99,7 @@ heim/
 │       ├── poller.py               #   the fast-path poller (was PAM 11)
 │       └── investigate.py          #   the approval-gated investigation (was PAM 20)
 ├── Dockerfile · docker-compose.yml # container deployment (recommended) — see below
+├── src/heim/dashboard/             # the built-in web UI (FastAPI + htmx, read-only)
 ├── grafana/                        # the "Homelab AI Operations" dashboard + Loki datasource
 │   ├── dashboards/homelab-ai-operations.json · loki-alerts-findings.json
 │   └── provisioning/datasources/loki.yml
@@ -161,6 +164,25 @@ Notes:
 - On Proxmox, run this in a small **VM with Docker** (Docker-inside-LXC works with
   `nesting=1` but is upgrade-fragile). A guest separate from the monitored hosts also
   means HEIM survives — and alerts on — an outage of the main server.
+
+### The built-in dashboard (web UI)
+
+A self-contained, read-only web UI focused on **tracking the agent's investigations** —
+every investigation shows its trigger, agent + model, real token usage, and a
+terminal-style transcript of each tool call ($ command, result preview, duration,
+blocked markers) with a "burn line" showing where the budget went. Plus incidents,
+findings history grouped by run, and per-host cards. Dark, dense, resource-light:
+system fonts, ~12 KB of CSS, vendored htmx, no build step, no chart library.
+
+```bash
+heim dashboard                      # http://localhost:8300
+docker compose up -d dashboard      # or as the optional compose service
+```
+
+It opens the SQLite store as a WAL *reader* — the daemon stays the sole writer. It is
+heim's only inbound port: keep it LAN/tailnet-only, and set `HEIM_DASHBOARD_TOKEN` in
+`.env` to require HTTP basic auth (any username, the token as password). Design spec:
+[`docs/design/dashboard-ui.md`](docs/design/dashboard-ui.md).
 
 ### Alternative: bare systemd service
 

@@ -7,6 +7,7 @@ dispatches.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 
@@ -32,6 +33,8 @@ async def _fetch_alerts(base_url: str) -> dict:
 
 async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     cfg = rt.config
+    t0 = time.time()
+    run_at = rt.now_iso()
     resp = await _fetch_alerts(cfg.settings.prometheus.url)
     open_rows = rt.store.open_rows()
     dec = diff_and_decide(resp, open_rows, rt.now_iso(), cfg.routing(), cfg.settings.instance_host_map)
@@ -56,7 +59,7 @@ async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
                                           last_run_ms=int(time.time() * 1000))])
     if dec.dispatches:
         log.info("poller dispatching %d investigation(s)", len(dec.dispatches))
-        await dispatch_all(rt, dec.dispatches, concurrent=dispatch_concurrently)
+        await dispatch_all(rt, dec.dispatches, concurrent=dispatch_concurrently, trigger="poller")
 
     summary = {
         "upserts": len(dec.rows_to_upsert),
@@ -67,4 +70,15 @@ async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     }
     if any(v for v in summary.values()):
         log.info("poll result: %s", summary)
+    # Record the poll only when it actually changed something — a poll runs
+    # every 5 minutes and silent no-ops would drown the runs table.
+    if any(summary[k] for k in ("upserts", "dispatches", "notifications", "state_changed")):
+        try:
+            rt.store.insert_run(
+                kind="poll", run_at=run_at, overall="", model_used="",
+                duration_s=round(time.time() - t0, 3),
+                counts_json=json.dumps(summary, ensure_ascii=False, default=str),
+            )
+        except Exception:
+            log.exception("persisting poll run failed")
     return summary

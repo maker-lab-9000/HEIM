@@ -27,7 +27,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (287 tests). Design
+covered by golden tests against the original JavaScript behavior (340 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -41,7 +41,8 @@ edges** (tools, channels, pipelines).
 | Tools | Guarded read-only SSH · PromQL instant/range with token-compact encoding · metric discovery · GET-allowlisted HA and Proxmox APIs · per-call Telegram live feed + local `audit.jsonl` |
 | Human loop | Telegram inline-button approvals (long-poll, no inbound ports) · decline/timeout → re-proposed next run · outcome confirm (Resolved / Needs human) |
 | Delivery | n8n-faithful HTML dashboard email · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
-| Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · Docker/compose deployment (outbound-only) · `.env` interpolation for all deployment identity |
+| Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · Docker/compose deployment (outbound-only, plus the optional dashboard port) · `.env` interpolation for all deployment identity |
+| Dashboard | Read-only web UI (`heim dashboard`, FastAPI + Jinja + vendored htmx): overview KPIs, investigations list/filters, the agent-transcript detail page with burn line, incidents, findings history, host cards · optional HTTP basic auth · one SQLite reader (WAL), never a writer |
 
 ---
 
@@ -49,7 +50,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 287 tests, must stay green
+.venv/bin/pytest -q                    # 340 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -128,8 +129,8 @@ Honest assessment of where the current design's limits are:
   input; ~50 queries ≈ tens of KB. Past a few hundred series, shard the daily run per
   host-group or summarize before the LLM).
 - *Incidents*: SQLite with one writer (the daemon) is good for orders of magnitude more
-  incidents than a homelab produces. Enable WAL if a second reader process arrives
-  (see dashboard roadmap).
+  incidents than a homelab produces. WAL is on, so the dashboard reads the same file
+  while the daemon writes.
 - *Investigations*: run as independent asyncio tasks; each is one agent session. The
   real cost ceiling is LLM tokens, not compute.
 
@@ -139,9 +140,9 @@ Honest assessment of where the current design's limits are:
   dispatch lock re-proposes it after the next decline/timeout cycle). Fix path:
   persist investigation state (roadmap §5.2) and/or split poller and investigator into
   separate processes sharing the SQLite (WAL).
-- **No investigation concurrency cap.** A pathological run could dispatch many agents at
-  once (n8n had the same gap). Fix: a semaphore in `dispatch_all` (trivial) or a proper
-  job queue (roadmap §5.2).
+- **Investigation concurrency** is capped (`max_concurrent_investigations`, default 2 —
+  a global semaphore around the agent+delivery phase; approval waits don't hold a slot).
+  A crash-safe job queue remains roadmap §5.2.
 - **One Telegram bot = one getUpdates consumer.** Two daemons on the same token
   conflict. Multi-instance setups need per-instance bots or a webhook receiver.
 - **Self-monitoring blind spot** (inherited): HEIM can't alert on the box *it runs on*
@@ -155,7 +156,7 @@ Honest assessment of where the current design's limits are:
 Ordered so each stage enables the next. §5.1–§5.3 together are the "self-contained
 dashboard" milestone.
 
-### 5.1 Persist investigations & findings (the enabler)
+### 5.1 Persist investigations & findings (the enabler) — ✅ implemented
 
 Today an investigation leaves only ephemeral traces: emails, Telegram messages,
 `audit.jsonl` lines, and Loki events. Everything needed for real tracking already flows
@@ -181,11 +182,12 @@ findings(id, run_at, source,          -- daily | poller
 runs(id, run_at, kind, overall, model_used, duration_s, counts_json)
 ```
 
-This directly answers "each investigation should reveal which agent was triggered, what
-tools it used, what commands, tokens": the runner records every step (tool, args,
-preview, per-call duration) and the totals; the pipelines record trigger, status
-transitions, and outcome. `audit.jsonl` stays as the tamper-evident low-level trail.
-CLI grows `heim investigations [--show ID]` alongside `heim incidents`.
+Implemented as specced (see `incidents/store.py`, `tests/test_tracking.py`): the runner
+records every step (tool, args, preview, size, blocked flag, per-call duration) via an
+`on_step` callback, and the pipelines record trigger, status transitions
+(pending_approval → declined | running → complete/incomplete/failed → resolved |
+needs_human), token totals and the report. `audit.jsonl` stays as the tamper-evident
+low-level trail. CLI: `heim investigations [--limit N] [--show ID]`.
 
 ### 5.2 Job queue for investigations
 
@@ -195,7 +197,7 @@ requested → approved → running → done, with a concurrency semaphore and cr
 investigations, a re-trigger primitive, and a write path the dashboard can use without
 being a second SQLite writer (the daemon polls the queue; the dashboard only inserts).
 
-### 5.3 The HEIM dashboard (self-contained web UI)
+### 5.3 The HEIM dashboard (self-contained web UI) — ✅ read-only v1 shipped
 
 Grafana stays for time-series exploration — but it is read-only over Loki and can't
 *act*. A proprietary dashboard is justified exactly where actions and rich per-entity
@@ -224,6 +226,17 @@ views live. Design:
     investigation remediation lists, checkable (done/dismissed).
 - **Live updates:** htmx polling or SSE from the daemon; investigations stream their
   live feed (the same lines that go to Telegram) into the detail page.
+
+**Shipped (v1, `src/heim/dashboard/`, UI spec in `docs/design/dashboard-ui.md`):** the
+read-only half — Overview, Investigations (list + filters + the transcript detail page
+with the burn line), Incidents, Findings, Hosts, plus `/healthz`. `heim dashboard
+--host --port` (uvicorn) and an optional `dashboard` compose service on `:8300`;
+optional HTTP basic auth from `HEIM_DASHBOARD_TOKEN`; htmx used only for filter swaps
+and 5 s polling of running investigations. It opens **one SQLite reader** (WAL) and
+writes nothing — every action (approve, re-trigger, verdicts, recommendations) is
+deliberately deferred to the jobs queue in §5.2, §5.4 and §5.5; the pages reserve their
+spots (outcome line, verdict column). Also deferred: the Recommendations page, "load 50
+more" pagination (lists cap at 200 rows), and the live Telegram-feed stream.
 
 ### 5.4 False-positive handling
 
@@ -259,7 +272,7 @@ context ("verify whether this earlier conclusion still holds").
 
 - **Dead-man's switch**: ping healthchecks.io (or HA) after each poll; closes the
   "who watches the watcher" gap for real.
-- **Investigation concurrency cap** (semaphore in `dispatch_all`) — trivial, do first.
+- **Investigation concurrency cap** — ✅ implemented (`max_concurrent_investigations`).
 - **Web approvals**: approve/decline in the dashboard as an alternative to Telegram
   (same jobs table; Telegram remains for push).
 - **Retention**: prune resolved incidents/findings/investigation steps after N days;

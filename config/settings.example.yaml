@@ -49,6 +49,7 @@ approvals:
 timezone: Europe/Berlin
 db_path: heim.sqlite3         # incident store (SQLite; relative to the working dir)
 audit_log: audit.jsonl        # every executed/blocked tool call, one JSON line each
+max_concurrent_investigations: 2   # agent runs in flight at once (approval waits don't count)
 
 # Maps Prometheus `instance` label address prefixes to host names — used by the
 # alert poller and the daily aggregation to attribute metrics/alerts to hosts.

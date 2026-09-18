@@ -15,7 +15,7 @@ from dataclasses import asdict
 import httpx
 
 from heim.incidents.loki_events import finding_and_category_events, incident_events
-from heim.incidents.reconcile import reconcile
+from heim.incidents.reconcile import fingerprint_for, reconcile
 from heim.incidents.state import compute_state
 from heim.config import expand_env
 from heim.llm import analyst_complete, parse_analysis
@@ -114,10 +114,32 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
 
     # 3. reconcile incidents
     open_rows = rt.store.open_rows()
-    rec = reconcile(analysis, _flatten_rows(payload), open_rows, run_at, cfg.routing())
+    payload_rows = _flatten_rows(payload)
+    rec = reconcile(analysis, payload_rows, open_rows, run_at, cfg.routing())
     rt.store.upsert(rec.rows_to_write)
     counts = (rec.summary or {}).get("counts") or {}
     log.info("reconcile: %s", counts)
+
+    # 3b. persist the run + its findings (roadmap §5.1) — findings used to
+    # survive only in the email. Fingerprints come from the same pure helper
+    # reconcile uses, so a finding row links to the incident it reconciled into.
+    findings = list(analysis.get("findings") or [])
+    try:
+        run_id = rt.store.insert_run(
+            kind="daily", run_at=run_at,
+            overall=str(analysis.get("overallHealth") or ""),
+            model_used=str(model_used or ""),
+            # metrics + analysis + reconcile, i.e. everything but the (fast)
+            # delivery steps and the fire-and-forget investigation dispatch
+            duration_s=round(time.time() - t0, 3),
+            counts_json=json.dumps(counts, ensure_ascii=False, default=str),
+        )
+        rt.store.insert_findings(
+            run_id, run_at, "daily", findings,
+            [fingerprint_for(f, payload_rows) for f in findings],
+        )
+    except Exception:
+        log.exception("persisting run/findings failed")
 
     # 4. report email
     subject, html = daily_email(analysis=analysis, payload=payload, incident_summary=rec.summary, generated_at=run_at)
@@ -141,7 +163,7 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     if rec.to_investigate:
         log.info("dispatching %d investigation(s): %s", len(rec.to_investigate),
                  ", ".join(x.get("fingerprint", "?") for x in rec.to_investigate))
-        await dispatch_all(rt, rec.to_investigate, concurrent=dispatch_concurrently)
+        await dispatch_all(rt, rec.to_investigate, concurrent=dispatch_concurrently, trigger="daily")
 
     return {
         "overall": analysis.get("overallHealth"),

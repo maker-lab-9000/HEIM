@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m %}
+{% block content %}
+
+{%- if groups %}
+<p class="eyebrow subhead">{{ total }} finding{{ '' if total == 1 else 's' }} · newest first</p>
+{%- for g in groups %}
+<section class="card">
+  <h2 class="runline mono">{{ g.source or 'run' }} · {{ g.run_at|day }} {{ g.run_at|clock }}
+    {%- if g.run %} · {{ g.run.model_used or DASH }} · overall {{ m.pill(g.run.overall) }}{% endif %}</h2>
+  <ul class="flist">
+    {%- for f in g.findings %}
+    <li>
+      <p class="fhead">{{ m.sev(f.severity) }} <span class="mono ink2">{{ f.host }}{% if f.metric %} · {{ f.metric }}{% endif %}</span>
+        <span class="fsum">{{ f.summary }}</span>
+        {%- if f.verdict %} <span class="verdict">{{ f.verdict|replace('_', ' ') }}</span>{% endif %}</p>
+      {%- if f.detail or f.recommendation %}
+      <details>
+        <summary>detail &amp; recommendation</summary>
+        {%- if f.detail %}<p class="prose">{{ f.detail }}</p>{% endif %}
+        {%- if f.recommendation %}<p class="prose rec"><span class="eyebrow">recommendation</span> {{ f.recommendation }}</p>{% endif %}
+        {%- if f.fingerprint %}<p class="mono ink3">{{ f.fingerprint }}</p>{% endif %}
+      </details>
+      {%- endif %}
+    </li>
+    {%- endfor %}
+  </ul>
+</section>
+{%- endfor %}
+{%- else %}
+<section class="card">
+  <p class="empty">No findings recorded yet. Each daily analysis writes its findings here.</p>
+</section>
+{%- endif %}
+{% endblock %}

@@ -1,0 +1,23 @@
+{#- shared building blocks: status pill, tool badge, meta dot separator -#}
+
+{% macro pill(value) -%}
+{%- set p = value|pill -%}
+<span class="pill {{ p.cls }}"><span class="dot" aria-hidden="true">{{ p.icon }}</span>{{ p.label }}</span>
+{%- endmacro %}
+
+{% macro tool(name) -%}
+<span class="tool t-{{ name|tool_key }}"><span class="tdot" aria-hidden="true"></span>{{ name }}</span>
+{%- endmacro %}
+
+{% macro sev(value) -%}
+{%- set p = value|pill -%}
+<span class="sev {{ p.cls }}"><span class="dot" aria-hidden="true">{{ p.icon }}</span>{{ p.label }}</span>
+{%- endmacro %}
+
+{% macro when(value) -%}
+<time class="mono" datetime="{{ value|iso }}" title="{{ value|iso }}">{{ value|rel }}</time>
+{%- endmacro %}
+
+{% macro empty(text) -%}
+<p class="empty">{{ text }}</p>
+{%- endmacro %}

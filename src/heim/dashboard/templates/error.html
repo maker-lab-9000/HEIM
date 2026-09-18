@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2 class="eyebrow">something is off</h2>
+  <p class="errmsg">{{ message }}</p>
+  {%- if detail %}<p class="mono ink3">{{ detail }}</p>{% endif %}
+  <p><a href="/">Back to overview</a></p>
+</section>
+{% endblock %}
