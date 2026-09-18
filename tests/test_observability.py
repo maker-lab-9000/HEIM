@@ -733,8 +733,19 @@ def test_prometheus_config_documents_the_scrape_job():
 
 
 def test_settings_defaults_are_the_safe_ones(tmp_path, monkeypatch):
+    """The CODE default is still priceless — an unpriced model renders '—'.
+
+    The shipped settings file now carries real, sourced prices (see
+    test_shipped_prices_are_real_sourced_and_dated), but Settings itself must
+    keep defaulting to {} so a deployment that deletes the block degrades to
+    '—' rather than to a fabricated zero.
+    """
+    from heim.config import Settings
+    bare = Settings(prometheus={"url": "http://x:9090"})
+    assert bare.model_prices == {}
+    assert bare.currency == "USD"
+    assert bare.store_transcripts is False
     cfg = _config(tmp_path, monkeypatch)
-    assert cfg.settings.model_prices == {}      # no price is asserted in the repo
     assert cfg.settings.currency == "USD"
     assert cfg.settings.store_transcripts is False
 
@@ -743,21 +754,39 @@ def test_both_settings_yamls_document_the_new_knobs():
     example = (ROOT / "config/settings.example.yaml").read_text()
     live = (ROOT / "config/settings.yaml").read_text()
     for text in (example, live):
-        assert "# model_prices:" in text          # commented example only
-        assert "example values" in text
+        assert "\nmodel_prices:" in text
+        assert "currency: USD" in text
         assert "store_transcripts: false" in text
-        assert "# currency: USD" in text
-    # the committed example never asserts a real price
-    assert "\nmodel_prices:" not in example
 
 
-def test_price_keys_can_match_the_configured_agent_models(tmp_path, monkeypatch):
-    """The example block's keys are the ids the agents actually use, so a
-    copy-paste of it prices something."""
-    cfg = _config(tmp_path, monkeypatch)
+def test_shipped_prices_are_real_sourced_and_dated():
+    """Prices are allowed in the repo ONLY when they are sourced and dated.
+
+    Supersedes the earlier "never ship a price" rule: the operator asked for
+    current rates, so the guard moved from "no prices" to "no UNSOURCED
+    prices" — a reader must be able to see where a number came from and when
+    it was checked, because provider rates drift.
+    """
+    import re
+    import yaml
     example = (ROOT / "config/settings.example.yaml").read_text()
-    assert f"#   {cfg.agents['investigator'].model}:" in example
-    assert f"#   {cfg.analyst.fallback.model}:" in example
+    assert "verified 2026-" in example, "price block must carry a verification date"
+    assert re.search(r"Anthropic|provider", example), "price block must name its source"
+    prices = yaml.safe_load(example)["model_prices"]
+    assert prices, "model_prices must not be empty once shipped"
+    for model, rate in prices.items():
+        assert set(rate) == {"input", "output"}, model
+        assert rate["output"] >= rate["input"] >= 0, model  # output always costs more
+
+
+def test_price_keys_cover_the_configured_agent_models(tmp_path, monkeypatch):
+    """Every model the agents are configured to use must be priced, or its
+    cost silently renders '—' on the dashboard."""
+    cfg = _config(tmp_path, monkeypatch)
+    priced = set(cfg.settings.model_prices)
+    assert cfg.agents["investigator"].model in priced
+    assert cfg.analyst.fallback.model in priced
+    assert cfg.analyst.primary.model in priced
 
 
 def test_no_dashboard_token_leaks_into_the_environment():
