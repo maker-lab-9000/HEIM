@@ -4,6 +4,7 @@
 
 <section class="card">
   {%- if rows %}
+  <div class="rows-and-more">
   <table class="tbl dense">
     <thead><tr>
       <th scope="col">severity</th>
@@ -57,6 +58,15 @@
       {%- endfor %}
     </tbody>
   </table>
+  {%- if next_offset %}
+  {#- plain link first: no-JS gets the next window as a full page -#}
+  <p class="loadmore">
+    <a class="btn" href="/incidents?{{ qs_with(offset=next_offset) }}"
+       hx-get="/incidents?{{ qs_with(offset=next_offset) }}" hx-select=".rows-and-more"
+       hx-target="closest .rows-and-more" hx-swap="outerHTML">LOAD 50 MORE</a>
+  </p>
+  {%- endif %}
+  </div>
   {%- else %}
   <p class="empty">No incidents in the store. The poller and the daily run open them as they detect trouble.</p>
   {%- endif %}

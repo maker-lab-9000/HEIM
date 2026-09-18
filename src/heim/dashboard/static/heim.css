@@ -338,6 +338,8 @@ a.btn:hover { text-decoration: none; }
 .btn[disabled]:hover { border-color: var(--line); color: var(--ink-3); }
 .flash { flex-basis: 100%; margin: 2px 0 0; font-size: 0.6875rem; color: var(--ink-2); }
 .flash.err { color: var(--serious); }
+.loadmore, .loadmore td { text-align: center; margin: 8px 0; }
+.loadmore:hover { background: none; }
 .ghost td { color: var(--ink-3); }
 .ghost:hover { background: none; }
 

@@ -4,6 +4,7 @@
 
 {%- if groups %}
 <p class="eyebrow subhead">{{ total }} finding{{ '' if total == 1 else 's' }} · newest first</p>
+<div class="rows-and-more">
 {%- for g in groups %}
 <section class="card"{% if g.run %} id="run-{{ g.run.id }}"{% endif %}>
   <h2 class="runline mono">{{ g.source or 'run' }} · {{ g.run_at|day }} {{ g.run_at|clock }}
@@ -43,6 +44,15 @@
   </table>
 </section>
 {%- endfor %}
+{%- if next_offset %}
+{#- whole runs only, so the next window opens on a run this one did not show -#}
+<p class="loadmore">
+  <a class="btn" href="/findings?{{ qs_with(offset=next_offset) }}"
+     hx-get="/findings?{{ qs_with(offset=next_offset) }}" hx-select=".rows-and-more"
+     hx-target="closest .rows-and-more" hx-swap="outerHTML">LOAD 50 MORE</a>
+</p>
+{%- endif %}
+</div>
 {%- else %}
 <section class="card">
   <p class="empty">No findings recorded yet. Each daily analysis writes its findings here.</p>

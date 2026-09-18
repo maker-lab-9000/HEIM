@@ -33,4 +33,13 @@
   {%- if not rows and not ghosts %}
   <tr><td colspan="10"><p class="empty">No investigations match these filters. Clear them to see everything the store has.</p></td></tr>
   {%- endif %}
+  {#- the next window. A plain link first (no-JS lands on the full page at that
+      offset); htmx swaps this tbody in place, poll attributes and all. -#}
+  {%- if more_query %}
+  <tr class="loadmore"><td colspan="10">
+    <a class="btn" href="/investigations{{ more_query }}"
+       hx-get="/investigations/rows{{ more_query }}"
+       hx-target="closest tbody" hx-swap="outerHTML">LOAD 50 MORE</a>
+  </td></tr>
+  {%- endif %}
 </tbody>

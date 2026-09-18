@@ -46,7 +46,8 @@
       <th scope="col" class="num">duration</th>
       <th scope="col">started</th>
     </tr></thead>
-    {% set query = filters.query %}
+    {% set query = filters.poll_query %}
+    {% set more_query = filters.more_query %}
     {% include "partials/_inv_rows.html" %}
   </table>
 </section>

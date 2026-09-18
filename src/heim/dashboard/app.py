@@ -34,7 +34,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import (
@@ -79,6 +79,11 @@ AUTH_EXEMPT = frozenset({"/healthz", "/telemetry"})
 
 #: a daemon that has not recorded a run in this long is "quiet"
 DAEMON_FRESH_S = 20 * 60
+
+#: rows per window on the three list pages. ``?offset=N`` moves the window;
+#: the LOAD 50 MORE control is a plain link to the next one, so the no-JS path
+#: is a normal page load and htmx only saves the round trip through the shell.
+PAGE = 50
 
 #: how long a fetched metrics payload is served without touching Prometheus
 #: (spec §6: "a ~10-minute in-process cache")
@@ -366,6 +371,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             "nav": NAV,
             # where action forms send a no-JS operator back to (spec §5)
             "back": request.url.path + (f"?{query}" if query else ""),
+            # paging links keep whatever else is in the URL (filters included)
+            "qs_with": _qs_with(request),
         }
         base.update(ctx)
         return templates.TemplateResponse(request, template, base, status_code=status)
@@ -491,7 +498,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/investigations", response_class=HTMLResponse)
     async def investigations(request: Request, status: str = "", host: str = "",
                              trigger: str = ""):
-        rows, ghosts, filters = _investigation_rows(reader, cfg, status, host, trigger)
+        rows, ghosts, filters = _investigation_rows(
+            reader, cfg, status, host, trigger, _offset(request))
         return page(request, "investigations.html", page_title="investigations",
                     rows=rows, ghosts=ghosts, filters=filters,
                     live=_live(rows, ghosts))
@@ -499,10 +507,13 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/investigations/rows", response_class=HTMLResponse)
     async def investigation_rows(request: Request, status: str = "", host: str = "",
                                  trigger: str = ""):
-        rows, ghosts, _ = _investigation_rows(reader, cfg, status, host, trigger)
+        rows, ghosts, filters = _investigation_rows(
+            reader, cfg, status, host, trigger, _offset(request))
         return partial(request, "partials/_inv_rows.html", rows=rows, ghosts=ghosts,
                        live=_live(rows, ghosts),
-                       query=_query(status=status, host=host, trigger=trigger))
+                       # the poll re-reads the window the operator is on, not
+                       # page one, so a live table does not scroll itself back
+                       query=filters["poll_query"], more_query=filters["more_query"])
 
     @app.get("/investigations/{inv_id}", response_class=HTMLResponse)
     async def investigation_detail(request: Request, inv_id: int):
@@ -537,7 +548,9 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def incidents(request: Request):
         # all_rows() is status-blind, so suppressed incidents are listed too —
         # they are exactly the rows an operator needs in order to unmute.
-        rows = reader.read(lambda s: s.all_rows(limit=200))
+        offset = _offset(request)
+        rows = reader.read(lambda s: s.all_rows(limit=PAGE + 1, offset=offset))
+        rows, next_offset = _next_offset(rows, offset)
         invs = reader.read(lambda s: s.investigations(limit=200))
         sups = _suppressions(reader)
         by_fp: dict[str, list[dict]] = {}
@@ -546,12 +559,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         for row in rows:
             row["investigations"] = by_fp.get(row["fingerprint"], [])
             row["suppression"] = sups.get(row["fingerprint"])
-        return page(request, "incidents.html", page_title="incidents", rows=rows)
+        return page(request, "incidents.html", page_title="incidents", rows=rows,
+                    next_offset=next_offset)
 
     @app.get("/findings", response_class=HTMLResponse)
     async def findings_page(request: Request):
-        rows = reader.read(lambda s: s.recent_findings(limit=200))
-        runs = {int(r["id"]): r for r in reader.read(lambda s: s.runs(limit=200))}
+        offset = _offset(request)
+        rows, next_offset = _finding_window(
+            reader.read(lambda s: s.recent_findings(limit=PAGE + 1, offset=offset)),
+            offset)
+        # the run each finding belongs to, for the group header. Findings and
+        # runs are both id-descending, so a window that starts `offset`
+        # findings down can only need runs within that many rows of the top.
+        runs = {int(r["id"]): r
+                for r in reader.read(lambda s: s.runs(limit=200 + offset))}
         groups: list[dict] = []
         index: dict[object, dict] = {}
         for row in rows:
@@ -569,7 +590,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             group["findings"].sort(key=lambda f: _SEV_RANK.get(
                 str(f.get("severity") or "").lower(), 3))
         return page(request, "findings.html", page_title="findings", groups=groups,
-                    total=len(rows))
+                    total=len(rows), next_offset=next_offset)
 
     @app.get("/metrics", response_class=HTMLResponse)
     async def metrics_page(request: Request, host: str = "", category: str = "",
@@ -817,6 +838,73 @@ def _query(**params) -> str:
     return ("?" + "&".join(parts)) if parts else ""
 
 
+def _offset(request: Request) -> int:
+    """``?offset=N`` as a sane non-negative int.
+
+    Forgiving on purpose: an offset is a scroll position, not an instruction —
+    a hand-typed ``?offset=banana`` shows page one rather than a 422 the
+    operator has to read.
+    """
+    raw = str(request.query_params.get("offset") or "").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+def _qs_with(request: Request) -> Callable[..., str]:
+    """``qs_with(offset=50)``: this page's query string with overrides applied.
+
+    Filters (and anything else an operator has in the URL) survive paging
+    because they are carried over verbatim; an override of ``None`` or ``""``
+    drops the key. Values are urlencoded — fingerprints carry ``|`` and ``/``
+    and travel as params, never as path segments.
+    """
+    current = list(request.query_params.multi_items())
+
+    def qs_with(**overrides) -> str:
+        pairs = [(k, v) for k, v in current if k not in overrides]
+        pairs += [(k, str(v)) for k, v in overrides.items()
+                  if v is not None and str(v) != ""]
+        return urlencode(pairs)
+
+    return qs_with
+
+
+def _finding_window(rows: list[dict], offset: int) -> tuple[list[dict], int | None]:
+    """One findings window, cut on run boundaries.
+
+    The findings page is read as runs — a header, then that run's findings
+    worst first — so a window that ended mid-run would print the same run
+    header on two pages and read like two separate analyses. Instead the
+    straddling run is pushed whole to the next window and ``next_offset`` says
+    exactly where that is (so it is not always a multiple of ``PAGE``; the
+    button loads *about* fifty).
+
+    A single run bigger than a window is the one case that must split — there
+    is no smaller cut to make — and it keeps the full ``PAGE`` rows.
+    """
+    if len(rows) <= PAGE:
+        return rows, None
+    window, nxt = rows[:PAGE], rows[PAGE]
+    if window[-1].get("run_id") == nxt.get("run_id"):
+        whole = [r for r in window if r.get("run_id") != nxt.get("run_id")]
+        if whole:
+            return whole, offset + len(whole)
+    return window, offset + PAGE
+
+
+def _next_offset(rows: list[dict], offset: int) -> tuple[list[dict], int | None]:
+    """Trim a ``limit=PAGE + 1`` read to one window and say where the next starts.
+
+    The extra row is the cheap "is there more?" probe: no COUNT(*), and the
+    answer can never disagree with what was just read.
+    """
+    if len(rows) > PAGE:
+        return rows[:PAGE], offset + PAGE
+    return rows, None
+
+
 def _env_chip(cfg: Config, now: datetime) -> str:
     n = len(cfg.hosts)
     return f"{n} host{'s' if n != 1 else ''} · {now.tzname() or cfg.settings.timezone}"
@@ -1001,15 +1089,26 @@ def _ghost_rows(reader: StoreReader, host: str) -> list[dict]:
 
 
 def _investigation_rows(reader: StoreReader, cfg: Config, status: str, host: str,
-                        trigger: str) -> tuple[list[dict], list[dict], dict]:
+                        trigger: str, offset: int = 0,
+                        ) -> tuple[list[dict], list[dict], dict]:
     """Filtered rows + queued ghost rows + the option lists the filter row renders.
 
     Status filtering happens in SQL (the store supports it); host/trigger are
     low-cardinality so they are filtered here rather than widening the store's
     read API. Ghost rows are jobs, not investigations, so they only show when
-    the status filter would not contradict them (any status, or "queued").
+    the status filter would not contradict them (any status, or "queued") —
+    and they are never paginated: a queued job belongs above every window,
+    because it is the thing about to change.
+
+    ``offset`` counts rows in the store's (status-filtered) ordering, so
+    host/trigger — applied here, after the read — can leave a window showing
+    fewer than ``PAGE`` rows while LOAD 50 MORE still offers the next window.
+    Under-filling is the honest failure: it never hides a row the way paging
+    over a post-filtered list would.
     """
-    rows = reader.read(lambda s: s.investigations(limit=200, status=status or None))
+    rows = reader.read(lambda s: s.investigations(limit=PAGE + 1, offset=offset,
+                                                  status=status or None))
+    rows, next_offset = _next_offset(rows, offset)
     all_rows = reader.read(lambda s: s.investigations(limit=200))
     if host:
         rows = [r for r in rows if r.get("host") == host]
@@ -1026,7 +1125,14 @@ def _investigation_rows(reader: StoreReader, cfg: Config, status: str, host: str
     filters = {
         "status": status, "host": host, "trigger": trigger,
         "statuses": statuses, "hosts": hosts, "triggers": triggers,
+        # `query` is the filter state alone (the Clear link hangs off it);
+        # `poll_query` and `more_query` add the window
         "query": _query(status=status, host=host, trigger=trigger),
+        "poll_query": _query(status=status, host=host, trigger=trigger,
+                             offset=offset or ""),
+        "more_query": (_query(status=status, host=host, trigger=trigger,
+                              offset=next_offset) if next_offset else ""),
+        "next_offset": next_offset,
     }
     return rows, ghosts, filters
 

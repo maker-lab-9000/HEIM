@@ -201,16 +201,17 @@ def test_incidents_page_paginates(client_with_60_incidents):
 def test_findings_page_paginates_on_run_boundaries(client_with_60_findings):
     c = client_with_60_findings
     html = c.get("/findings").text
-    # 50 findings = 10 whole runs; the 11th run opens the next page
+    # newest first: 50 findings = runs 11 down to 2, whole; runs 1 and 0 open
+    # the next window
     assert html.count("<tbody>") == 10
-    assert html.count("run 0 finding") == 5
-    assert "run 10 finding 0" not in html
+    assert html.count("run 11 finding") == 5
+    assert "run 1 finding 0" not in html
     assert "LOAD 50 MORE" in html
     assert 'href="/findings?offset=50"' in _unesc(html)
     page2 = c.get("/findings?offset=50").text
     assert page2.count("<tbody>") == 2
-    assert "run 10 finding 0" in page2 and "run 11 finding 4" in page2
-    assert "run 9 finding 0" not in page2
+    assert "run 1 finding 0" in page2 and "run 0 finding 4" in page2
+    assert "run 2 finding 0" not in page2
     assert "LOAD 50 MORE" not in page2
 
 
