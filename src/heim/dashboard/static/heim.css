@@ -399,7 +399,9 @@ a.btn:hover { text-decoration: none; }
    surfaces + neutral ink, ember the only warmth left glowing. The tool/host
    identity slots and the fixed status colors are MODE-INVARIANT (validated on
    both surfaces, always paired with a text label) — do not re-theme them.
-   The term-* slots pin the terminal islands to their native charcoal. */
+   The term-* slots pin the terminal islands to their native charcoal, and
+   --term-bg is §10's literal #1B1917 on purpose: an island reads a shade
+   deeper than in true dark mode, where the slot aliases --raised. Keep it. */
 [data-theme="light"] {
   --bg: #ECEEED; --panel: #FAFBFA; --raised: #E4E6E4; --line: #D6D9D6;
   --ink: #22252B; --ink-2: #5B6169; --ink-3: #8B9199;
@@ -409,7 +411,9 @@ a.btn:hover { text-decoration: none; }
 }
 /* auto mode: same override set when the OS asks for light and no explicit
    theme cookie has pinned dark. Duplicated because a media query cannot join
-   a selector list. */
+   a selector list. The two MUST stay token-identical: this selector is
+   (0,2,0) — :not()'s argument counts — so it outweighs the (0,1,0) block
+   above and wins wherever both match. test_light_mode.py diffs them. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     --bg: #ECEEED; --panel: #FAFBFA; --raised: #E4E6E4; --line: #D6D9D6;

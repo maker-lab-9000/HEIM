@@ -375,8 +375,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             back = request.url.remove_query_params("theme")
             target = back.path + (f"?{back.query}" if back.query else "")
             reply = RedirectResponse(target, status_code=303)
+            # httponly: a UI preference, not a session — but nothing on the
+            # page has any reason to read it, so don't hand it to scripts.
             reply.set_cookie(THEME_COOKIE, chosen, max_age=31_536_000,
-                             samesite="lax", path="/")
+                             samesite="lax", path="/", httponly=True)
             return reply
         return await call_next(request)
 

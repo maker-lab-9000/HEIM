@@ -75,6 +75,8 @@ def test_redirect_drops_only_the_theme_param_and_cookie_is_durable(client):
     cookie = r.headers["set-cookie"]
     assert "heim_theme=dark" in cookie
     assert "Max-Age=31536000" in cookie and "SameSite=lax" in cookie
+    # a preference, not a session — but no script has any reason to read it
+    assert "HttpOnly" in cookie
 
 
 def test_toggle_form_cycles_auto_light_dark_and_works_without_js(client):
@@ -95,6 +97,10 @@ def test_toggle_form_cycles_auto_light_dark_and_works_without_js(client):
     assert ">☀<" in toggle("light")[1]
     assert ">☾<" in toggle("dark")[1]
     assert ">◐<" in toggle(None)[1]
+    # the glyph is not an accessible name and `title` is not reliably
+    # announced, so the button says what it does out loud
+    assert 'aria-label="theme: light — switch to dark"' in toggle("light")[1]
+    assert 'aria-label="theme: auto — switch to light"' in toggle(None)[1]
 
 
 def test_bad_theme_value_still_renders_the_page_with_the_cookie_theme(client):
@@ -104,10 +110,53 @@ def test_bad_theme_value_still_renders_the_page_with_the_cookie_theme(client):
 
 # -------------------------------------------------- tokens, not hardcoded hex
 
+LIGHT_SELECTOR = '[data-theme="light"] {'
+MIRROR_SELECTOR = ':root:not([data-theme="dark"]) {'
+
+
+def _css() -> str:
+    return (ROOT / "src/heim/dashboard/static/heim.css").read_text()
+
+
+def _declarations(css: str, selector: str) -> dict[str, str]:
+    """The `--token: value` pairs of one rule, comments stripped."""
+    start = css.index(selector) + len(selector)
+    body = re.sub(r"/\*.*?\*/", "", css[start:css.index("}", start)], flags=re.S)
+    return dict(
+        (m.group(1), m.group(2).strip())
+        for m in re.finditer(r"(--[\w-]+)\s*:\s*([^;]+);", body)
+    )
+
+
+def test_light_block_and_auto_mirror_declare_the_same_tokens():
+    """The media mirror duplicates the override set because a media query
+    cannot join a selector list — and it OUTWEIGHS the light block:
+    `:root:not([data-theme="dark"])` is (0,2,0) since :not()'s argument
+    counts, versus (0,1,0). So on the one combination where both match (an
+    explicit light cookie on an OS that also prefers light) the mirror wins
+    silently, and any drift between them would surface only there. Compare
+    them instead of trusting that they were copied right."""
+    css = _css()
+    light = _declarations(css, LIGHT_SELECTOR)
+    mirror = _declarations(css, MIRROR_SELECTOR)
+    assert light, "the light override set went missing"
+    drift = sorted(
+        f"{token}: light={light.get(token, '<absent>')!r} "
+        f"mirror={mirror.get(token, '<absent>')!r}"
+        for token in set(light) | set(mirror)
+        if light.get(token) != mirror.get(token)
+    )
+    assert not drift, (
+        "[data-theme=\"light\"] and the prefers-color-scheme mirror must stay "
+        "token-identical; they drifted:\n  " + "\n  ".join(drift))
+
+
 def test_components_read_theme_tokens_only(client):
     """Outside :root and the theme blocks, no component may name a color: the
     dark surfaces would survive the override set and leak into light mode."""
-    css = (ROOT / "src/heim/dashboard/static/heim.css").read_text()
+    # comments first: the theme blocks are annotated with the literals they
+    # pin, and prose about a color is not a declaration
+    css = re.sub(r"/\*.*?\*/", "", _css(), flags=re.S)
     blocks = re.findall(r"(?:^:root|\[data-theme=\"light\"\]\s*\{|"
                         r":root:not\(\[data-theme=\"dark\"\]\))[^}]*\}",
                         css, re.M)
@@ -122,12 +171,13 @@ def test_terminal_surfaces_stay_dark_in_light_mode(client):
     """§10's one deliberate exception: a terminal has no light mode. The dark
     charcoal is pinned through the --term-* slots so the components themselves
     still read tokens only."""
-    css = (ROOT / "src/heim/dashboard/static/heim.css").read_text()
-    light = css[css.index('[data-theme="light"] {'):]
-    light = light[:light.index("}")]
-    assert "--term-bg: #1B1917" in light and "--term-ink: #E9E2D4" in light
+    css = _css()
+    light = _declarations(css, LIGHT_SELECTOR)
+    # deliberately §10's literal panel charcoal, a shade below dark mode's own
+    # var(--raised) #232019 for the same component (documented at the block)
+    assert light["--term-bg"] == "#1B1917" and light["--term-ink"] == "#E9E2D4"
     # the burn/prompt ember keeps its original value inside the dark islands
-    assert "--term-ember: #E88C3A" in light
+    assert light["--term-ember"] == "#E88C3A"
     for rule in (".cmd", ".rfull", ".wrap", ".prose code, .prose pre"):
         body = css[css.index(rule + " ") if rule.endswith("pre") else css.index(rule + " {"):]
         body = body[:body.index("}")]

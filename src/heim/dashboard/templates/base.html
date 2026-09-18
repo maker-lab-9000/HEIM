@@ -42,6 +42,7 @@
     {#- no-JS theme switch: a GET form the server turns into a cookie + 303 (§10) -#}
     <form class="themetoggle" method="get">
       <button class="btn" name="theme" value="{{ next_theme }}"
+              aria-label="theme: {{ theme }} — switch to {{ next_theme }}"
               title="theme: {{ theme }} — click for {{ next_theme }}">{{ theme_icon }}</button>
     </form>
   </div>
