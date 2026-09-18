@@ -198,9 +198,9 @@ def test_costs_window_switcher_changes_the_window(seeded_client):
     """Default is 30d; only `all` reaches the 40-day-old haiku run."""
     assert "claude-haiku-4-5" not in seeded_client.get("/costs").text
     assert "claude-haiku-4-5" not in seeded_client.get("/costs?window=7d").text
-    assert "claude-haiku-4-5" in seeded_client.get("/costs?window=all").text
-    # a 7d window drops the two-day-old investigation's spend from the total
-    assert "$0.68" not in seeded_client.get("/costs?window=7d").text
+    # and the wider window's total grows by exactly that run's price
+    assert "$0.69" in seeded_client.get("/costs?window=all").text
+    assert "$0.68" in seeded_client.get("/costs?window=7d").text
 
 
 def test_costs_page_charts_spend_by_day(seeded_client):

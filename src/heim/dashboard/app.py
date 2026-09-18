@@ -50,6 +50,7 @@ from fastapi.templating import Jinja2Templates
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from heim.config import Config, load_config
+from heim.costing import cost_of
 from heim.dashboard import format as fmt
 from heim.dashboard.recommendations import collect as collect_recommendations
 from heim.incidents.store import IncidentStore
@@ -731,6 +732,30 @@ def create_app(config: Config | None = None) -> FastAPI:
             error=error, prom_error=PROM_ERROR.format(url=cfg.settings.prometheus.url),
         )
 
+    @app.get("/costs", response_class=HTMLResponse)
+    async def costs_page(request: Request, window: str = ""):
+        """Where the money goes, by model (spec §13).
+
+        Read-only and re-priced on every request: the table's cost column is
+        the window's tokens run through ``settings.model_prices``, so the page
+        shows what those calls cost under *today's* price table and a model
+        with no entry says so instead of claiming it was free. The by-day chart
+        is the §11 chart with money as its series.
+        """
+        key = window if window in COST_WINDOWS else COST_DEFAULT_WINDOW
+        days = COST_WINDOWS[key]
+        now = datetime.now(tz)
+        since = (now - timedelta(days=days)).isoformat(
+            timespec="milliseconds") if days else None
+        view = _cost_view(reader.read(lambda s: s.cost_by_model(since_iso=since)),
+                          cfg.settings.model_prices, currency)
+        money = lambda v: fmt.money(v, currency)   # noqa: E731 — chart formatters
+        chart = fmt.bar_chart(
+            reader.read(lambda s: s.cost_by_day(14, now.isoformat())),
+            value_key="cost", unit="", fmt_label=money, fmt_exact=money)
+        return page(request, "costs.html", page_title="costs", window=key,
+                    windows=list(COST_WINDOWS), cost_chart=chart, **view)
+
     @app.get("/hosts", response_class=HTMLResponse)
     async def hosts_page(request: Request):
         open_incidents = reader.read(lambda s: s.open_rows())
@@ -969,6 +994,7 @@ NAV = [
     {"href": "/findings", "label": "findings", "icon": "▤"},
     {"href": "/recommendations", "label": "recommendations", "icon": "✓"},
     {"href": "/metrics", "label": "metrics", "icon": "▥"},
+    {"href": "/costs", "label": "costs", "icon": "◍"},
     {"href": "/hosts", "label": "hosts", "icon": "▢"},
 ]
 
@@ -1090,6 +1116,76 @@ def _counts_line(sev_counts: dict[str, int]) -> str:
     line = f"{total} finding{'' if total == 1 else 's'}"
     parts = ([f"{crit} crit"] if crit else []) + ([f"{warn} warn"] if warn else [])
     return f"{line} ({' · '.join(parts)})" if parts else line
+
+
+#: the cost page's windows (spec §13), label -> days back (0 = everything)
+COST_WINDOWS = {"7d": 7, "30d": 30, "all": 0}
+COST_DEFAULT_WINDOW = "30d"
+
+#: said once under the header, so no cost cell has to explain itself
+COST_PRICES_NOTE = "prices from settings — models without a price render —"
+COST_UNPRICED = ("{calls} call{s} on {models} {verb} no price — "
+                 "add it to model_prices in settings.yaml.")
+
+
+def _cost_text(cost: float | None, currency: str) -> str:
+    """A cost cell: the amount, or an em dash when the model has no price.
+
+    ``fmt.money`` reads a 0 as "nothing to show" — right everywhere else,
+    because an unpriced row stores 0 — but here the two cases are already
+    separated: ``cost is None`` means unpriced, while a real 0 came from a
+    price that IS 0 (a free tier), and spec §13 wants that stated as $0.00
+    rather than hidden behind the same dash.
+    """
+    if cost is None:
+        return fmt.DASH
+    if cost == 0:
+        code = str(currency or "USD").strip().upper() or "USD"
+        return "$0.00" if code == "USD" else f"{code} 0.00"
+    return fmt.money(cost, currency)
+
+
+def _cost_view(rows: list[dict], prices: dict, currency: str) -> dict:
+    """The /costs page's whole view model, priced from settings (spec §13).
+
+    Every row is re-priced with ``costing.cost_of`` rather than trusting the
+    ``cost`` column each run booked: that is the only way an em dash can mean
+    "this model has no price" instead of "this run recorded nothing". The
+    window total, and therefore every share bar, counts priced rows only — an
+    unpriced model has no known cost to be a share OF.
+
+    Sorted by cost desc with the unpriced models last (busiest first among
+    them), so the table opens on the money.
+    """
+    priced_total = 0.0
+    out: list[dict] = []
+    for r in rows:
+        cost = cost_of(r.get("model"), r.get("tokens_in"), r.get("tokens_out"), prices)
+        if cost is not None:
+            priced_total += cost
+        out.append({**r, "model_short": fmt.short_model(r.get("model")),
+                    "cost_value": cost, "cost_text": _cost_text(cost, currency)})
+    for r in out:
+        cost = r["cost_value"]
+        r["share"] = round(cost / priced_total * 100, 1) if cost and priced_total else 0.0
+    out.sort(key=lambda r: (r["cost_value"] is None,
+                            -(r["cost_value"] or 0), -r["calls"], r["model"]))
+    unpriced = [r for r in out if r["cost_value"] is None]
+    calls = sum(int(r["calls"] or 0) for r in unpriced)
+    # a window with nothing priced in it has no total — not a $0.00 one
+    known = any(r["cost_value"] is not None for r in out)
+    return {
+        "rows": out,
+        "total_text": _cost_text(priced_total, currency) if known else fmt.DASH,
+        "calls": sum(int(r["calls"] or 0) for r in out),
+        "tokens_in": sum(int(r["tokens_in"] or 0) for r in out),
+        "tokens_out": sum(int(r["tokens_out"] or 0) for r in out),
+        "prices_note": COST_PRICES_NOTE,
+        "unpriced_note": COST_UNPRICED.format(
+            calls=calls, s="" if calls == 1 else "s",
+            verb="has" if calls == 1 else "have",
+            models=", ".join(r["model"] for r in unpriced)) if unpriced else "",
+    }
 
 
 def _tool_usage(rows: list[dict], feedback: dict[str, dict] | None = None) -> list[dict]:
