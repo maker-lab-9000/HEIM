@@ -44,6 +44,10 @@ from pathlib import Path
 #: ``date.weekday()`` order, so the list is indexed by it directly.
 _WEEKDAYS = ["mo", "tu", "we", "th", "fr", "sa", "su"]
 
+#: the two tables HEIM spends tokens (and money) in, with the column that dates
+#: a row — the daily charts and the cost aggregations all read exactly these
+_SPEND_TABLES = (("investigations", "started_at"), ("runs", "run_at"))
+
 #: Closed jobs are receipts for the queue UI, not history — they are pruned on
 #: the shorter of the retention window and this many days.
 JOB_RETENTION_MAX_DAYS = 30
@@ -459,6 +463,35 @@ class IncidentStore:
         ``now_iso`` makes the window a fact about the argument rather than about
         this machine's clock.
         """
+        window, totals = self._daily_sums(days, now_iso, "input_tokens + output_tokens")
+        return [{"date": d.isoformat(), "weekday": _WEEKDAYS[d.weekday()],
+                 "tokens": int(totals[d.isoformat()])} for d in window]
+
+    def cost_by_day(self, days: int = 14, now_iso: str | None = None) -> list[dict]:
+        """Money spent per calendar day over the last ``days`` (spec §13).
+
+        The by-day chart is the §11 chart with a second series, so the window
+        is built exactly the same way — zero-filled, oldest→newest, keyed on
+        ``now_iso`` rather than on this machine's clock.
+
+        The amount is the ``cost`` each row recorded when it ran, which is what
+        was actually spent that day; the by-model table re-prices its aggregates
+        from ``settings.model_prices`` instead, because a *model* can be unpriced
+        (an em dash) while a *day* can only be a sum of what was booked.
+        """
+        window, totals = self._daily_sums(days, now_iso, "cost")
+        return [{"date": d.isoformat(), "weekday": _WEEKDAYS[d.weekday()],
+                 "cost": float(totals[d.isoformat()])} for d in window]
+
+    def _daily_sums(self, days: int, now_iso: str | None,
+                    expr: str) -> tuple[list[date], dict[str, float]]:
+        """``expr`` summed per calendar day across both spending tables.
+
+        Days are the stored timestamps' own calendar days (``substr(ts,1,10)``),
+        which is how they are written and read everywhere else in the store.
+        Returns the zero-filled window (oldest→newest) and its totals, so a
+        caller only has to name its series.
+        """
         days = max(int(days), 1)
         try:
             today = date.fromisoformat(str(now_iso or "")[:10])
@@ -467,11 +500,11 @@ class IncidentStore:
         window = [today - timedelta(days=n) for n in range(days - 1, -1, -1)]
         first, last = window[0].isoformat(), window[-1].isoformat()
 
-        totals: dict[str, int] = {d.isoformat(): 0 for d in window}
-        for table, column in (("investigations", "started_at"), ("runs", "run_at")):
+        totals: dict[str, float] = {d.isoformat(): 0.0 for d in window}
+        for table, column in _SPEND_TABLES:
             cur = self._db.execute(
                 f"SELECT substr({column}, 1, 10) AS d, "
-                f"COALESCE(SUM(input_tokens + output_tokens), 0) AS n "
+                f"COALESCE(SUM({expr}), 0) AS n "
                 f"FROM {table} WHERE substr({column}, 1, 10) BETWEEN ? AND ? "
                 f"GROUP BY d",
                 (first, last),
@@ -479,9 +512,45 @@ class IncidentStore:
             for row in cur.fetchall():
                 key = str(row["d"] or "")
                 if key in totals:
-                    totals[key] += int(row["n"] or 0)
-        return [{"date": d.isoformat(), "weekday": _WEEKDAYS[d.weekday()],
-                 "tokens": totals[d.isoformat()]} for d in window]
+                    totals[key] += float(row["n"] or 0)
+        return window, totals
+
+    def cost_by_model(self, since_iso: str | None = None) -> list[dict]:
+        """Spend grouped by (model, role) since ``since_iso`` (spec §13).
+
+        Two grouped queries merged: investigations are the *investigator* role,
+        runs the *analyst* one — the same model id can appear under both, and
+        collapsing them would hide which agent the money went to. A row with no
+        model recorded groups as ``unknown`` rather than disappearing.
+
+        ``cost`` is the sum of what those rows booked at the time; the page
+        re-prices the token columns from settings, so a model whose price was
+        added (or removed) later is shown under today's price table.
+        ``since_iso`` is compared lexically against the stored stamps — pass one
+        written the same way (same offset) as the rows.
+        """
+        out: list[dict] = []
+        for table, column, model_col, role in (
+            ("investigations", "started_at", "model", "investigator"),
+            ("runs", "run_at", "model_used", "analyst"),
+        ):
+            sql = (f"SELECT COALESCE(NULLIF({model_col}, ''), 'unknown') AS m, "
+                   f"COUNT(*) AS calls, "
+                   f"COALESCE(SUM(input_tokens), 0) AS i, "
+                   f"COALESCE(SUM(output_tokens), 0) AS o, "
+                   f"COALESCE(SUM(cost), 0) AS c FROM {table}")
+            params: list = []
+            if since_iso:
+                sql += f" WHERE {column} >= ?"
+                params.append(str(since_iso))
+            sql += " GROUP BY m ORDER BY m"
+            for r in self._db.execute(sql, params).fetchall():
+                out.append({"model": str(r["m"]), "role": role,
+                            "calls": int(r["calls"] or 0),
+                            "tokens_in": int(r["i"] or 0),
+                            "tokens_out": int(r["o"] or 0),
+                            "cost": float(r["c"] or 0.0)})
+        return out
 
     def usage_totals(self) -> dict:
         """Lifetime tokens and cost across investigations *and* runs (§5.6).
