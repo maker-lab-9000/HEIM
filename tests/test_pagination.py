@@ -4,6 +4,7 @@ button the three list pages grow when the store has more than one page.
 The pages stay server-rendered: the button is a plain link first (a no-JS
 browser lands on the next window as a full page) and an htmx swap second.
 """
+import re
 import shutil
 from pathlib import Path
 
@@ -59,16 +60,22 @@ def test_incidents_offset(store):
 def test_incidents_offset_is_stable_across_a_tied_lastSeen(store):
     """A poll batch upserts every incident with the same lastSeen, so the sort
     needs a unique tiebreak or windows can repeat and skip rows."""
-    store.upsert([{"fingerprint": f"host|metric-{i}|Same second", "host": "h",
-                   "metric": f"m{i}", "severity": "warning", "status": "open",
+    # inserted deliberately out of order: rowid order must NOT be the answer,
+    # or the test would pass against a sort with nothing to break the tie with
+    order = [3, 7, 1, 9, 5, 2, 8, 4, 6]
+    store.upsert([{"fingerprint": f"host|metric-{i:02d}|Same second", "host": "h",
+                   "metric": f"m{i:02d}", "severity": "warning", "status": "open",
                    "firstSeen": "2026-09-19T00:00:00", "lastSeen": "2026-09-19T00:00:00",
                    "resolvedAt": "", "timesSeen": 1, "missedRuns": 0, "description": "d",
-                   "investigated": False} for i in range(9)])
+                   "investigated": False} for i in order])
     first = store.all_rows(limit=4)
     second = store.all_rows(limit=4, offset=4)
     third = store.all_rows(limit=4, offset=8)
     seen = [r["fingerprint"] for r in first + second + third]
     assert len(first) == 4 and len(second) == 4 and len(third) == 1
+    # the windows spell out the total order (lastSeen DESC, fingerprint DESC),
+    # not the order the rows happened to be written in
+    assert seen == [f"host|metric-{i:02d}|Same second" for i in sorted(order, reverse=True)]
     assert len(set(seen)) == 9                       # no row shown twice
     assert set(seen) == {r["fingerprint"] for r in store.all_rows(limit=50)}
     # and the order is deterministic: the same read twice gives the same window
@@ -169,6 +176,11 @@ def _unesc(html: str) -> str:
     return html.replace("&amp;", "&")
 
 
+def _metrics(html: str) -> list[str]:
+    """The metric column of the incidents table, in render order."""
+    return re.findall(r'<td class="mono ink2">(m\d+)</td>', html)
+
+
 # -------------------------------------------------------------- list routes
 
 
@@ -247,22 +259,26 @@ def test_findings_header_describes_the_window_not_a_total(client_with_60_finding
 
 def test_incidents_page_paginates_over_a_tied_lastSeen(tmp_path, monkeypatch):
     """The route-level half of the tiebreak: two windows, every incident once."""
+    # written in an order that is neither the display order nor its reverse
+    order = [(i * 17) % 60 for i in range(60)]
+    assert len(set(order)) == 60
+
     def seed(s):
-        s.upsert([{"fingerprint": f"ubuntu-server|m{i}|Same second", "host": "ubuntu-server",
-                   "metric": f"m{i}", "severity": "warning", "status": "open",
+        s.upsert([{"fingerprint": f"ubuntu-server|m{i:02d}|Same second", "host": "ubuntu-server",
+                   "metric": f"m{i:02d}", "severity": "warning", "status": "open",
                    "firstSeen": "2026-09-19T00:00:00", "lastSeen": "2026-09-19T00:00:00",
                    "resolvedAt": "", "timesSeen": 1, "missedRuns": 0, "description": "d",
-                   "investigated": False} for i in range(60)])
+                   "investigated": False} for i in order])
     with _client(tmp_path, monkeypatch, seed) as c:
         first = c.get("/incidents").text
         second = c.get("/incidents?offset=50").text
-        shown = {f"m{i}" for i in range(60)
-                 if f'>m{i}<' in first or f'>m{i}<' in second}
         assert first.count('class="xrow"') == 50
         assert second.count('class="xrow"') == 10
-        assert len(shown) == 60
-        overlap = {f"m{i}" for i in range(60) if f'>m{i}<' in first and f'>m{i}<' in second}
-        assert not overlap
+        # the two windows read as one descending list, whatever the write order
+        assert _metrics(first) == [f"m{i:02d}" for i in range(59, 9, -1)]
+        assert _metrics(second) == [f"m{i:02d}" for i in range(9, -1, -1)]
+        shown = _metrics(first) + _metrics(second)
+        assert len(set(shown)) == 60                     # complete, no repeats
 
 
 def test_findings_page_never_splits_a_run(tmp_path, monkeypatch):
