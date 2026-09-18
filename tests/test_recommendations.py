@@ -62,12 +62,29 @@ def test_collect_sorts_newest_first_across_sources():
     invs = [
         {"id": 1, "host": "a", "status": "complete", "finished_at": "2026-09-19T09:00:00",
          "report_md": "## Recommended remediation\n- newest\n"},
-        {"id": 2, "host": "a", "status": "resolved", "finished_at": "2026-09-01T09:00:00",
+        {"id": 2, "host": "a", "status": "complete", "finished_at": "2026-09-01T09:00:00",
          "report_md": "## Recommended remediation\n- oldest\n"},
     ]
     assert [r["text"] for r in collect(incidents, findings, invs)] == [
         "newest", "middle", "oldest",
     ]
+
+
+def test_collect_skips_resolved_investigations_operator_already_handled_them():
+    """Spec §9 lists *complete* runs only.
+
+    ``resolved`` is the operator answering the outcome prompt with "handled",
+    so its remediations are done work, not open to-dos.
+    """
+    invs = [
+        {"id": 1, "host": "a", "status": "complete", "finished_at": "2026-09-18T00:00:00",
+         "report_md": "## Recommended remediation\n- still to do\n"},
+        {"id": 2, "host": "a", "status": "resolved", "finished_at": "2026-09-18T01:00:00",
+         "report_md": "## Recommended remediation\n- already handled\n"},
+        {"id": 3, "host": "a", "status": "needs_human", "finished_at": "2026-09-18T02:00:00",
+         "report_md": "## Recommended remediation\n- needs a person\n"},
+    ]
+    assert [r["text"] for r in collect([], [], invs)] == ["still to do"]
 
 
 def test_collect_skips_unfinished_investigations_and_empty_reports():

@@ -2,7 +2,7 @@
 
 Two sources feed one list: the analyst's ``recommendation`` on findings whose
 incident is still open, and the ``Recommended remediation`` section of every
-finished investigation report. A recommendation for an incident nobody has to
+*complete* investigation report. A recommendation for an incident nobody has to
 act on any more is noise, so findings are filtered by the open set and only the
 newest finding per incident contributes — an older run's advice has already
 been superseded by the newer one.
@@ -18,9 +18,15 @@ import re
 
 from heim.reports.render import extract_sections
 
-#: Investigation statuses whose report is final enough to act on. A run that is
-#: still going, or that failed, has no trustworthy remediation list.
-_FINISHED = ("complete", "resolved")
+#: Investigation statuses whose report is an open to-do (spec §9: "each complete
+#: investigation's remediation list"). A run that is still going, or that failed,
+#: has no trustworthy remediation list. ``resolved`` is deliberately NOT here:
+#: it is set when the operator answers the outcome prompt with "✅ Resolved =
+#: handled", so its remediations have already been carried out — listing them
+#: would show finished work as outstanding, the exact noise this page removes.
+#: ``needs_human`` is excluded for a different reason: it means the
+#: investigation itself needs a person, not that it produced actions.
+_FINISHED = ("complete",)
 
 
 def rec_key(kind: str, source_id, text: str) -> str:
