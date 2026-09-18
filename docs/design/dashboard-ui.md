@@ -274,7 +274,65 @@ match what the analyst saw.
 - Weight: this slice (transcript block, `.mtbl` geometry, health/tool-usage cards, the
   tagline) takes the stylesheet to ~17 KB. Still one hand-written file, no build step.
 
-## 8. Still out of scope
+## 8. Pagination ("Load 50 more")
 
-"Load 50 more" pagination (lists cap at 200 rows) and the Recommendations page —
-deferred; tracked in AGENTS.md §5.3.
+Investigations, incidents, and findings lists render the newest 50 rows and end with a
+single quiet button `LOAD 50 MORE` (the .btn style, full-width row, centered) when more
+rows exist. It is a plain GET link (`?offset=50`, preserving active filters) that
+renders the whole page with more rows; htmx enhances it (`hx-get` on the button,
+swapping itself for the next rows-fragment + a fresh button) so enhanced clients append
+in place. The button disappears when the store is exhausted. Ghost job rows are never
+paginated (few, always shown).
+
+## 9. Recommendations page
+
+`/recommendations` — the operator's to-do list, distilled from what HEIM already knows:
+
+- **Sources (union, newest first):** (a) the latest finding per OPEN incident that has a
+  non-empty `recommendation` (joined by fingerprint); (b) each complete investigation's
+  remediation list (`extract_sections(report_md)["remediation"]`), one row per item.
+- Row: host badge · recommendation text (--ink) · source (mono --ink-2: `finding ·
+  <metric>` or `investigation #N`) · age · two quiet actions: `DONE` / `DISMISS`.
+- Acted rows move to a folded `<details>` "handled (N)" section at the bottom with a
+  state pill (done = ok, dismissed = --ink-3) and a timestamp. Acting is idempotent.
+- State lives in a `recommendation_states` table keyed by a stable sha1 of
+  `(kind, source id, normalized text)` — the dashboard's write surface grows by exactly
+  this table. Rows whose source vanished (incident resolved, retention pruned) drop out
+  of the active list; their state rows are simply ignored.
+- Nav: `Recommendations` between Findings and Metrics. Empty state: "Nothing to act on.
+  Findings with recommendations and investigation remediations land here."
+
+## 10. Light mode
+
+The token system was built for two modes; light mode is an override set, not a
+redesign. Direction: **the same hearth by daylight** — warm paper, the same warm-ink
+logic inverted, and the SAME identity colors.
+
+```css
+[data-theme="light"] {
+  --bg: #F8F4EA;      /* warm paper — matches the rustic logo plaque */
+  --panel: #FFFDF7;   --raised: #F1EBDD;   --line: #E3DCCB;
+  --ink: #2A2620;     --ink-2: #6E6455;    --ink-3: #9A8F7C;
+  --ember: #B05E1A;   /* validated 4.3:1 on the paper; #E88C3A fails at 2.3:1 */
+  --ember-dim: #E8CDAA;
+  /* Tool/host categorical slots and the fixed status palette are
+     MODE-INVARIANT: the five identity hexes pass the validator on BOTH
+     surfaces (the light-mode CVD floor-band pair is mitigated by the
+     ever-present text labels), and the status palette's light-surface
+     contrast caveats are mitigated by icon+label per the dataviz rules.
+     Do not re-theme them. */
+}
+```
+
+- Selection: `data-theme` on `<html>`. Resolution order: `heim_theme` cookie →
+  `prefers-color-scheme` (via a tiny inline head script so there is no flash) → dark.
+  A sun/moon toggle in the topbar cycles auto → light → dark. No-JS path: the toggle is
+  a form GET `?theme=<auto|light|dark>` handled server-side (sets the cookie,
+  `SameSite=Lax`, 1 year, then redirects back).
+- Components read tokens only — any hardcoded dark hex discovered during
+  implementation is a bug to fix in place.
+
+## 11. Still out of scope
+
+Nothing — as of this revision every previously deferred dashboard item is specced
+above.
