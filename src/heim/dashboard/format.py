@@ -8,7 +8,15 @@ blowing up mid-page.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
+
+#: The metrics page shows the daily email's numbers, so it humanizes them with
+#: the daily email's own unit table rather than a second, subtly different one.
+#: ``reports.daily_dashboard`` is pure (no I/O, no clock reads) and ``_human``
+#: is written against exactly the units the aggregate rows carry — B, B/s, %,
+#: °C, days, /s, ratio, state, online.
+from heim.reports.daily_dashboard import _human as _human_value
 
 DASH = "—"
 
@@ -149,6 +157,56 @@ def size(nbytes: int | float | None) -> str:
     return f"{n / (1024 * 1024):.1f} MB"
 
 
+# ------------------------------------------------------------------ metrics
+
+#: |Δ%| below this reads as flat — the row is not moving (spec §6: `▬`).
+FLAT_PCT = 0.05
+
+_NUM_RE = re.compile(r"^[-+]?[0-9][0-9.,]*")
+
+
+def value(v: object, unit: object = None) -> str:
+    """A metric value, humanized exactly as the daily email humanizes it."""
+    return _human_value(v, unit)
+
+
+def _split_unit(text: str) -> tuple[str, str]:
+    """"2.90 GB" -> ("2.90", "GB"); "44.0°C" -> ("44.0", "°C")."""
+    m = _NUM_RE.match(text)
+    return (text[:m.end()], text[m.end():].strip()) if m else ("", text)
+
+
+def trend(day3d: list | None, unit: object = None) -> str:
+    """The three day averages as the spec's mono sparkline: `31.1 → 33.2 → 43.3`.
+
+    Values are humanized like every other number on the page, then the unit is
+    dropped when all of them share it — the current/avg columns right next door
+    already carry it, and the column has to stay narrow. A mixed set (KB next
+    to MB) keeps its units, because there the scale is the point.
+    """
+    vals = [v for v in (day3d or []) if v is not None]
+    if not vals:
+        return DASH
+    parts = [value(v, unit) for v in vals]
+    pairs = [_split_unit(p) for p in parts]
+    if len({u for _n, u in pairs}) == 1 and all(n for n, _u in pairs):
+        parts = [n for n, _u in pairs]
+    return " → ".join(parts)
+
+
+def delta(pct: object) -> str:
+    """`▲ 12.4%` / `▼ 3.2%` / `▬` (flat) / `—` (no comparable value)."""
+    if pct is None:
+        return DASH
+    try:
+        n = float(pct)
+    except (TypeError, ValueError):
+        return DASH
+    if abs(n) < FLAT_PCT:
+        return "▬"
+    return f"{'▲' if n > 0 else '▼'} {abs(n):.1f}%"
+
+
 def fingerprint(fp: str | None, width: int = 34) -> str:
     """Middle-truncate a fingerprint (`host|qid|name`) keeping both ends."""
     text = (fp or "").strip()
@@ -261,6 +319,10 @@ _STATUS = {
     "info": ("·", "st-muted", "info"),
     "ok": ("✓", "st-ok", "ok"),
     "healthy": ("✓", "st-ok", "healthy"),
+    # metric flags (spec §6): `crit` is the aggregate's own word for a breached
+    # threshold — a reading, not a failed run, hence ✳ rather than ✕.
+    "crit": ("✳", "st-crit", "crit"),
+    "na": ("·", "st-muted", "n/a"),
     "timeout": ("◌", "st-muted", "timed out"),
 }
 

@@ -278,6 +278,14 @@ form.act { display: inline-block; margin: 0; }
 .ghost td { color: var(--ink-3); }
 .ghost:hover { background: none; }
 
+/* metrics (spec §6) */
+
+.mline { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0; font-size: 0.8125rem; }
+.mline .mref { margin-left: auto; }
+.mhost { margin: 0 0 4px; display: flex; gap: 10px; align-items: center; font-size: 1.0625rem; }
+.mcat { margin: 12px 0 2px; }
+.tbl .trend { color: var(--ink-2); white-space: nowrap; }
+
 /* responsive */
 
 @media (max-width: 900px) {

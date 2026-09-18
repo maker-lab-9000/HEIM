@@ -304,7 +304,8 @@ incident row, and threads `retry_of` through `InvestigationRequest` into the new
   RCAs — today only the salvaged report survives.
 - An evaluation harness: replay a stored brief + tool transcripts against a new
   model/prompt and diff the conclusions (the PAM 90 test-bench habit, systematized).
-- Self-telemetry: a `/metrics` endpoint (investigations run, tokens, failures,
+- Self-telemetry: a `/telemetry` exposition endpoint (`/metrics` is the dashboard's
+  metric-detail page) (investigations run, tokens, failures,
   approval latency) scraped by the same Prometheus — HEIM watching HEIM.
 
 ### 5.7 Smaller, high-value items

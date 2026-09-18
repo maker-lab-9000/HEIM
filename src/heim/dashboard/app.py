@@ -13,10 +13,15 @@ finding, mute/unmute a fingerprint. No route ever touches ``incidents``,
 ``IncidentStore``) is what makes this second connection safe alongside the
 running daemon.
 
+The one page that looks outside the store is ``/metrics`` (spec §6): it reads
+Prometheus through the daily pipeline's own fetch + aggregate, behind a
+~10-minute in-process cache, so its numbers are the daily email's numbers.
+
 Run it with ``heim dashboard`` (uvicorn), or mount ``create_app()`` yourself.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
@@ -45,6 +50,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from heim.config import Config, load_config
 from heim.dashboard import format as fmt
 from heim.incidents.store import IncidentStore
+from heim.metrics.aggregate import aggregate
+from heim.metrics.queries import build_window, load_queries
+# the daily pipeline's own fetcher: the metrics page must read Prometheus
+# through the exact code path the email did, or the numbers would drift
+from heim.pipelines.daily import _fetch_query_ranges
 from heim.pipelines.queue import enqueue_investigation, enqueue_retry
 from heim.pipelines.suppression import mark_false_positive, suppress_fingerprint
 from heim.reports.render import _md_to_html
@@ -61,8 +71,15 @@ TOKEN_ENV = "HEIM_DASHBOARD_TOKEN"
 #: a daemon that has not recorded a run in this long is "quiet"
 DAEMON_FRESH_S = 20 * 60
 
+#: how long a fetched metrics payload is served without touching Prometheus
+#: (spec §6: "a ~10-minute in-process cache")
+METRICS_TTL_S = 600
+
 STORE_ERROR = ("Store unreadable at {path} — is the daemon running with the "
                "same volume?")
+
+PROM_ERROR = ("Prometheus unreachable at {url} — the numbers here come "
+              "straight from it. Check `heim check`.")
 
 #: The dashboard's complete write surface (design spec §5). Anything else —
 #: incident lifecycle, investigation rows, run/finding inserts, job claiming —
@@ -266,9 +283,44 @@ def create_app(config: Config | None = None) -> FastAPI:
         fp=fmt.fingerprint, pill=fmt.status_pill, tool_key=fmt.tool_key,
         command=fmt.command_of,
     )
+    templates.env.filters.update(mval=fmt.value, mtrend=fmt.trend,
+                                 mdelta=fmt.delta)
     templates.env.globals.update(duration=fmt.duration, elapsed=fmt.elapsed,
                                  DASH=fmt.DASH)
     app.state.templates = templates
+
+    # ------------------------------------------------------- metrics cache
+    #
+    # The one piece of state this app owns. Everything else it renders is read
+    # from the store on demand; the metrics page instead talks to Prometheus,
+    # which is ~90 range queries a page load — so the payload is cached for
+    # METRICS_TTL_S and a lock makes concurrent requests share one fetch
+    # instead of stampeding. A failed fetch never evicts: the previous payload
+    # keeps rendering under its own honest "as of" stamp (spec §6).
+
+    cache: dict = {"payload": None, "fetched_at": None, "error": None}
+    cache_lock = asyncio.Lock()
+
+    async def _get_metrics_payload(
+        force: bool = False,
+    ) -> tuple[dict | None, datetime | None, str | None]:
+        async with cache_lock:
+            now = datetime.now(tz)
+            at = cache["fetched_at"]
+            fresh = at is not None and (now - at).total_seconds() < METRICS_TTL_S
+            if cache["payload"] is not None and fresh and not force:
+                return cache["payload"], at, cache["error"]
+            try:
+                payload = await _fetch_metrics(cfg, now)
+            except Exception as exc:  # network, catalog, aggregate — all fatal
+                error = f"{type(exc).__name__}: {exc}"
+                log.warning("metrics fetch failed: %s", error)
+                cache["error"] = error
+                return cache["payload"], cache["fetched_at"], error
+            cache.update(payload=payload, fetched_at=now, error=None)
+            return payload, now, None
+
+    app.state.get_metrics_payload = _get_metrics_payload
 
     # ---------------------------------------------------------- middleware
 
@@ -462,6 +514,25 @@ def create_app(config: Config | None = None) -> FastAPI:
         return page(request, "findings.html", page_title="findings", groups=groups,
                     total=len(rows))
 
+    @app.get("/metrics", response_class=HTMLResponse)
+    async def metrics_page(request: Request, host: str = "", category: str = "",
+                           refresh: str = ""):
+        """The daily email's metric detail, live (spec §6).
+
+        ``refresh=1`` is a GET on purpose: it changes nothing an operator could
+        lose — it only skips the TTL — so the quiet REFRESH button is a plain
+        form GET that a browser may repeat, bookmark or reload at will.
+        """
+        payload, fetched_at, error = await _get_metrics_payload(
+            force=str(refresh).strip() == "1")
+        now = datetime.now(tz)
+        return page(
+            request, "metrics.html", page_title="metrics",
+            metrics=_metrics_view(payload, cfg, host, category, fetched_at, now),
+            filters=_metrics_filters(payload, cfg, host, category),
+            error=error, prom_error=PROM_ERROR.format(url=cfg.settings.prometheus.url),
+        )
+
     @app.get("/hosts", response_class=HTMLResponse)
     async def hosts_page(request: Request):
         open_incidents = reader.read(lambda s: s.open_rows())
@@ -605,6 +676,7 @@ NAV = [
     {"href": "/investigations", "label": "investigations", "icon": "▣"},
     {"href": "/incidents", "label": "incidents", "icon": "▲"},
     {"href": "/findings", "label": "findings", "icon": "▤"},
+    {"href": "/metrics", "label": "metrics", "icon": "▥"},
     {"href": "/hosts", "label": "hosts", "icon": "▢"},
 ]
 
@@ -717,6 +789,118 @@ def _investigation_rows(reader: StoreReader, cfg: Config, status: str, host: str
         "query": _query(status=status, host=host, trigger=trigger),
     }
     return rows, ghosts, filters
+
+
+# ------------------------------------------------------------------ metrics
+#
+# Everything below is the page's presentation of an aggregate payload — the
+# same dict the daily email renders. Pure functions: the only I/O is the one
+# fetch, and it is the daily pipeline's own helper.
+
+#: flag -> sort rank and back (spec §6: crit, warn, ok, na)
+_FLAG_RANK = {"crit": 0, "warn": 1, "ok": 2, "na": 3}
+_FLAG_BY_RANK = ["crit", "warn", "ok", "na"]
+
+
+class MetricsUnavailable(RuntimeError):
+    """Every query in the catalog failed — there is nothing to render."""
+
+
+async def _fetch_metrics(cfg: Config, now: datetime) -> dict:
+    """Catalog → Prometheus → aggregate, exactly as ``run_daily`` step 1 does."""
+    qdefs = load_queries(cfg.queries_path)
+    window = build_window(now)
+    results = await _fetch_query_ranges(cfg.settings.prometheus.url, qdefs, window)
+    payload = aggregate(results, now=now,
+                        instance_host_map=cfg.settings.instance_host_map)["payload"]
+    # _fetch_query_ranges degrades per query rather than raising, so a
+    # Prometheus that is simply down comes back as a payload of nothing. That
+    # is not "everything is fine" — it is the unreachable state, and the page
+    # has to say so instead of drawing an empty healthy table.
+    if not payload.get("categories"):
+        errs = [str(r.get("error")) for r in results if r.get("error")]
+        raise MetricsUnavailable(errs[0] if errs else "no series returned")
+    return payload
+
+
+def _host_order(cfg: Config, names) -> list[str]:
+    """Configured hosts in config order first, then whatever else reported."""
+    known = [h for h in cfg.hosts if h in names]
+    return known + sorted(n for n in names if n not in cfg.hosts)
+
+
+def _row_key(row: dict) -> tuple:
+    """Worst flag first, then the biggest mover (spec §6)."""
+    return (_FLAG_RANK.get(str(row.get("flag") or ""), 3),
+            -abs(row.get("changePct") or 0))
+
+
+def _cached_for(fetched_at: datetime | None, now: datetime) -> str:
+    if fetched_at is None:
+        return ""
+    mins = int(max((now - fetched_at).total_seconds(), 0) // 60)
+    return f"cached {mins}m" if mins else "just fetched"
+
+
+def _metrics_view(payload: dict | None, cfg: Config, host: str, category: str,
+                  fetched_at: datetime | None, now: datetime) -> dict:
+    """The header numbers plus per-host, per-category row tables."""
+    if not payload:
+        return {"hosts": [], "rows": 0, "has_data": False, "as_of": "",
+                "cached": "", "overall": "",
+                "counts": {"crit": 0, "warn": 0, "na": 0}}
+    cats: dict[str, list] = payload.get("categories") or {}
+    order = list(cats)  # catalog order — the order the email prints them in
+    by_host: dict[str, dict[str, list]] = {}
+    for cat in order:
+        if category and cat != category:
+            continue
+        for row in cats[cat]:
+            if host and row.get("host") != host:
+                continue
+            by_host.setdefault(str(row.get("host") or ""), {}) \
+                   .setdefault(cat, []).append(row)
+
+    sections, total = [], 0
+    for name in _host_order(cfg, by_host):
+        groups = by_host[name]
+        flat = [r for rows in groups.values() for r in rows]
+        total += len(flat)
+        worst = min((_FLAG_RANK.get(str(r.get("flag") or ""), 3) for r in flat),
+                    default=3)
+        sections.append({
+            "name": name,
+            "flag": _FLAG_BY_RANK[worst],
+            "cats": [{"name": c, "rows": sorted(groups[c], key=_row_key)}
+                     for c in order if c in groups],
+        })
+    counts = payload.get("counts") or {}
+    return {
+        "hosts": sections,
+        "rows": total,
+        # the header describes the whole payload, so it stays put even when a
+        # filter narrows the tables to nothing
+        "has_data": True,
+        "overall": payload.get("overall") or "",
+        "counts": {"crit": int(counts.get("crit") or 0),
+                   "warn": int(counts.get("warn") or 0),
+                   "na": int(counts.get("naQueries") or 0)},
+        "as_of": fetched_at.strftime("%H:%M") if fetched_at else "",
+        "cached": _cached_for(fetched_at, now),
+    }
+
+
+def _metrics_filters(payload: dict | None, cfg: Config, host: str,
+                     category: str) -> dict:
+    """Option lists come from the whole payload, never from the filtered view —
+    a filter must always be able to undo itself."""
+    cats = (payload or {}).get("categories") or {}
+    hosts = set((payload or {}).get("hosts") or [])
+    return {
+        "host": host, "category": category,
+        "hosts": _host_order(cfg, hosts), "categories": list(cats),
+        "query": _query(host=host, category=category),
+    }
 
 
 def _finding_from_incident(incident: dict) -> dict:

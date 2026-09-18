@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m with context %}
+{% block content %}
+
+{#- the one page that reads Prometheus instead of the store, so its header
+    says how old the numbers are and offers the refetch (spec §6). -#}
+<section class="card mhdr">
+  <p class="mline">
+    {%- if metrics.has_data %}{{ m.pill(metrics.overall) }}
+    <span class="mono counts">{{ metrics.counts.crit }} crit · {{ metrics.counts.warn }} warn · {{ metrics.counts.na }} no-data</span>
+    <span class="mono ink3">3-day window · as of {{ metrics.as_of }}{% if metrics.cached %} ({{ metrics.cached }}){% endif %}</span>
+    {%- endif %}
+    <form class="mref" method="get" action="/metrics">
+      {%- if filters.host %}<input type="hidden" name="host" value="{{ filters.host }}">{% endif %}
+      {%- if filters.category %}<input type="hidden" name="category" value="{{ filters.category }}">{% endif %}
+      <input type="hidden" name="refresh" value="1">
+      <button class="btn" type="submit">refresh</button>
+    </form>
+  </p>
+  {%- if error %}
+  <p class="errmsg">{{ prom_error }}</p>
+  <p class="empty mono">{{ error }}</p>
+  {%- endif %}
+</section>
+
+{%- if metrics.has_data %}
+<form class="filters" method="get" action="/metrics">
+  <label>host
+    <select name="host">
+      <option value="">all hosts</option>
+      {%- for h in filters.hosts %}
+      <option value="{{ h }}"{{ ' selected' if h == filters.host }}>{{ h }}</option>
+      {%- endfor %}
+    </select>
+  </label>
+  <label>category
+    <select name="category">
+      <option value="">all categories</option>
+      {%- for c in filters.categories %}
+      <option value="{{ c }}"{{ ' selected' if c == filters.category }}>{{ c }}</option>
+      {%- endfor %}
+    </select>
+  </label>
+  <button type="submit">Apply</button>
+  {%- if filters.query %}<a class="clear" href="/metrics">Clear</a>{% endif %}
+</form>
+{%- endif %}
+
+{%- for h in metrics.hosts %}
+<section class="card">
+  <h2 class="mhost mono">{{ h.name }} {{ m.pill(h.flag) }}</h2>
+  {%- for c in h.cats %}
+  <p class="eyebrow mcat">{{ c.name }}</p>
+  <table class="tbl dense">
+    <thead><tr>
+      <th scope="col">status</th>
+      <th scope="col">metric</th>
+      <th scope="col" class="num">current</th>
+      <th scope="col" class="num">avg</th>
+      <th scope="col">3-day trend</th>
+      <th scope="col" class="num">&Delta;</th>
+    </tr></thead>
+    <tbody>
+      {%- for r in c.rows %}
+      <tr>
+        <td>{{ m.pill(r.flag) }}</td>
+        <td>{{ r.label }}{% if r.name %} <span class="mono ink2">{{ r.name }}</span>{% endif %}</td>
+        <td class="num mono">{{ r.current|mval(r.unit) }}</td>
+        <td class="num mono ink2" title="min {{ r.min|mval(r.unit) }} · max {{ r.max|mval(r.unit) }}">{{ r.avg|mval(r.unit) }}</td>
+        <td class="mono trend">{{ r.day3d|mtrend(r.unit) }}</td>
+        {#- status colors never decorate a healthy row (spec §6) -#}
+        <td class="num mono{% if r.flag in ('warn', 'crit') %} st-{{ r.flag }}{% endif %}">{{ r.changePct|mdelta }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- endfor %}
+</section>
+{%- endfor %}
+
+{%- if not metrics.hosts %}
+<section class="card">
+  {%- if error %}
+  <p class="empty">Nothing to show until Prometheus answers — nothing was cached before it went away.</p>
+  {%- elif filters.query %}
+  <p class="empty">No metrics match these filters. Clear them to see every host.</p>
+  {%- else %}
+  <p class="empty">No metrics returned. The catalog is config/queries/daily.yaml — run <span class="mono">heim check</span>.</p>
+  {%- endif %}
+</section>
+{%- endif %}
+{% endblock %}
