@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
+from typing import Callable
 
 from anthropic import AsyncAnthropic, APIError, APIConnectionError
 
@@ -52,12 +54,20 @@ async def _create_with_retry(client: AsyncAnthropic, **kwargs):
     raise last  # type: ignore[misc]
 
 
+#: ``on_step(seq, tool_name, args, result_str, duration_ms)`` — fired right
+#: after every *executed* tool call (seq starts at 1). Used by the
+#: investigation pipeline to persist the step timeline live, so a crash
+#: mid-investigation still leaves the completed steps on disk.
+OnStep = Callable[[int, str, dict, str, float], None]
+
+
 async def run_agent(
     cfg: AgentCfg,
     *,
     system: str,
     user_prompt: str,
     tools: list[Tool],
+    on_step: OnStep | None = None,
 ) -> AgentResult:
     client = AsyncAnthropic()
     schemas = [t.anthropic_schema() for t in tools]
@@ -95,12 +105,20 @@ async def run_agent(
                             "Write the final report NOW, starting with '## Summary'."
                         )
                     else:
+                        args = dict(tu.input or {})
                         tool = toolmap.get(tu.name)
+                        t_start = time.monotonic()
                         if tool is None:
                             out = f"unknown tool: {tu.name}"
                         else:
-                            out = await tool(dict(tu.input or {}))
-                        steps.append(AgentStep(tu.name, dict(tu.input or {}), str(out)[:400]))
+                            out = await tool(args)
+                        duration_ms = (time.monotonic() - t_start) * 1000.0
+                        steps.append(AgentStep(tu.name, args, str(out)[:400]))
+                        if on_step is not None:
+                            try:
+                                on_step(len(steps), tu.name, args, str(out), duration_ms)
+                            except Exception:  # a tracking failure must never sink the loop
+                                log.exception("on_step callback failed (step %d)", len(steps))
                     results.append({"type": "tool_result", "tool_use_id": tu.id, "content": str(out)})
                 messages.append({"role": "user", "content": results})
                 continue

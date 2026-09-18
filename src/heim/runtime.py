@@ -7,6 +7,7 @@ read-only by design).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -32,6 +33,22 @@ class Runtime:
     telegram: Telegram | None = None
     dry_run: bool = False
     out_dir: Path = field(default_factory=lambda: Path("out"))
+    _inv_sem: asyncio.Semaphore | None = field(default=None, repr=False)
+
+    # ------------------------------------------------------- concurrency
+
+    def investigation_slot(self) -> asyncio.Semaphore:
+        """The process-wide investigation concurrency cap.
+
+        Created lazily (and once) so it binds to the running loop rather than
+        to import time; every caller of ``run_investigation`` shares it, which
+        makes the cap global across daily dispatch, poller dispatch and the CLI.
+        """
+        if self._inv_sem is None:
+            self._inv_sem = asyncio.Semaphore(
+                max(1, int(self.config.settings.max_concurrent_investigations))
+            )
+        return self._inv_sem
 
     # ------------------------------------------------------------- time
 

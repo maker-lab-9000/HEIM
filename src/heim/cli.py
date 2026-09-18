@@ -5,6 +5,7 @@
     heim poll [--dry-run]              run one alert-poller cycle
     heim investigate --host H ...      run one investigation
     heim incidents [--all]             show the incident store
+    heim investigations [--show ID]    list / inspect tracked investigations
     heim daemon                        run scheduler + poller + approvals
 
 --dry-run keeps side effects local: emails become HTML files under out/,
@@ -161,6 +162,57 @@ async def _cmd_incidents(args) -> int:
     return 0
 
 
+def _print_investigation(row: dict) -> None:
+    """The --show detail block: metadata, the step table, then the report."""
+    print(f"investigation #{row['id']} — {row['status']}")
+    for label, key in (
+        ("host", "host"), ("role", "host_role"), ("fingerprint", "fingerprint"),
+        ("trigger", "trigger"), ("agent", "agent_name"), ("model", "model"),
+        ("started", "started_at"), ("finished", "finished_at"),
+        ("outcome", "outcome"), ("incomplete", "incomplete_reason"),
+    ):
+        if row.get(key):
+            print(f"  {label:11s} {row[key]}")
+    print(f"  {'tokens':11s} {row.get('input_tokens', 0):,} in / {row.get('output_tokens', 0):,} out")
+    steps = row.get("steps") or []
+    print(f"  {'steps':11s} {len(steps)}")
+    if steps:
+        print("\nsteps:")
+        for s in steps:
+            flag = "🚫" if s.get("blocked") else "  "
+            args_preview = str(s.get("args_json") or "").replace("\n", " ")[:80]
+            print(f"  {flag} {s['seq']:3d} {s['tool']:18s} {s.get('duration_ms', 0):7d}ms  {args_preview}")
+    if row.get("report_md"):
+        print("\n" + "-" * 70 + "\n")
+        print(row["report_md"])
+
+
+async def _cmd_investigations(args) -> int:
+    from heim.runtime import build_runtime
+
+    rt = build_runtime(dry_run=True)
+    if args.show:
+        row = rt.store.investigation(args.show)
+        if row is None:
+            print(f"no investigation with id {args.show}")
+            return 1
+        _print_investigation(row)
+        return 0
+
+    rows = rt.store.investigations(limit=args.limit)
+    if not rows:
+        print("no investigations recorded yet")
+        return 0
+    for r in rows:
+        print(f"#{r['id']:<5d} [{r['status']:16s}] {r['trigger']:7s} {r['host']:16s} "
+              f"{(r['fingerprint'] or '-'):40s} steps:{r['n_steps']:<3d} "
+              f"{r['input_tokens']:>7,} in / {r['output_tokens']:>6,} out  {str(r['started_at'])[:19]}")
+    counts = rt.store.counts_by_status()
+    if counts:
+        print("\n" + " · ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
+    return 0
+
+
 async def _cmd_daemon(args) -> int:
     from heim.daemon import run_daemon
 
@@ -194,13 +246,19 @@ def main() -> None:
     ic = sub.add_parser("incidents", help="show the incident store")
     ic.add_argument("--all", action="store_true", help="include resolved")
 
+    iv = sub.add_parser("investigations", help="list / inspect tracked investigations")
+    iv.add_argument("--limit", type=int, default=20)
+    iv.add_argument("--show", type=int, metavar="ID",
+                    help="print one investigation with its step timeline and report")
+
     sub.add_parser("daemon", help="run scheduler + poller + approval listener")
 
     args = p.parse_args()
     _setup_logging(args.verbose)
     handler = {
         "check": _cmd_check, "daily": _cmd_daily, "poll": _cmd_poll,
-        "investigate": _cmd_investigate, "incidents": _cmd_incidents, "daemon": _cmd_daemon,
+        "investigate": _cmd_investigate, "incidents": _cmd_incidents,
+        "investigations": _cmd_investigations, "daemon": _cmd_daemon,
     }[args.cmd]
     try:
         sys.exit(asyncio.run(handler(args)))
