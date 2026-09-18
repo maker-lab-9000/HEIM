@@ -41,7 +41,7 @@ edges** (tools, channels, pipelines).
 | Tools | Guarded read-only SSH · PromQL instant/range with token-compact encoding · metric discovery · GET-allowlisted HA and Proxmox APIs · per-call Telegram live feed + local `audit.jsonl` |
 | Human loop | Telegram inline-button approvals (long-poll, no inbound ports) raced against a store-written decision (dashboard/CLI, works with no Telegram at all) · decline/timeout → re-proposed next run · outcome confirm (Resolved / Needs human) |
 | Delivery | n8n-faithful HTML dashboard email · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
-| Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · crash-safe investigation job queue (`heim jobs`, restart sweep, re-trigger with `retry_of`) · Docker/compose deployment (outbound-only, plus the optional dashboard port) · `.env` interpolation for all deployment identity |
+| Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · crash-safe investigation job queue (`heim jobs`, restart sweep, re-trigger with `retry_of`) · dead-man's switch pinged after every completed poll · nightly WAL-safe SQLite backup (rotated) + retention prune · Docker/compose deployment (outbound-only, plus the optional dashboard port) · `.env` interpolation for all deployment identity |
 | Dashboard | Web UI (`heim dashboard`, FastAPI + Jinja + vendored htmx): overview KPIs incl. queue depth, investigations list/filters with queued ghost rows, the agent-transcript detail page with burn line, incidents, findings history, host cards · actions (queue an investigation, re-run, approve/decline, finding verdicts, mute/unmute) as real forms enhanced by htmx · optional HTTP basic auth · one SQLite connection (WAL) that writes action rows only |
 
 ---
@@ -147,8 +147,8 @@ Honest assessment of where the current design's limits are:
 - **One Telegram bot = one getUpdates consumer.** Two daemons on the same token
   conflict. Multi-instance setups need per-instance bots or a webhook receiver.
 - **Self-monitoring blind spot** (inherited): HEIM can't alert on the box *it runs on*
-  dying. Mitigation: run it on a separate Proxmox guest (done) + a dead-man's switch
-  (roadmap §5.7).
+  dying. Mitigation: run it on a separate Proxmox guest (done) + the dead-man's switch
+  (§5.7, shipped) — an external watchdog notices when the pings stop.
 
 ---
 
@@ -310,8 +310,12 @@ incident row, and threads `retry_of` through `InvestigationRequest` into the new
 
 ### 5.7 Smaller, high-value items
 
-- **Dead-man's switch**: ping healthchecks.io (or HA) after each poll; closes the
-  "who watches the watcher" gap for real.
+- **Dead-man's switch** — ✅ implemented. `channels/deadman.ping()` GETs
+  `settings.deadman_url` (`${HEIM_DEADMAN_URL:-}`, empty = disabled, timeout 10 s) after
+  **every completed poll cycle**, no-ops included — the ping asserts "HEIM is alive and
+  polling", so silence is the signal. Only the daemon's poll job pings: a CLI `heim poll`
+  would reset an external watchdog's grace timer and hide a dead scheduler. Failures are
+  one WARNING line (fire-and-forget, per §2), never a traceback, never raised.
 - **Investigation concurrency cap** — ✅ implemented (`max_concurrent_investigations`).
 - **Web approvals** — ✅ backend implemented: the approval wait races the Telegram
   button against a 5 s poll of `investigations.approval_decision`, which any other
@@ -319,14 +323,27 @@ incident row, and threads `retry_of` through `InvestigationRequest` into the new
   *is* the gate (a dashboard-only deployment keeps its human in the loop instead of
   silently skipping approval); `--dry-run` still auto-approves. The dashboard's
   approve/decline buttons are the remaining UI half.
-- **Retention**: prune resolved incidents/findings/investigation steps after N days;
-  vacuum job.
+- **Retention** — ✅ implemented. `store.prune(now_iso, retention_days)`
+  (`retention_days: 120`, 0 = keep forever) deletes only *finished* history: resolved
+  incidents by `lastSeen`, findings and runs by `run_at`, investigations with a
+  non-empty `finished_at` plus their steps, and terminal jobs (done/failed/interrupted)
+  on the shorter of the window and `JOB_RETENTION_MAX_DAYS` (30). Suppressions,
+  open/clearing/suppressed incidents, unfinished investigations and queued/running jobs
+  are never touched, and a row with an empty timestamp counts as unknown-age, not old.
+  Returns per-table counts (logged when non-empty); `VACUUM` runs — outside any
+  transaction, which also truncates the WAL — past `VACUUM_AFTER_DELETIONS` (500).
 - **Multi-model agent loop**: an OpenAI-compatible tool-calling backend in
   `agent/runner.py` so the investigator can run on OpenRouter models too.
 - **More channels**: ntfy/Matrix/Discord via the channel recipe in §3.
 - **MCP server**: expose the five guarded tools over MCP so interactive Claude sessions
   can use the same vetted, read-only toolbox as the investigator.
-- **Backups**: nightly SQLite `.backup` into `./data/backups/` (it's the only state).
+- **Backups** — ✅ implemented. A nightly daemon job (03:30, configured timezone)
+  snapshots the store via `store.backup_to()` (SQLite's online backup API — WAL-safe,
+  unlike copying the file) into `<db_path dir>/backups/heim-YYYYMMDD.sqlite3`
+  (`./data/backups/` in the compose layout, created on demand) and rotates to the newest
+  `backup_keep: 14`. Backup runs **before** the retention prune in the same job, so the
+  snapshot still holds what is about to be deleted; a failed backup skips the prune
+  entirely, and neither failure can reach the scheduler (`log.exception`).
 
 ### Non-goals
 

@@ -52,6 +52,17 @@ audit_log: audit.jsonl        # every executed/blocked tool call, one JSON line 
 max_concurrent_investigations: 2   # agent runs in flight at once (approval waits don't count)
 suppression_days: 90          # default mute window for a false positive (0 = forever)
 
+# Dead-man's switch: a healthchecks.io-style ping URL the daemon GETs after
+# every completed poll cycle — the external watchdog that notices when the box
+# HEIM itself runs on dies. Empty (the default) disables it.
+deadman_url: "${HEIM_DEADMAN_URL:-}"
+
+# Nightly housekeeping (03:30 local): a WAL-safe SQLite snapshot into
+# <db_path dir>/backups/heim-YYYYMMDD.sqlite3, then a retention prune.
+backup_keep: 14               # daily snapshots to keep (0 = never rotate)
+retention_days: 120           # prune resolved incidents, findings, runs and finished
+                              # investigations older than this (0 = keep forever)
+
 # Maps Prometheus `instance` label address prefixes to host names — used by the
 # alert poller and the daily aggregation to attribute metrics/alerts to hosts.
 # Matched in order: put longer / more specific prefixes FIRST. Extend when you

@@ -83,6 +83,15 @@ class Settings(BaseModel):
     # Default mute window applied when a finding is marked a false positive
     # (roadmap §5.4) — 0 means forever. Overridable per call (`--days`).
     suppression_days: int = 90
+    # Dead-man's switch (roadmap §5.7): a healthchecks.io-style URL the daemon
+    # GETs after every completed poll cycle. Empty disables it.
+    deadman_url: str = ""
+    # Nightly SQLite backups: how many daily snapshots to keep in
+    # <db_path dir>/backups (0 disables pruning, the backup itself always runs).
+    backup_keep: int = 14
+    # Retention: how long resolved/finished history is kept before the nightly
+    # prune deletes it. 0 = keep forever.
+    retention_days: int = 120
     # instance-label address prefix -> host name (used by the alert poller to
     # attribute a firing alert's `instance` label to a configured host)
     instance_host_map: dict[str, str] = {}

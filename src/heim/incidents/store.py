@@ -18,13 +18,39 @@ drains) and ``suppressions`` (muted fingerprints) — plus the
 ``investigations.approval_decision`` column used for approvals that arrive
 from outside Telegram. These are the one place where a second process writes,
 so the connection also sets ``busy_timeout``.
+
+Roadmap §5.7 adds the two housekeeping operations the daemon runs nightly:
+``backup_to`` (SQLite's online backup API — WAL-safe, unlike copying the file)
+and ``prune`` (retention: finished history out, everything still live in).
 """
 from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+#: Closed jobs are receipts for the queue UI, not history — they are pruned on
+#: the shorter of the retention window and this many days.
+JOB_RETENTION_MAX_DAYS = 30
+
+#: Reclaiming space costs a full file rewrite, so only do it when a prune
+#: actually freed something worth rewriting for.
+VACUUM_AFTER_DELETIONS = 500
+
+
+def _shift_iso(now_iso: str, days: int) -> str:
+    """``now_iso`` minus ``days``, rendered for lexical comparison.
+
+    Keeps the offset of the input (an unparseable value falls back to UTC now,
+    so a retention job can never crash on a malformed clock string).
+    """
+    try:
+        base = datetime.fromisoformat(str(now_iso))
+    except (TypeError, ValueError):
+        base = datetime.now(timezone.utc)
+    return (base - timedelta(days=int(days))).isoformat(timespec="milliseconds")
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS incidents (
@@ -543,6 +569,87 @@ class IncidentStore:
             "SELECT fingerprint FROM suppressions WHERE until = '' OR until > ?", (str(now_iso),)
         )
         return {str(r["fingerprint"]) for r in cur.fetchall()}
+
+    # -------------------------------------------- backup & retention (§5.7)
+
+    def backup_to(self, dest_path: str | Path) -> Path:
+        """Snapshot the live database to ``dest_path`` (returns the path).
+
+        Uses SQLite's online backup API rather than copying the file: with WAL
+        enabled the ``.sqlite3`` file alone is *not* a consistent database
+        (committed pages may still live in the ``-wal`` sidecar), so a plain
+        ``cp`` of a running store can restore to a stale or torn state.
+        ``Connection.backup`` reads through the same connection, so the daemon
+        may keep writing while it runs.
+        """
+        dest = Path(dest_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if self._db.in_transaction:      # never snapshot a half-written cycle
+            self._db.commit()
+        target = sqlite3.connect(str(dest))
+        try:
+            self._db.backup(target)
+        finally:
+            target.close()
+        return dest
+
+    def prune(self, now_iso: str, retention_days: int) -> dict:
+        """Delete history older than ``retention_days``; per-table counts back.
+
+        Deletes **only** what is provably finished:
+
+        - ``incidents`` with ``status='resolved'`` whose ``lastSeen`` is older
+        - ``findings`` / ``runs`` by ``run_at``
+        - ``investigations`` that actually finished (``finished_at`` non-empty)
+          and their ``investigation_steps``
+        - ``jobs`` in a terminal state (done/failed/interrupted), on the
+          shorter of the retention window and ``JOB_RETENTION_MAX_DAYS`` —
+          a closed job is a receipt, not history worth months of disk
+
+        Never touched: suppressions, open/clearing/suppressed incidents,
+        unfinished investigations, queued/running jobs. ``retention_days <= 0``
+        means "keep forever" and is a no-op. Only non-zero counts are returned,
+        so an idle night logs nothing.
+
+        Timestamps are compared lexically (the store's convention, cf.
+        ``active_suppressions``): the cutoff is rendered with the same UTC
+        offset as ``now_iso``, so mixed-offset rows can be off by the offset
+        difference — hours at the edge of a 120-day window, which is fine.
+        """
+        days = int(retention_days or 0)
+        if days <= 0:
+            return {}
+        cutoff = _shift_iso(now_iso, days)
+        job_cutoff = _shift_iso(now_iso, min(days, JOB_RETENTION_MAX_DAYS))
+
+        counts: dict[str, int] = {}
+
+        def _delete(table: str, where: str, params: tuple) -> None:
+            n = self._db.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount
+            if n > 0:
+                counts[table] = counts.get(table, 0) + int(n)
+
+        # children first, while their parents are still selectable
+        _delete("investigation_steps",
+                "investigation_id IN (SELECT id FROM investigations "
+                "WHERE finished_at != '' AND finished_at < ?)", (cutoff,))
+        _delete("investigations", "finished_at != '' AND finished_at < ?", (cutoff,))
+        _delete("incidents", "status = 'resolved' AND lastSeen != '' AND lastSeen < ?", (cutoff,))
+        _delete("findings", "run_at != '' AND run_at < ?", (cutoff,))
+        _delete("runs", "run_at != '' AND run_at < ?", (cutoff,))
+        _delete("jobs",
+                "status IN ('done', 'failed', 'interrupted') "
+                "AND COALESCE(NULLIF(finished_at, ''), created_at) != '' "
+                "AND COALESCE(NULLIF(finished_at, ''), created_at) < ?", (job_cutoff,))
+        self._db.commit()
+
+        if sum(counts.values()) > VACUUM_AFTER_DELETIONS:
+            # VACUUM cannot run inside a transaction (hence the commit above,
+            # and no implicit one after it — sqlite3 only auto-opens for DML).
+            # It rebuilds the file, which also checkpoints and truncates the
+            # WAL, so the freed pages actually leave the disk.
+            self._db.execute("VACUUM")
+        return counts
 
     # ------------------------------------------- approvals from outside TG
 
