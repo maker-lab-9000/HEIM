@@ -346,4 +346,6 @@ be a free OpenRouter model) and one investigator session (typically 10–15 tool
 Claude Sonnet) per approved investigation. Real usage is printed in every report footer.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the module map, data flow, and the
-n8n-workflow → module provenance table.
+n8n-workflow → module provenance table — and [`AGENTS.md`](AGENTS.md) for the full project
+guide: conventions, invariants, integrations, scalability notes, and the roadmap
+(self-contained dashboard, investigation tracking, false-positive handling, re-triggers).
