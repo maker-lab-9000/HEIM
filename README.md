@@ -167,12 +167,29 @@ Notes:
 
 ### The built-in dashboard (web UI)
 
-A self-contained web UI focused on **tracking the agent's investigations** —
-every investigation shows its trigger, agent + model, real token usage, and a
-terminal-style transcript of each tool call ($ command, result preview, duration,
-blocked markers) with a "burn line" showing where the budget went. Plus incidents,
-findings history grouped by run, and per-host cards. Dark, dense, resource-light:
-system fonts, ~13 KB of CSS, vendored htmx, no build step, no chart library.
+A self-contained web UI — **HEIM: Homelab Event & Incident Monitor**, full name on
+the rail — focused on tracking the agent's investigations: every investigation shows
+what triggered it (findings + the exact brief sent to the agent), its trigger source,
+agent + model, real token usage and cost, and a terminal-style transcript of each tool
+call ($ command, result preview, duration, blocked markers) with a "burn line" showing
+where the token budget went. The pages:
+
+- **Overview** — KPI tiles (incidents, running/pending/queued, tokens + cost 24h), a
+  live per-host **health card**, the last 10 daily runs with severity counts, recent
+  investigations and findings.
+- **Investigations** — filterable list with live-polling running rows and queued ghost
+  rows; the detail page is the transcript.
+- **Incidents** — the store with lifecycle, dispatch locks, and mute state.
+- **Findings** — full history as a per-run table: severity pills, color-coded host
+  badges, in-row detail expanders, verdict actions.
+- **Metrics** — everything the daily email shows, live: per-host, per-category tables
+  with current/avg, 3-day trend and Δ, from the same aggregation the analyst sees
+  (10-minute cache, REFRESH button).
+- **Hosts** — per-host cards with one-click investigate.
+
+Dark, dense, resource-light: system fonts, ~15 KB of CSS, vendored htmx, no build
+step, no chart library. `/telemetry` exposes HEIM's own counters in Prometheus text
+format so your existing Prometheus/Grafana can watch the watcher.
 
 It also *acts*, through plain forms (htmx is only an enhancement): queue an
 investigation from a host card or an incident, re-run one with fresh evidence,
@@ -191,6 +208,19 @@ writer of the pipeline tables. It is
 heim's only inbound port: keep it LAN/tailnet-only, and set `HEIM_DASHBOARD_TOKEN` in
 `.env` to require HTTP basic auth (any username, the token as password). Design spec:
 [`docs/design/dashboard-ui.md`](docs/design/dashboard-ui.md).
+
+### Built-in operations
+
+- **Dead-man's switch** — set `HEIM_DEADMAN_URL` (a healthchecks.io-style ping URL) and
+  the daemon pings it after every successful poll cycle; if HEIM itself dies, your
+  external watchdog alerts. Daemon-only by design, so ad-hoc CLI runs can't mask a dead
+  scheduler.
+- **Nightly backups** — 03:30 snapshot of the SQLite store (online backup API, safe
+  against the live WAL db) into `data/backups/`, keeping the newest `backup_keep` (14).
+- **Retention** — resolved incidents, findings, runs, finished investigations and closed
+  jobs are pruned past `retention_days` (120; jobs capped at 30). Suppressions and
+  anything open or unfinished are never touched; the backup always runs first, and a
+  failed backup skips the prune.
 
 ### Alternative: bare systemd service
 
