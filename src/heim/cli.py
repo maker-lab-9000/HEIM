@@ -267,6 +267,9 @@ def _print_investigation(row: dict) -> None:
         if row.get(key):
             print(f"  {label:11s} {row[key]}")
     print(f"  {'tokens':11s} {row.get('input_tokens', 0):,} in / {row.get('output_tokens', 0):,} out")
+    # 0 means the model has no entry in settings.model_prices — unpriced, not free
+    if row.get("cost"):
+        print(f"  {'cost':11s} {float(row['cost']):.4f}")
     steps = row.get("steps") or []
     print(f"  {'steps':11s} {len(steps)}")
     if steps:
@@ -274,7 +277,10 @@ def _print_investigation(row: dict) -> None:
         for s in steps:
             flag = "🚫" if s.get("blocked") else "  "
             args_preview = str(s.get("args_json") or "").replace("\n", " ")[:80]
-            print(f"  {flag} {s['seq']:3d} {s['tool']:18s} {s.get('duration_ms', 0):7d}ms  {args_preview}")
+            # ~Nk: the turn's usage, credited to the first call that turn made
+            tok = f" ~{s.get('input_tokens') or 0:>6,}tok" if s.get("input_tokens") else " " * 11
+            print(f"  {flag} {s['seq']:3d} {s['tool']:18s} {s.get('duration_ms', 0):7d}ms"
+                  f"{tok}  {args_preview}")
     if row.get("report_md"):
         print("\n" + "-" * 70 + "\n")
         print(row["report_md"])

@@ -16,6 +16,9 @@
     <div class="kv"><dt class="eyebrow">trigger</dt><dd class="eyebrow">{{ inv.trigger or DASH }}</dd></div>
     <div class="kv"><dt class="eyebrow">agent</dt><dd class="mono">{{ inv.agent_name or 'investigator' }} · {{ inv.model or DASH }}</dd></div>
     <div class="kv"><dt class="eyebrow">tokens</dt><dd class="mono">{{ inv.input_tokens|tokens }} in → {{ inv.output_tokens|tokens }} out</dd></div>
+    {#- an em dash means the model has no entry in settings.model_prices, not
+        that the run was free (§5.6) -#}
+    <div class="kv"><dt class="eyebrow">cost</dt><dd class="mono">{{ inv.cost|money }}</dd></div>
     <div class="kv"><dt class="eyebrow">duration</dt><dd class="mono">{% if inv.status == 'running' %}{{ elapsed(inv.started_at) }} so far{% else %}{{ duration(inv.started_at, inv.finished_at) }}{% endif %}</dd></div>
     <div class="kv"><dt class="eyebrow">started</dt><dd>{{ m.when(inv.started_at) }}</dd></div>
     <div class="kv"><dt class="eyebrow">fingerprint</dt><dd class="mono ink2">{{ inv.fingerprint or DASH }}</dd></div>
@@ -65,6 +68,33 @@
 <section class="card">
   <h2 class="eyebrow">report</h2>
   <p class="empty">No report yet — it is written when the agent finishes.</p>
+</section>
+{% endif %}
+
+{#- the raw session, when settings.store_transcripts was on for this run: for
+    post-morteming a wrong root cause, so it is folded away by default. -#}
+{% if transcript %}
+<section class="card">
+  <details class="fulltx">
+    <summary>Full transcript ({{ transcript|length }} turn{{ '' if transcript|length == 1 else 's' }})</summary>
+    {%- if truncated %}
+    <p class="eyebrow ink3">{{ truncated }}</p>
+    {%- endif %}
+    {%- for turn in transcript %}
+    <div class="turn">
+      <p class="eyebrow ink3">{{ turn.role }}</p>
+      {%- for b in turn.blocks %}
+      {%- if b.kind == 'tool_use' %}
+      <p class="mono ink2">→ {{ b.name }}</p>
+      <pre class="mono wrap">{{ b.text }}</pre>
+      {%- else %}
+      {%- if b.kind == 'tool_result' %}<p class="eyebrow ink3">result</p>{% endif %}
+      <pre class="mono wrap">{{ b.text }}</pre>
+      {%- endif %}
+      {%- endfor %}
+    </div>
+    {%- endfor %}
+  </details>
 </section>
 {% endif %}
 

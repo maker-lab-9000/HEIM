@@ -11,6 +11,7 @@
     <td class="num mono ink3">{{ DASH }}</td>
     <td class="num mono ink3">{{ DASH }}</td>
     <td class="num mono ink3">{{ DASH }}</td>
+    <td class="num mono ink3">{{ DASH }}</td>
     <td class="ink3">{% if g.retry_of %}<a class="mono" href="/investigations/{{ g.retry_of }}">re-run of #{{ g.retry_of }}</a>
       {% else %}{{ m.when(g.created_at) }}{% endif %}</td>
   </tr>
@@ -24,11 +25,12 @@
     <td class="mono ink2" title="{{ r.fingerprint }}">{{ r.fingerprint|fp }}</td>
     <td class="num mono">{{ r.n_steps }}</td>
     <td class="num mono">{{ r.input_tokens|tokens }} → {{ r.output_tokens|tokens }}</td>
+    <td class="num mono">{{ r.cost|money }}</td>
     <td class="num mono">{{ elapsed(r.started_at) if r.status == 'running' else duration(r.started_at, r.finished_at) }}</td>
     <td>{{ m.when(r.started_at) }}</td>
   </tr>
   {%- endfor %}
   {%- if not rows and not ghosts %}
-  <tr><td colspan="9"><p class="empty">No investigations match these filters. Clear them to see everything the store has.</p></td></tr>
+  <tr><td colspan="10"><p class="empty">No investigations match these filters. Clear them to see everything the store has.</p></td></tr>
   {%- endif %}
 </tbody>

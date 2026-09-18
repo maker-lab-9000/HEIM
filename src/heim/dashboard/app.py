@@ -68,6 +68,15 @@ STATIC_DIR = _HERE / "static"
 #: env var holding the shared password for HTTP basic auth (unset = open)
 TOKEN_ENV = "HEIM_DASHBOARD_TOKEN"
 
+#: Paths the basic-auth middleware never challenges. Both are machine
+#: endpoints on the same LAN-only port: ``/healthz`` is the container health
+#: check, and ``/telemetry`` is scraped by Prometheus, which has no way to
+#: carry a basic-auth password here and would otherwise need the token
+#: committed into prometheus.yml. Neither leaks anything an operator would
+#: mind: ``/telemetry`` is aggregate counters only — no hostnames,
+#: fingerprints, findings or report text (roadmap §5.6).
+AUTH_EXEMPT = frozenset({"/healthz", "/telemetry"})
+
 #: a daemon that has not recorded a run in this long is "quiet"
 DAEMON_FRESH_S = 20 * 60
 
@@ -289,6 +298,9 @@ def create_app(config: Config | None = None) -> FastAPI:
     # to this app's config rather than being a free function on fmt
     host_order = tuple(cfg.hosts)
     templates.env.filters["host_var"] = lambda h: fmt.host_color(h, host_order)
+    # money needs the deployment's currency, so it is bound here too (§5.6)
+    currency = cfg.settings.currency
+    templates.env.filters["money"] = lambda v: fmt.money(v, currency)
     templates.env.globals.update(duration=fmt.duration, elapsed=fmt.elapsed,
                                  DASH=fmt.DASH)
     app.state.templates = templates
@@ -332,7 +344,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def basic_auth(request: Request, call_next):
         # read the env per request so a token can be added without a restart
         token = os.environ.get(TOKEN_ENV) or ""
-        if token and request.url.path != "/healthz":
+        if token and request.url.path not in AUTH_EXEMPT:
             if not _auth_ok(request.headers.get("authorization"), token):
                 return Response(
                     "Authentication required.", status_code=401,
@@ -398,6 +410,28 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def healthz() -> str:
         return "ok"
 
+    @app.get("/telemetry")
+    async def telemetry() -> Response:
+        """HEIM watching HEIM (spec §5.6): Prometheus text exposition.
+
+        Named ``/telemetry`` because ``/metrics`` is already the page showing
+        the *monitored* hosts' metrics. Auth-exempt (see ``AUTH_EXEMPT``);
+        aggregate counters only, so there is nothing here a scrape could leak.
+        """
+        now_iso = datetime.now(tz).isoformat(timespec="milliseconds")
+        daily = reader.read(lambda s: s.runs(limit=1, kind="daily"))
+        stats = {
+            "open_incidents": len(reader.read(lambda s: s.open_rows())),
+            "suppressions_active": len(reader.read(
+                lambda s: s.active_suppressions(now_iso))),
+            "jobs_queued": reader.read(lambda s: s.queued_count()),
+            "by_status": reader.read(lambda s: s.counts_by_status()),
+            "usage": reader.read(lambda s: s.usage_totals()),
+            "last_daily_age_s": fmt.age_seconds(daily[0].get("run_at")) if daily else None,
+            "currency": currency,
+        }
+        return Response(exposition(stats), media_type=EXPOSITION_MEDIA_TYPE)
+
     @app.get("/", response_class=HTMLResponse)
     async def overview(request: Request):
         open_incidents = reader.read(lambda s: s.open_rows())
@@ -415,11 +449,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         ]
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         tok_in = tok_out = 0
+        spend = 0.0
         for row in invs:
             started = fmt.parse_dt(row.get("started_at"))
             if started and started >= cutoff:
                 tok_in += int(row.get("input_tokens") or 0)
                 tok_out += int(row.get("output_tokens") or 0)
+                spend += float(row.get("cost") or 0.0)
+        # unpriced models contribute 0, so a whole-zero window says nothing
+        # about money and the tile simply omits it (§5.6)
+        spend_text = f" · {fmt.money(spend, currency)}" if spend else ""
         kpis = [
             {"label": "open incidents", "value": str(len(open_incidents)),
              "meta": _incident_meta(open_incidents), "href": "/incidents"},
@@ -430,7 +469,7 @@ def create_app(config: Config | None = None) -> FastAPI:
              "meta": "waiting on a 👍 in Telegram",
              "href": "/investigations?status=pending_approval"},
             {"label": "tokens 24h", "value": fmt.tokens(tok_in + tok_out),
-             "meta": f"{fmt.tokens(tok_in)} in → {fmt.tokens(tok_out)} out"},
+             "meta": f"{fmt.tokens(tok_in)} in → {fmt.tokens(tok_out)} out{spend_text}"},
             {"label": "queued", "value": str(queued),
              "meta": "waiting for the daemon" if queued else "queue empty",
              "href": "/investigations"},
@@ -438,8 +477,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         return page(
             request, "overview.html", page_title="overview", kpis=kpis,
             latest_run=latest, run_list=run_list,
+            health=_health_card(latest, sev_counts, cfg, open_incidents),
+            tool_usage=_tool_usage(reader.read(lambda s: s.tool_usage(limit=12))),
             investigations=invs[:8], findings=findings[:6],
-            empty=not invs and not findings and not open_incidents and not queued,
+            # a recorded run is activity too — the page used to claim "no
+            # activity yet" while the latest-runs card had something to say
+            empty=not (invs or findings or open_incidents or queued or daily),
         )
 
     @app.get("/investigations", response_class=HTMLResponse)
@@ -467,6 +510,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                         detail="It may have been pruned, or the id is wrong — "
                                "the list shows everything the store has.")
         steps = row.get("steps") or []
+        transcript, truncated = _stored_transcript(row)
         return page(
             request, "investigation.html", page_title=f"investigations / #{inv_id}",
             inv=row, steps=steps, burn=fmt.burn_segments(steps),
@@ -474,6 +518,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             findings=_trigger_findings(row),
             brief_html=_md_to_html(row.get("brief_md") or "") if row.get("brief_md") else "",
             outcome=_outcome_line(row),
+            transcript=transcript, truncated=truncated,
         )
 
     @app.get("/investigations/{inv_id}/transcript", response_class=HTMLResponse)
@@ -678,6 +723,78 @@ def create_app(config: Config | None = None) -> FastAPI:
     return app
 
 
+# --------------------------------------------------------------- telemetry
+#
+# Hand-written exposition rather than a client library: the payload is nine
+# lines of aggregates read from one SQLite connection, and pulling in
+# prometheus_client would add a process-global registry (plus its default
+# process/GC collectors) to a module whose whole point is that it owns no
+# state. Format: text exposition version 0.0.4.
+
+#: what a 0.0.4 scrape expects to be handed
+EXPOSITION_MEDIA_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+
+#: name, type, help — declared here so HELP/TYPE can never drift from the
+#: lines below. Everything is a GAUGE: these are "how things stand now" reads
+#: of a store that also *prunes* history (§5.7), so even the ``_total`` sums
+#: can legitimately go down and must not be treated as monotonic counters.
+_TELEMETRY_HELP = {
+    "heim_open_incidents": "Incidents currently in the open state.",
+    "heim_suppressions_active": "Fingerprints muted right now.",
+    "heim_jobs_queued": "Investigation jobs waiting for the daemon.",
+    "heim_investigations_total": "Investigations in the store, by status.",
+    "heim_tokens_in_total": "Input tokens recorded across investigations and runs.",
+    "heim_tokens_out_total": "Output tokens recorded across investigations and runs.",
+    "heim_cost_total": "Money spent across investigations and runs, in {currency}.",
+    "heim_last_daily_run_age_seconds": "Seconds since the last recorded daily run.",
+}
+
+
+def _label_value(text: str) -> str:
+    """Escape a label value per the exposition format (backslash, quote, LF)."""
+    return (str(text).replace("\\", "\\\\").replace('"', '\\"')
+            .replace("\n", "\\n"))
+
+
+def _sample(value: float | int) -> str:
+    """A sample value: ints stay ints, floats avoid exponent notation."""
+    if isinstance(value, int):
+        return str(value)
+    text = f"{float(value):.6f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def exposition(stats: dict) -> str:
+    """Render the ``/telemetry`` body. Pure: takes the numbers, returns text."""
+    currency = str(stats.get("currency") or "USD")
+    usage = stats.get("usage") or {}
+    lines: list[str] = []
+
+    def block(name: str, samples: list[tuple[str, float | int]]) -> None:
+        lines.append(f"# HELP {name} {_TELEMETRY_HELP[name].format(currency=currency)}")
+        lines.append(f"# TYPE {name} gauge")
+        for labels, value in samples:
+            lines.append(f"{name}{labels} {_sample(value)}")
+
+    block("heim_open_incidents", [("", int(stats.get("open_incidents") or 0))])
+    block("heim_suppressions_active", [("", int(stats.get("suppressions_active") or 0))])
+    block("heim_jobs_queued", [("", int(stats.get("jobs_queued") or 0))])
+    by_status = stats.get("by_status") or {}
+    block("heim_investigations_total",
+          [(f'{{status="{_label_value(s)}"}}', int(n))
+           for s, n in sorted(by_status.items())])
+    block("heim_tokens_in_total", [("", int(usage.get("input_tokens") or 0))])
+    block("heim_tokens_out_total", [("", int(usage.get("output_tokens") or 0))])
+    block("heim_cost_total", [("", float(usage.get("cost") or 0.0))])
+    # No daily run yet is *absence*, not zero and certainly not NaN: a missing
+    # series makes `heim_last_daily_run_age_seconds > 3600` correctly not fire
+    # on a fresh install, where a 0 would read as "just ran".
+    age = stats.get("last_daily_age_s")
+    if age is not None:
+        block("heim_last_daily_run_age_seconds", [("", max(float(age), 0.0))])
+    return "\n".join(lines) + "\n"
+
+
 # ---------------------------------------------------------------- helpers
 
 NAV = [
@@ -740,6 +857,75 @@ def _counts_line(sev_counts: dict[str, int]) -> str:
     line = f"{total} finding{'' if total == 1 else 's'}"
     parts = ([f"{crit} crit"] if crit else []) + ([f"{warn} warn"] if warn else [])
     return f"{line} ({' · '.join(parts)})" if parts else line
+
+
+def _tool_usage(rows: list[dict]) -> list[dict]:
+    """The tool-usage card's rows: the store's grouping plus a share width.
+
+    The bar is a single-hue magnitude encoding scaled to the busiest row —
+    identity stays with the tool badge next to it (the repo's dataviz rule:
+    color follows the entity, never the quantity), and the calls number is
+    right there, so the bar is decoration on a fact rather than the fact.
+    """
+    top = max((int(r.get("calls") or 0) for r in rows), default=0)
+    out = []
+    for r in rows:
+        calls = int(r.get("calls") or 0)
+        out.append({
+            **r,
+            "tool_key": fmt.tool_key(r.get("tool")),
+            "model_short": fmt.short_model(r.get("model")),
+            "share": round(calls / top * 100, 1) if top else 0.0,
+        })
+    return out
+
+
+def _host_health(cfg: Config, open_incidents: list[dict]) -> list[dict]:
+    """One chip per configured host: worst open incident, or clear.
+
+    Config order, so the chips sit where the host badges' colors say they
+    should, and every configured host appears even when it has nothing wrong —
+    "which hosts are fine" is half of what a health strip is for.
+    """
+    chips = []
+    for name in cfg.hosts:
+        mine = [i for i in open_incidents if i.get("host") == name]
+        crit = [i for i in mine
+                if str(i.get("severity") or "").lower().startswith("crit")]
+        if crit:
+            flag, label = "critical", f"{len(crit)} critical"
+        elif mine:
+            flag, label = "warning", f"{len(mine)} open"
+        else:
+            flag, label = "ok", "clear"
+        chips.append({"name": name, "flag": flag, "label": label,
+                      "open": len(mine)})
+    return chips
+
+
+def _health_card(latest: dict | None, sev_counts: dict, cfg: Config,
+                 open_incidents: list[dict]) -> dict | None:
+    """The overview's health card: where the house stands, in words.
+
+    Two halves. The per-host strip is live (it reads the incident store on
+    every request) and always renders. Above it, the latest analysis —
+    severity, headline, executive summary — which only appears once a run has
+    recorded one: runs written before §5.6 have no headline, and an empty
+    quote would say less than no quote.
+    """
+    hosts = _host_health(cfg, open_incidents)
+    headline = str((latest or {}).get("headline") or "").strip()
+    if not hosts and not headline:
+        return None
+    return {
+        "id": (latest or {}).get("id"),
+        "overall": (latest or {}).get("overall") or "",
+        "headline": headline,
+        "summary": str((latest or {}).get("summary") or ""),
+        "run_at": (latest or {}).get("run_at") or "",
+        "line": _counts_line(sev_counts.get((latest or {}).get("id"), {})),
+        "hosts": hosts,
+    }
 
 
 def _findings_line(findings: list[dict]) -> str:
@@ -997,6 +1183,56 @@ def _trigger_findings(row: dict) -> list[dict]:
             "detail": str(f.get("detail") or f.get("summary") or ""),
         })
     return out
+
+
+def _stored_transcript(row: dict) -> tuple[list[dict], str]:
+    """The optional full transcript (§5.6), as turns the template can render.
+
+    ``transcript_json`` is written only when ``settings.store_transcripts`` is
+    on, and the pipeline may have dropped the oldest turns to stay under its
+    512 KB cap — that marker entry is lifted out and returned as the note so
+    the page can say so above the turns instead of showing it as a turn.
+    Unreadable JSON is logged and rendered as "no transcript": a post-mortem
+    aid must never take the detail page down.
+    """
+    raw = row.get("transcript_json") or ""
+    if not raw:
+        return [], ""
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        log.warning("investigation #%s has unreadable transcript_json", row.get("id"))
+        return [], ""
+    if not isinstance(parsed, list):
+        return [], ""
+    turns: list[dict] = []
+    note = ""
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            continue
+        blocks = []
+        for b in entry.get("content") or []:
+            if not isinstance(b, dict):
+                continue
+            kind = str(b.get("type") or "text")
+            if kind == "tool_use":
+                blocks.append({
+                    "kind": "tool_use", "name": str(b.get("name") or ""),
+                    "text": json.dumps(b.get("input") or {}, ensure_ascii=False,
+                                       indent=2, default=str),
+                })
+            elif kind == "tool_result":
+                blocks.append({"kind": "tool_result", "name": "",
+                               "text": str(b.get("content") or "")})
+            else:
+                blocks.append({"kind": "text", "name": "",
+                               "text": str(b.get("text") or "")})
+        role = str(entry.get("role") or "")
+        if entry.get("truncated"):
+            note = blocks[0]["text"] if blocks else ""
+            continue
+        turns.append({"role": role, "blocks": blocks})
+    return turns, note
 
 
 def _outcome_line(row: dict) -> dict | None:

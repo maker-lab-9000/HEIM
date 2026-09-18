@@ -225,7 +225,11 @@ def test_investigations_list_rows(client):
 def test_running_row_shows_elapsed_not_a_dash(client, ids):
     # a running investigation has no finished_at; the honest duration is "so far"
     rows = client.get("/investigations?status=running").text
-    assert ">—<" not in rows
+    # the duration cell is the one before "started"; an em dash there would be
+    # the bug this test guards. (The cost cell legitimately dashes when the
+    # model is unpriced — §5.6 — so the check is scoped to duration.)
+    duration_cell = rows.split('class="num mono">')[-1]
+    assert not duration_cell.startswith("—")
     detail = client.get(f"/investigations/{ids['running']}").text
     assert "so far" in detail
     # a finished one shows the closed interval instead
@@ -430,11 +434,13 @@ def test_weight_budget_and_no_cdn():
     The budget was ~12 KB through v1; the actions slice (spec §5: button
     language, feedback lines, ghost rows) deliberately grew it to 14 KB, and
     the findings table (column widths, host badges, the host color slots)
-    grows it to 15.5 KB. It is still one hand-written file with no build step,
-    and still the only stylesheet the pages load.
+    grows it to 15.5 KB. §5.6 adds the full-transcript block, the metrics
+    fixed-column geometry, the rail tagline, the health card and the
+    tool-usage card, landing at ~17 KB. It is still one hand-written file with no build step, and still
+    the only stylesheet the pages load.
     """
     static = Path(__file__).resolve().parent.parent / "src/heim/dashboard/static"
-    assert (static / "heim.css").stat().st_size <= 15_872
+    assert (static / "heim.css").stat().st_size <= 17_920
     assert (static / "htmx.min.js").stat().st_size > 10_000
     templates = (Path(__file__).resolve().parent.parent
                  / "src/heim/dashboard/templates")

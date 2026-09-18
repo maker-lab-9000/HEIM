@@ -92,7 +92,8 @@ def _incident(fingerprint: str, **kw) -> dict:
 def _stub_agent(monkeypatch, *, output: str = SUMMARY_OUTPUT, raises: Exception | None = None):
     from heim.agent.runner import AgentStep
 
-    async def fake_run_agent(cfg, *, system, user_prompt, tools, on_step=None):
+    async def fake_run_agent(cfg, *, system, user_prompt, tools, on_step=None,
+                             collect_transcript=False):
         if raises is not None:
             raise raises
         return AgentResult(output, [AgentStep("stub", {}, "")], 10, 5)
@@ -674,7 +675,7 @@ async def test_daily_filters_suppressed_and_hints_the_analyst(rt, monkeypatch):
 
     async def fake_analyst(cfg, system, user):
         prompts.append(user)
-        return json.dumps(analysis), "model-x"
+        return json.dumps(analysis), "model-x", {"input": 900, "output": 120}
 
     async def fake_dispatch(rt_, items, *, concurrent, trigger="manual"):
         dispatched.append(items)
@@ -726,7 +727,7 @@ async def test_daily_does_not_resurrect_a_suppressed_incident_row(rt, monkeypatc
         return []
 
     async def fake_analyst(cfg, system, user):
-        return json.dumps(analysis), "model-x"
+        return json.dumps(analysis), "model-x", {"input": 900, "output": 120}
 
     async def fake_dispatch(rt_, items, *, concurrent, trigger="manual"):
         pass

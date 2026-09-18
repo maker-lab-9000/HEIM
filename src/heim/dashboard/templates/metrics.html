@@ -51,25 +51,28 @@
   <h2 class="mhost mono">{{ h.name }} {{ m.pill(h.flag) }}</h2>
   {%- for c in h.cats %}
   <p class="eyebrow mcat">{{ c.name }}</p>
-  <table class="tbl dense">
+  {#- every category table in a host card shares one fixed column geometry
+      (.mtbl), so the stacked tables read as one grid instead of each sizing
+      its own columns and drifting out of alignment. -#}
+  <table class="tbl dense mtbl">
     <thead><tr>
-      <th scope="col">status</th>
-      <th scope="col">metric</th>
-      <th scope="col" class="num">current</th>
-      <th scope="col" class="num">avg</th>
-      <th scope="col">3-day trend</th>
-      <th scope="col" class="num">&Delta;</th>
+      <th scope="col" class="c-flag">status</th>
+      <th scope="col" class="c-mname">metric</th>
+      <th scope="col" class="num c-cur">current</th>
+      <th scope="col" class="num c-avg">avg</th>
+      <th scope="col" class="c-trend">3-day trend</th>
+      <th scope="col" class="num c-delta">&Delta;</th>
     </tr></thead>
     <tbody>
       {%- for r in c.rows %}
       <tr>
-        <td>{{ m.pill(r.flag) }}</td>
-        <td>{{ r.label }}{% if r.name %} <span class="mono ink2">{{ r.name }}</span>{% endif %}</td>
-        <td class="num mono">{{ r.current|mval(r.unit) }}</td>
-        <td class="num mono ink2" title="min {{ r.min|mval(r.unit) }} · max {{ r.max|mval(r.unit) }}">{{ r.avg|mval(r.unit) }}</td>
-        <td class="mono trend">{{ r.day3d|mtrend(r.unit) }}</td>
+        <td class="c-flag">{{ m.pill(r.flag) }}</td>
+        <td class="c-mname">{{ r.label }}{% if r.name %} <span class="mono ink2">{{ r.name }}</span>{% endif %}</td>
+        <td class="num mono c-cur">{{ r.current|mval(r.unit) }}</td>
+        <td class="num mono ink2 c-avg" title="min {{ r.min|mval(r.unit) }} · max {{ r.max|mval(r.unit) }}">{{ r.avg|mval(r.unit) }}</td>
+        <td class="mono trend c-trend">{{ r.day3d|mtrend(r.unit) }}</td>
         {#- status colors never decorate a healthy row (spec §6) -#}
-        <td class="num mono{% if r.flag in ('warn', 'crit') %} st-{{ r.flag }}{% endif %}">{{ r.changePct|mdelta }}</td>
+        <td class="num mono c-delta{% if r.flag in ('warn', 'crit') %} st-{{ r.flag }}{% endif %}">{{ r.changePct|mdelta }}</td>
       </tr>
       {%- endfor %}
     </tbody>

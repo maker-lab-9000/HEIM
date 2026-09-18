@@ -143,8 +143,8 @@ def test_trend_and_delta_cells(client):
     assert "▲ 11.0%" in t            # mem_used: 82 → 91
     assert "▬" in t                  # mem_psi: flat
     # the crit row's delta is colored; the ok rows' deltas are not
-    assert '<td class="num mono st-crit">▲ 13.3%</td>' in t
-    assert '<td class="num mono">▲ 100.0%</td>' in t
+    assert '<td class="num mono c-delta st-crit">▲ 13.3%</td>' in t
+    assert '<td class="num mono c-delta">▲ 100.0%</td>' in t
     # humanized current values and the min/max title on the avg cell
     assert "91.0%" in t and "68.0°C" in t
     assert 'title="min 82.0% · max 91.0%"' in t
@@ -153,7 +153,7 @@ def test_trend_and_delta_cells(client):
 def test_na_row_is_muted_and_dashed(client):
     t = client.get("/metrics").text
     assert '<span class="pill st-muted"><span class="dot" aria-hidden="true">·</span>n/a' in t
-    assert "<td class=\"num mono\">—</td>" in t   # changePct is null for a state
+    assert '<td class="num mono c-delta">—</td>' in t   # changePct is null for a state
 
 
 def test_header_counts_and_overall_pill(client):

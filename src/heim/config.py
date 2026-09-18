@@ -92,6 +92,18 @@ class Settings(BaseModel):
     # Retention: how long resolved/finished history is kept before the nightly
     # prune deletes it. 0 = keep forever.
     retention_days: int = 120
+    # Cost accounting (roadmap §5.6): model id -> {input, output} price per
+    # MILLION tokens, in `currency`. Keys must match the model ids used in
+    # config/agents/*.yaml. A model with no entry here is simply not priced —
+    # its cost is stored as 0 and rendered as an em dash, never guessed.
+    model_prices: dict[str, dict] = {}
+    # The currency `model_prices` is quoted in. Rendered as "$" for USD and as
+    # the bare code otherwise ("EUR 0.42") — no conversion ever happens.
+    currency: str = "USD"
+    # Store the agent's full message transcript with each investigation
+    # (roadmap §5.6). Off by default: it is large, and only needed when
+    # post-morteming a wrong root cause. Capped at 512 KB per investigation.
+    store_transcripts: bool = False
     # instance-label address prefix -> host name (used by the alert poller to
     # attribute a firing alert's `instance` label to a configured host)
     instance_host_map: dict[str, str] = {}

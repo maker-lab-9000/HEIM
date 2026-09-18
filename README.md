@@ -175,8 +175,9 @@ call ($ command, result preview, duration, blocked markers) with a "burn line" s
 where the token budget went. The pages:
 
 - **Overview** — KPI tiles (incidents, running/pending/queued, tokens + cost 24h), a
-  live per-host **health card**, the last 10 daily runs with severity counts, recent
-  investigations and findings.
+  **health card** (the latest analysis in words + a live per-host strip), the last 10
+  daily runs with severity counts, a **tool usage** card (which tool, by which agent
+  and model: calls, blocked, avg time, tokens), recent investigations and findings.
 - **Investigations** — filterable list with live-polling running rows and queued ghost
   rows; the detail page is the transcript.
 - **Incidents** — the store with lifecycle, dispatch locks, and mute state.
@@ -187,7 +188,7 @@ where the token budget went. The pages:
   (10-minute cache, REFRESH button).
 - **Hosts** — per-host cards with one-click investigate.
 
-Dark, dense, resource-light: system fonts, ~15 KB of CSS, vendored htmx, no build
+Dark, dense, resource-light: system fonts, ~17 KB of CSS, vendored htmx, no build
 step, no chart library. `/telemetry` exposes HEIM's own counters in Prometheus text
 format so your existing Prometheus/Grafana can watch the watcher.
 
@@ -277,6 +278,13 @@ Endpoints, schedules, recipients, timeouts — see the commented
 (`loki`, `telegram`, `email`, `home_assistant`) can be **removed entirely** to disable
 that channel; the pipelines degrade gracefully (e.g. no email config → reports are
 written to `out/`).
+
+Two knobs are worth setting deliberately:
+
+| Setting | Effect |
+|---|---|
+| `model_prices` + `currency` | model id → `{input, output}` price **per million tokens**. Ships commented out with placeholder numbers — fill in your provider's current pricing and investigations, runs and the 24h tile start showing money. A model with no entry stays *unpriced*: the UI shows an em dash, never a made-up `$0.00`. |
+| `store_transcripts` | keep each agent's full message history with its investigation (capped at 512 KB, oldest turns dropped) for post-morteming a wrong root cause. Off by default — it is large. |
 
 ### `config/hosts/*.yaml` — add a host, add a file
 | Field | Meaning |

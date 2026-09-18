@@ -144,6 +144,27 @@ def tokens(n: int | float | None) -> str:
     return f"{n / 1_000_000:.1f}M"
 
 
+def money(amount: float | int | None, currency: str = "USD") -> str:
+    """"$0.42" / "EUR 0.42" / "—" when there is nothing to show.
+
+    Deliberately dumb: no conversion, no locale, no rounding to a currency's
+    minor unit. A stored 0 means *unpriced* (the model has no entry in
+    ``settings.model_prices``) and renders as an em dash — showing "$0.00"
+    would claim a run was free. Sub-cent amounts keep four decimals, because
+    "$0.00" for a real spend is the same lie in miniature.
+    """
+    try:
+        value = float(amount or 0)
+    except (TypeError, ValueError):
+        return DASH
+    if value == 0:
+        return DASH
+    code = str(currency or "USD").strip().upper() or "USD"
+    prefix = "$" if code == "USD" else f"{code} "
+    text = f"{value:.4f}" if abs(value) < 0.01 else f"{value:,.2f}"
+    return prefix + text
+
+
 def size(nbytes: int | float | None) -> str:
     """"2.1 KB" — result sizes in the transcript meta."""
     try:
@@ -270,6 +291,28 @@ def tool_key(tool: str | None) -> str:
     return _TOOL_KEY.get(str(tool or ""), "other")
 
 
+#: how much of a model id a narrow column can carry
+MODEL_WIDTH = 22
+
+
+def short_model(name: str | None) -> str:
+    """A model id trimmed to fit a table cell, without lying about which one.
+
+    Drops the vendor prefix and any ``:free``/``:beta`` variant suffix — the
+    parts that repeat down a column — and middle-truncates whatever is still
+    too long, keeping both ends so ``…-4-6`` and ``…-4-5`` stay distinct.
+    """
+    text = str(name or "").strip()
+    if not text:
+        return DASH
+    text = text.rsplit("/", 1)[-1].split(":", 1)[0]
+    if len(text) <= MODEL_WIDTH:
+        return text
+    head = (MODEL_WIDTH - 1 + 1) // 2
+    tail = MODEL_WIDTH - 1 - head
+    return text[:head] + "…" + (text[-tail:] if tail else "")
+
+
 # ----------------------------------------------------------------- hosts
 
 #: How many hosts can carry a color. The host badges reuse the SAME validated
@@ -302,29 +345,43 @@ def host_color(host: str | None, hosts=()) -> str:
 # -------------------------------------------------------------- transcript
 
 
+#: what the burn line is measuring, spelled out in the caption and tooltips
+BURN_TOKENS = "input tokens"
+BURN_BYTES = "tool output"
+
+
 def burn_segments(steps: list[dict]) -> list[dict]:
     """Segment widths for the burn line.
 
-    The spec calls for cumulative *output-token* share per step, but tokens are
-    only accounted per investigation (not per turn — see AGENTS.md §5.6), so a
-    step's share of total tool-output bytes is used as the stand-in: it is the
-    closest stored proxy for "where the budget went", since tool output is what
-    gets fed back into the model's context. The tooltip says so explicitly.
+    Since §5.6 the runner attributes each assistant turn's usage to the first
+    tool call that turn requested, so the spec's "where did the budget go" bar
+    can be drawn from **real input tokens** whenever the steps carry them.
+    Rows written before that (or by a provider that reported no usage) have
+    only ``result_bytes``, so they keep the original proxy — a step's share of
+    total tool output, which is what gets fed back into the model's context —
+    under its own, different, honest label. The caption and every tooltip name
+    whichever basis was used; the two are never mixed in one bar.
     """
     steps = [s for s in (steps or [])]
-    total = sum(max(int(s.get("result_bytes") or 0), 0) for s in steps)
+    priced = any(int(s.get("input_tokens") or 0) > 0 for s in steps)
+    basis = BURN_TOKENS if priced else BURN_BYTES
+    key = "input_tokens" if priced else "result_bytes"
+    total = sum(max(int(s.get(key) or 0), 0) for s in steps)
     out: list[dict] = []
     for s in steps:
-        nbytes = max(int(s.get("result_bytes") or 0), 0)
-        pct = (nbytes / total * 100) if total else (100 / len(steps) if steps else 0)
+        n = max(int(s.get(key) or 0), 0)
+        pct = (n / total * 100) if total else (100 / len(steps) if steps else 0)
+        amount = f"{tokens(n)} tok" if priced else size(n)
+        share = f"{pct:.0f}% of {basis}" if priced else f"{pct:.0f}% share of {basis}"
         out.append({
             "seq": int(s.get("seq") or 0),
             "tool": s.get("tool") or "",
             "tool_key": tool_key(s.get("tool")),
             "blocked": bool(s.get("blocked")),
             "pct": round(pct, 3),
+            "basis": basis,
             "title": (f"{int(s.get('seq') or 0):02d} {s.get('tool') or ''} · "
-                      f"{size(nbytes)} · {pct:.0f}% share of tool output"),
+                      f"{amount} · {share}"),
         })
     return out
 

@@ -22,6 +22,33 @@
   {%- endfor %}
 </section>
 
+{#- the health card (design spec §3): where the house stands. The per-host
+    strip is live off the incident store; above it, the latest analysis in
+    words — severity icon + headline + executive summary, linking to the
+    findings that back it — which only appears once a run recorded one. -#}
+{%- if health %}
+<section class="card health">
+  {%- if health.headline %}
+  <p class="headline">{{ m.pill(health.overall) }}
+    <span class="htext">{{ health.headline }}</span></p>
+  {%- if health.summary %}
+  <p class="prose">{{ health.summary }}</p>
+  {%- endif %}
+  <p class="eyebrow ink3">{{ health.run_at|day }} {{ health.run_at|clock }}
+    {%- if health.line %} · {{ health.line }}{% endif %}
+    · <a class="qlink" href="/findings#run-{{ health.id }}">findings</a></p>
+  {%- endif %}
+  {%- if health.hosts %}
+  <ul class="hstrip" aria-label="Per-host health">
+    {%- for h in health.hosts %}
+    <li><a href="/hosts">{{ m.hostbadge(h.name) }} {{ m.pill(h.flag) }}
+      <span class="ink3 mono">{{ h.label }}</span></a></li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+</section>
+{%- endif %}
+
 <section class="card">
   <h2 class="eyebrow">latest runs</h2>
   {%- if latest_run %}
@@ -33,6 +60,49 @@
   {%- endfor %}
   {%- else %}
   <p class="empty">No daily run recorded yet. The first scheduled run writes the headline here.</p>
+  {%- endif %}
+</section>
+
+{#- what the agents actually do all day: tool calls grouped by the agent and
+    model that made them. The bar is a magnitude encoding scaled to the
+    busiest row; identity is the tool badge, and the calls column carries the
+    number, so the bar never has to be read precisely. -#}
+<section class="card">
+  <h2 class="eyebrow">tool usage</h2>
+  {%- if tool_usage %}
+  <table class="tbl dense tutbl">
+    <thead><tr>
+      <th scope="col">tool</th>
+      <th scope="col">agent</th>
+      <th scope="col" class="num c-calls">calls</th>
+      <th scope="col" class="c-share">share</th>
+      <th scope="col" class="num c-blocked">blocked</th>
+      <th scope="col" class="num c-avg">avg time</th>
+      <th scope="col" class="num c-tok">tokens</th>
+    </tr></thead>
+    <tbody>
+      {%- for r in tool_usage %}
+      <tr>
+        <td>{{ m.tool(r.tool) }}</td>
+        <td class="mono ink2">{{ r.agent_name or DASH }} · {{ r.model_short }}</td>
+        <td class="num mono c-calls">{{ r.calls }}</td>
+        <td class="c-share">
+          <span class="tubar" role="img"
+                title="{{ r.calls }} call{{ '' if r.calls == 1 else 's' }} · {{ r.share }}% of the busiest row"
+                aria-label="{{ r.share }} percent of the busiest row">
+            <span class="seg" style="width:{{ r.share }}%"></span></span>
+        </td>
+        <td class="num mono c-blocked{{ ' ink3' if not r.blocked }}">{% if r.blocked %}⛔ {{ r.blocked }}{% else %}0{% endif %}</td>
+        <td class="num mono c-avg">{{ r.avg_ms|dur_ms }}</td>
+        {#- an em dash means the steps predate per-step attribution (§5.6),
+            not that the calls were free -#}
+        <td class="num mono c-tok">{% if r.tokens %}{{ r.tokens|tokens }}{% else %}{{ DASH }}{% endif %}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- else %}
+  <p class="empty">No tool calls recorded yet — the first investigation fills this in.</p>
   {%- endif %}
 </section>
 

@@ -93,9 +93,13 @@ freshest `runs` row. Top bar: page title (lowercase, mono), right side environme
 ## 3. Pages
 
 **Overview** — KPI stat tiles (per dataviz stat-tile spec: mono hero number, small
-mono-caps label above, one-line delta/meta below in --ink-2; no plot needed), latest
-headline card (severity icon + headline + executive summary, links to Findings), recent
-investigations table (8 rows), recent findings list (6 rows). Empty state: "No activity
+mono-caps label above, one-line delta/meta below in --ink-2; no plot needed), the
+**health card** (severity icon + headline + executive summary from the latest run,
+links to Findings, plus a live per-host chip strip: host badge + flag + "1 critical" /
+"clear"), the last daily runs, the **tool usage** card (tool badge · agent · model ·
+calls · a share bar scaled to the busiest row · blocked · avg time · tokens — single-
+hue magnitude, identity carried by the badge), recent investigations table (8 rows),
+recent findings list (6 rows). Empty state: "No activity
 yet. The daemon records every run here — check back after the next poll."
 
 **Investigations** — the core page. Filter row (status select, host select, trigger
@@ -118,9 +122,13 @@ Row click → detail. Running rows: htmx poll `every 5s` on the tbody.
 **Investigation detail — THE SIGNATURE.** The page reads as the agent's session
 transcript. Header block: host + status pill + trigger + `investigator · claude-sonnet-4-6`
 + tokens in/out + duration + fingerprint (mono). Below it the **burn line**: a 3px
-full-width bar, ember on --ember-dim underlay, filled by cumulative output-token share
-per step — a literal fuse showing where the budget went; each step's segment is
-hoverable (`title`). Then the transcript:
+full-width bar, ember on --ember-dim underlay, filled by per-step token share — a
+literal fuse showing where the budget went; each step's segment is hoverable
+(`title`). Since the runner attributes each turn's usage to the first tool call it
+requested (AGENTS.md §5.6), the bar draws **real input-token share**; rows recorded
+before that fall back to the older share-of-tool-output-bytes proxy, under its own
+label, and the two bases are never mixed in one bar. The caption names whichever is
+in use. Then the transcript:
 
 ```
 │ 01  ▪ prometheus_query                                    1.2s · 2.1 KB
@@ -141,9 +149,13 @@ Anatomy per entry: left gutter = 2-digit mono step number; tool badge = colored 
 command line prefixed `$ ` in mono --ink on --raised; result preview one line, --ink-2,
 `[expand]` toggles the stored 400-char preview (native `<details>`, no JS). Blocked
 steps: ⛔ + label, left gutter bar turns --crit for that entry. A running investigation
-appends entries live (htmx poll of the transcript partial). After the transcript: the
-rendered report (`report_md` through the existing markdown pipeline, quiet
-typographic styles), then the outcome line ("✓ Resolved by operator · 21:58" /
+appends entries live (htmx poll of the transcript partial). Each entry's right meta also
+carries `~9.0k tok` when the step has an attributed turn usage — the tilde is load
+bearing: a multi-call turn credits its whole delta to the first call. After the
+transcript: the rendered report (`report_md` through the existing markdown pipeline,
+quiet typographic styles), then — when the run stored one — a folded
+`Full transcript (N turns)` block (role eyebrow per turn, text in `<pre class="wrap">`),
+then the outcome line ("✓ Resolved by operator · 21:58" /
 "⚠ Needs human — re-proposed next run").
 
 **Incidents** — store table: severity pill, status (open/clearing/resolved + 🔒 when
@@ -169,9 +181,11 @@ count, last finding line, last investigation line. 2–3 col grid.
 - Copy: sentence case, plain verbs, no filler. Empty states name the action that fills
   them. Errors say what happened and what to check ("Store unreadable at data/heim.sqlite3
   — is the daemon running with the same volume?").
-- Weight budget: total CSS ≤ ~12 KB, htmx vendored (no CDN at runtime), zero images
-  (the wordmark spark is text/SVG inline). No layout shift: mono tabular numbers,
-  fixed table column classes.
+- Weight budget: total CSS ≤ ~12 KB at v1 (see §5 and §7 for where it has grown to),
+  htmx vendored (no CDN at runtime), zero images (the wordmark spark is text/SVG
+  inline). No layout shift: mono tabular numbers, fixed table column classes — the
+  metrics page's per-category tables share one fixed column geometry (`.mtbl`,
+  percentage widths) so stacked tables in a host card read as one grid.
 
 ## 5. Actions (v2 — the jobs queue slice)
 
@@ -245,7 +259,22 @@ match what the analyst saw.
 - No charts, no new JS: the three-value trend + arrow IS the sparkline, and it stays
   legible in a mono column.
 
-## 7. Still out of scope
+## 7. Observability slice (AGENTS.md §5.6)
+
+- Investigation detail header gains a `cost` kv; the investigations list a `cost`
+  column; findings run headers append `· $0.12`; the overview's `tokens 24h` tile
+  appends the 24h spend. **An em dash means unpriced** (no entry in
+  `settings.model_prices`), never `$0.00` — and a currency other than USD prints its
+  code (`EUR 0.42`) rather than a guessed symbol.
+- `/telemetry` (not `/metrics`, which is the metric-detail page) serves Prometheus
+  text exposition 0.0.4 and is **auth-exempt** like `/healthz`: a scraper cannot carry
+  the basic-auth password and the payload is aggregate counters only.
+- The rail carries the product's full name under the wordmark ("Homelab Event &
+  Incident Monitor"), hidden with the labels on the collapsed 56px icon rail.
+- Weight: this slice (transcript block, `.mtbl` geometry, health/tool-usage cards, the
+  tagline) takes the stylesheet to ~17 KB. Still one hand-written file, no build step.
+
+## 8. Still out of scope
 
 "Load 50 more" pagination (lists cap at 200 rows) and the Recommendations page —
 deferred; tracked in AGENTS.md §5.3.

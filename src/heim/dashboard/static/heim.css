@@ -53,6 +53,10 @@ a:hover { text-decoration: underline; }
 .spark { color: var(--ember); width: 17px; height: 22px; flex: none; display: none; }
 .lockup { color: var(--ember); width: 128px; height: auto; flex: none; }
 .visually-hidden { position: absolute; left: -9999px; }
+.tagline {
+  margin: -8px 0 14px; padding: 0 16px; color: var(--ink-3);
+  font: 0.6875rem/1.35 var(--mono); letter-spacing: .04em;
+}
 .nav { list-style: none; margin: 0; padding: 0; flex: 1; }
 .nav a {
   display: flex; gap: 10px; align-items: center; padding: 7px 16px;
@@ -111,6 +115,26 @@ main { margin-left: 200px; max-width: 1280px; padding: 16px; }
 .stat .meta { margin: 0; font-size: 0.8125rem; color: var(--ink-2); }
 .stat.is-running { border-color: var(--ember-dim); }
 .stat.is-running .hero { color: var(--ember); }
+
+/* tool usage: the burn line's bar, reused per row as a magnitude encoding */
+.tutbl .c-calls, .tutbl .c-blocked, .tutbl .c-tok { width: 5.5em; }
+.tutbl .c-avg { width: 6em; }
+.tutbl .c-share { width: 22%; }
+.tubar {
+  display: block; height: 3px; background: var(--ember-dim); border-radius: 2px;
+  overflow: hidden; margin: 6px 0 0;
+}
+.tubar .seg { display: block; height: 100%; background: var(--ember); min-width: 1px; }
+
+/* health card: the analyst's words, one step louder than the run lines */
+.health .htext { color: var(--ink); font-size: 0.9375rem; }
+.health .prose { margin: 6px 0 8px; }
+.health > .eyebrow { margin: 0; }
+.hstrip { list-style: none; display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 10px 0 0; padding: 0; }
+.hstrip li { border: 1px solid var(--line); border-radius: var(--r); padding: 4px 10px; }
+.hstrip a { display: flex; gap: 8px; align-items: baseline; color: inherit; }
+.hstrip a:hover { text-decoration: none; border-color: var(--ember); }
+.health .headline + .hstrip, .health .eyebrow + .hstrip { margin-top: 12px; }
 
 .empty { margin: 4px 0; color: var(--ink-3); font-size: 0.8125rem; }
 .errmsg { color: var(--serious); margin: 4px 0; }
@@ -213,6 +237,16 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 }
 .entry-empty { padding: 8px 0; }
 
+/* full transcript (§5.6): quiet, mono, folded away — a post-mortem tool */
+.fulltx .turn { padding: 8px 0; border-top: 1px solid var(--line); }
+.fulltx .turn:first-of-type { border-top: 0; }
+.fulltx .turn > .eyebrow { margin: 0 0 4px; }
+.wrap {
+  margin: 0 0 6px; padding: 6px 8px; background: var(--raised); border-radius: 4px;
+  font-size: 0.8125rem; color: var(--ink-2); white-space: pre-wrap; word-break: break-word;
+  max-height: 20em; overflow: auto;
+}
+
 .outcome {
   display: flex; gap: 8px; align-items: baseline; margin: 0 0 16px; padding: 10px 12px;
   background: var(--panel); border: 1px solid var(--line); border-left-width: 2px;
@@ -311,6 +345,18 @@ a.btn:hover { text-decoration: none; }
 .mhost { margin: 0 0 4px; display: flex; gap: 10px; align-items: center; font-size: 1.0625rem; }
 .mcat { margin: 12px 0 2px; }
 .tbl .trend { color: var(--ink-2); white-space: nowrap; }
+/* A host card stacks one table per category. Auto layout sizes each of them
+   independently, so the columns stagger down the card; fixed layout with
+   percentage widths gives every category table the same geometry and the
+   card reads as one grid. Percentages (not ems) so it survives the rail
+   collapsing at 900px without a horizontal scrollbar. */
+.mtbl { table-layout: fixed; }
+.mtbl .c-flag { width: 11%; }
+.mtbl .c-cur, .mtbl .c-avg { width: 12%; }
+.mtbl .c-trend { width: 20%; }
+.mtbl .c-delta { width: 10%; }
+.mtbl .c-mname { overflow-wrap: anywhere; }
+.mtbl .c-trend, .mtbl .c-cur, .mtbl .c-avg { overflow: hidden; text-overflow: ellipsis; }
 
 /* responsive */
 
@@ -318,6 +364,7 @@ a.btn:hover { text-decoration: none; }
   .rail { width: 56px; }
   .mark { justify-content: center; padding: 4px 0 16px; }
   .mark .word, .nav .lbl, .daemon .lbl { position: absolute; left: -9999px; }
+  .tagline { display: none; }
   .lockup { display: none; }
   .spark { display: block; }
   .nav a { justify-content: center; padding: 10px 0; }

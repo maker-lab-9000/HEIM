@@ -19,6 +19,13 @@ drains) and ``suppressions`` (muted fingerprints) — plus the
 from outside Telegram. These are the one place where a second process writes,
 so the connection also sets ``busy_timeout``.
 
+Roadmap §5.6 adds the observability columns — per-step token attribution
+(``investigation_steps.input_tokens/output_tokens``), money
+(``investigations.cost``, ``runs.input_tokens/output_tokens/cost``) and the
+optional full agent transcript (``investigations.transcript_json``) — all
+through the same ``_ADDED_COLUMNS`` migration map, plus ``usage_totals()`` for
+the ``/telemetry`` exposition.
+
 Roadmap §5.7 adds the two housekeeping operations the daemon runs nightly:
 ``backup_to`` (SQLite's online backup API — WAL-safe, unlike copying the file)
 and ``prune`` (retention: finished history out, everything still live in).
@@ -164,6 +171,31 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # the findings that triggered the run, as the pipeline received them —
         # the provenance the dashboard's "triggered by" card reads
         ("findings_json", "TEXT NOT NULL DEFAULT ''"),
+        # §5.6: money spent, in settings.currency. 0 means "not priced" (the
+        # model has no entry in settings.model_prices), never "free".
+        ("cost", "REAL NOT NULL DEFAULT 0"),
+        # §5.6: the agent's full message history, JSON, capped — only written
+        # when settings.store_transcripts is on. '' = not collected.
+        ("transcript_json", "TEXT NOT NULL DEFAULT ''"),
+    ],
+    "investigation_steps": [
+        # §5.6: usage of the assistant turn that requested this call. When one
+        # turn issued several calls the first carries the whole delta and its
+        # siblings carry 0, so the column SUMs to the run's real usage.
+        ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "runs": [
+        # §5.6: the analyst completion's usage and cost, same semantics as
+        # the investigations columns above.
+        ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("cost", "REAL NOT NULL DEFAULT 0"),
+        # The analyst's verdict in words. `overall` alone is a status word;
+        # these two are what the run actually said, and until now they lived
+        # only in the email. The dashboard's health card reads them.
+        ("headline", "TEXT NOT NULL DEFAULT ''"),
+        ("summary", "TEXT NOT NULL DEFAULT ''"),
     ],
 }
 
@@ -178,10 +210,11 @@ _INVESTIGATION_COLS = [
     "fingerprint", "host", "host_role", "agent_name", "model", "trigger", "status",
     "started_at", "finished_at", "input_tokens", "output_tokens", "n_steps",
     "brief_md", "report_md", "incomplete_reason", "outcome", "retry_of",
-    "approval_decision", "findings_json",
+    "approval_decision", "findings_json", "cost", "transcript_json",
 ]
 
-_RUN_COLS = ["run_at", "kind", "overall", "model_used", "duration_s", "counts_json"]
+_RUN_COLS = ["run_at", "kind", "overall", "model_used", "duration_s", "counts_json",
+             "input_tokens", "output_tokens", "cost", "headline", "summary"]
 
 _FINDING_FIELDS = ["host", "metric", "severity", "trend", "summary", "detail", "recommendation"]
 
@@ -302,13 +335,17 @@ class IncidentStore:
         result_bytes: int = 0,
         blocked: bool = False,
         duration_ms: int = 0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
     ) -> int:
         cur = self._db.execute(
             """INSERT INTO investigation_steps
-               (investigation_id, seq, tool, args_json, result_preview, result_bytes, blocked, duration_ms)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (investigation_id, seq, tool, args_json, result_preview, result_bytes,
+                blocked, duration_ms, input_tokens, output_tokens)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (investigation_id, int(seq), str(tool), str(args_json), str(result_preview),
-             int(result_bytes or 0), 1 if blocked else 0, int(duration_ms or 0)),
+             int(result_bytes or 0), 1 if blocked else 0, int(duration_ms or 0),
+             int(input_tokens or 0), int(output_tokens or 0)),
         )
         self._db.commit()
         return int(cur.lastrowid or 0)
@@ -342,6 +379,63 @@ class IncidentStore:
         for r in rows:
             r["blocked"] = bool(r["blocked"])
         return rows
+
+    def usage_totals(self) -> dict:
+        """Lifetime tokens and cost across investigations *and* runs (§5.6).
+
+        The two tables are the only places HEIM spends money: the agent loop
+        and the daily analyst completion. Summed here rather than in the
+        caller so ``/telemetry`` stays one read. Retention pruning means these
+        are "what the store still remembers", which is the honest scope for a
+        gauge — the docstring of the exposition says so too.
+        """
+        totals = {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
+        for table in ("investigations", "runs"):
+            row = self._db.execute(
+                f"SELECT COALESCE(SUM(input_tokens), 0) AS i, "
+                f"COALESCE(SUM(output_tokens), 0) AS o, "
+                f"COALESCE(SUM(cost), 0) AS c FROM {table}"
+            ).fetchone()
+            totals["input_tokens"] += int(row["i"] or 0)
+            totals["output_tokens"] += int(row["o"] or 0)
+            totals["cost"] += float(row["c"] or 0.0)
+        return totals
+
+    def tool_usage(self, limit: int = 12) -> list[dict]:
+        """Which tools get used, by which agent — one grouped query.
+
+        Grouped by (tool, agent_name, model) rather than by tool alone: the
+        same tool behaves differently under a different model, and once there
+        is more than one agent (or a model upgrade) "ssh_diagnostic: 412 calls"
+        stops being a fact about anything. Busiest first.
+
+        ``tokens`` is the summed per-step attribution (§5.6), so it is 0 for
+        rows written before that — the card renders those as an em dash rather
+        than as "no tokens used".
+        """
+        cur = self._db.execute(
+            """SELECT s.tool AS tool,
+                      i.agent_name AS agent_name,
+                      i.model AS model,
+                      COUNT(*) AS calls,
+                      COALESCE(SUM(s.blocked), 0) AS blocked,
+                      COALESCE(AVG(s.duration_ms), 0) AS avg_ms,
+                      COALESCE(SUM(s.input_tokens + s.output_tokens), 0) AS tokens
+               FROM investigation_steps s
+               JOIN investigations i ON i.id = s.investigation_id
+               GROUP BY s.tool, i.agent_name, i.model
+               ORDER BY calls DESC, s.tool
+               LIMIT ?""",
+            (int(limit),),
+        )
+        return [{"tool": str(r["tool"] or ""),
+                 "agent_name": str(r["agent_name"] or ""),
+                 "model": str(r["model"] or ""),
+                 "calls": int(r["calls"] or 0),
+                 "blocked": int(r["blocked"] or 0),
+                 "avg_ms": float(r["avg_ms"] or 0.0),
+                 "tokens": int(r["tokens"] or 0)}
+                for r in cur.fetchall()]
 
     def counts_by_status(self) -> dict:
         cur = self._db.execute(

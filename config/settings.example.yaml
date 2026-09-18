@@ -63,6 +63,25 @@ backup_keep: 14               # daily snapshots to keep (0 = never rotate)
 retention_days: 120           # prune resolved incidents, findings, runs and finished
                               # investigations older than this (0 = keep forever)
 
+# Cost accounting (roadmap §5.6). Model id -> price per MILLION tokens, in
+# `currency` below; the ids must match the models in config/agents/*.yaml.
+# A model with no entry here is NOT priced: its cost is stored as 0 and the
+# dashboard renders an em dash instead of inventing a number.
+# EXAMPLE VALUES ONLY — check your provider's current pricing before trusting
+# any line you copy from here.
+# model_prices:
+#   claude-sonnet-4-6:               # example values — check your provider's
+#     input: 3.00                    # current pricing
+#     output: 15.00
+#   claude-opus-4-6:
+#     input: 3.00                    # example values — check your provider's
+#     output: 15.00                  # current pricing
+# currency: USD                 # "$" for USD, otherwise the bare code ("EUR 0.42")
+
+# Keep the agent's full message history with each investigation — for
+# post-morteming wrong RCAs; large (capped at 512 KB per investigation).
+store_transcripts: false
+
 # Maps Prometheus `instance` label address prefixes to host names — used by the
 # alert poller and the daily aggregation to attribute metrics/alerts to hosts.
 # Matched in order: put longer / more specific prefixes FIRST. Extend when you

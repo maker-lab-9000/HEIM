@@ -27,7 +27,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (394 tests). Design
+covered by golden tests against the original JavaScript behavior (557 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -37,12 +37,12 @@ edges** (tools, channels, pipelines).
 |---|---|
 | Detection | 49-query trend catalog · per-day averages, change %, warn/crit flags · Prometheus alert rules with `qid` labels (fast path) · anti-flap hysteresis (2 clear polls / 2 missed runs) |
 | Incidents | SQLite store · deterministic fingerprints (`host\|qid\|name`) · open/clearing/resolved lifecycle · warn→crit escalation · per-fingerprint dispatch lock · poller-vs-daily ownership split (`[alert]` prefix) · false-positive verdicts + timed/forever suppression (pipeline-level, analyst hint) |
-| Agent | Anthropic-native tool loop · soft prompt budget + hard in-loop step cap · retries · real token accounting · output salvage (`## Summary` contract, leaked-tool-call detection) |
+| Agent | Anthropic-native tool loop · soft prompt budget + hard in-loop step cap · retries · real token accounting (run total **and** per-turn attribution per step) · per-run cost from a config price table · optional size-capped full transcript · output salvage (`## Summary` contract, leaked-tool-call detection) |
 | Tools | Guarded read-only SSH · PromQL instant/range with token-compact encoding · metric discovery · GET-allowlisted HA and Proxmox APIs · per-call Telegram live feed + local `audit.jsonl` |
 | Human loop | Telegram inline-button approvals (long-poll, no inbound ports) raced against a store-written decision (dashboard/CLI, works with no Telegram at all) · decline/timeout → re-proposed next run · outcome confirm (Resolved / Needs human) |
 | Delivery | n8n-faithful HTML dashboard email · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
 | Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · crash-safe investigation job queue (`heim jobs`, restart sweep, re-trigger with `retry_of`) · dead-man's switch pinged after every completed poll · nightly WAL-safe SQLite backup (rotated) + retention prune · Docker/compose deployment (outbound-only, plus the optional dashboard port) · `.env` interpolation for all deployment identity |
-| Dashboard | Web UI (`heim dashboard`, FastAPI + Jinja + vendored htmx): overview KPIs incl. queue depth, investigations list/filters with queued ghost rows, the agent-transcript detail page with burn line, incidents, findings history, host cards · actions (queue an investigation, re-run, approve/decline, finding verdicts, mute/unmute) as real forms enhanced by htmx · optional HTTP basic auth · one SQLite connection (WAL) that writes action rows only |
+| Dashboard | Web UI (`heim dashboard`, FastAPI + Jinja + vendored htmx): overview KPIs incl. queue depth + 24h cost, a health card (latest analysis + per-host strip) and a tool-usage card, investigations list/filters with queued ghost rows, the agent-transcript detail page with burn line, cost and the optional full transcript, incidents, findings history, metrics, host cards · actions (queue an investigation, re-run, approve/decline, finding verdicts, mute/unmute) as real forms enhanced by htmx · optional HTTP basic auth · `/telemetry` Prometheus exposition (auth-exempt, aggregates only) · one SQLite connection (WAL) that writes action rows only |
 
 ---
 
@@ -50,7 +50,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 394 tests, must stay green
+.venv/bin/pytest -q                    # 557 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -296,17 +296,48 @@ investigation with the same host/role/fingerprint, findings re-synthesized from 
 incident row, and threads `retry_of` through `InvestigationRequest` into the new
 `investigations` row. Not done: prepending the prior root cause to the brief.
 
-### 5.6 Deeper agent observability
+### 5.6 Deeper agent observability — ✅ implemented (except the eval harness)
 
-- Per-step token attribution (usage delta per turn) and per-investigation **cost** in
-  real currency (model price table in config).
-- Store the full message transcript (optional, size-capped) for post-mortems of wrong
-  RCAs — today only the salvaged report survives.
-- An evaluation harness: replay a stored brief + tool transcripts against a new
-  model/prompt and diff the conclusions (the PAM 90 test-bench habit, systematized).
-- Self-telemetry: a `/telemetry` exposition endpoint (`/metrics` is the dashboard's
-  metric-detail page) (investigations run, tokens, failures,
-  approval latency) scraped by the same Prometheus — HEIM watching HEIM.
+- **Per-step token attribution** — ✅ implemented. The runner reads each API response's
+  usage and hands it to `on_step(seq, tool, args, result, duration_ms, turn_in,
+  turn_out)`; the API bills a *turn*, not a call, so when one turn issues several
+  tool_use blocks the **first executed step carries the whole delta and its siblings
+  carry 0** — the column SUMs to the run's real usage and a single step's number is a
+  lower bound, never an estimate (the UI marks it `~9.0k tok`). Stored in
+  `investigation_steps.input_tokens/output_tokens`; the dashboard's burn line now draws
+  real input-token share when the steps have it and falls back to the old
+  tool-output-bytes proxy — under its own honest label — for rows written before this.
+- **Cost** — ✅ implemented. `settings.model_prices` (model id → `{input, output}` per
+  MILLION tokens) + `settings.currency`; both config YAMLs carry a **commented** example
+  with placeholder numbers, because a price committed to a repo goes stale and lies.
+  `costing.cost_of()` is pure and returns `None` for an unpriced model, which the
+  pipelines store as 0 and the UI renders as an em dash — never `$0.00`. `llm
+  .analyst_complete()` now returns `(text, model_used, usage)` and prices against the
+  model that *answered* (a fallback is a different price). Persisted as
+  `investigations.cost` and `runs.input_tokens/output_tokens/cost`; surfaced on the
+  investigation detail header, the investigations list, the findings run headers and
+  the overview's `tokens 24h` tile.
+- **Full transcripts** — ✅ implemented. `settings.store_transcripts` (default off, it
+  is large) makes `run_agent(..., collect_transcript=True)` serialize the message
+  history to plain dicts (text / tool_use / tool_result clipped to 2000 chars each)
+  into `investigations.transcript_json`, capped at **512 KB by dropping the OLDEST
+  turns** — the newest are the ones that produced the conclusion — with a marker entry
+  recording how many went. The detail page renders it as a folded
+  `<details>` after the report.
+- **Self-telemetry** — ✅ implemented. `GET /telemetry` on the dashboard (`/metrics` is
+  the metric-detail page) speaks text exposition 0.0.4: `heim_open_incidents`,
+  `heim_suppressions_active`, `heim_jobs_queued`,
+  `heim_investigations_total{status=…}`, `heim_tokens_in_total` /
+  `heim_tokens_out_total` / `heim_cost_total`, and
+  `heim_last_daily_run_age_seconds` — **omitted entirely** when no run exists, so a
+  fresh install cannot read as "just ran". All gauges: the store prunes history
+  (§5.7), so even the totals can go down. Auth-exempt like `/healthz` (Prometheus
+  cannot carry the basic-auth password, and the payload is aggregates only — no
+  hostnames, fingerprints or report text). `prometheus/prometheus.yml` carries the
+  scrape job, commented out.
+- Still open — **an evaluation harness**: replay a stored brief + tool transcripts
+  against a new model/prompt and diff the conclusions (the PAM 90 test-bench habit,
+  systematized). The stored transcripts above are the input it was waiting for.
 
 ### 5.7 Smaller, high-value items
 

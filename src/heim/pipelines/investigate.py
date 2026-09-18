@@ -10,7 +10,10 @@ the approval is asked — carrying its provenance (the triggering ``findings``
 and the rendered brief) from the start, so a pending or declined run still
 shows what it was about — and carries its status through the flow, while the
 runner's ``on_step`` callback streams the agent's tool timeline into
-``investigation_steps`` as it happens. The agent phase runs under a
+``investigation_steps`` as it happens, now with the per-turn token
+attribution and (optionally, ``settings.store_transcripts``) the agent's full
+message history, capped at 512 KB; the finished row also carries the run's
+cost in ``settings.currency`` (roadmap §5.6). The agent phase runs under a
 process-wide semaphore (``settings.max_concurrent_investigations``) acquired
 *after* approval, so a six-hour approval wait never occupies a slot.
 
@@ -32,6 +35,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from heim.agent.runner import run_agent
 from heim.config import expand_env
+from heim.costing import cost_of
 from heim.channels.telegram import chunk_text
 from heim.reports.render import extract_sections, investigation_email, salvage
 from heim.runtime import Runtime
@@ -127,8 +131,15 @@ def _is_blocked(result_str: str) -> bool:
 
 
 def _step_recorder(rt: Runtime, investigation_id: int):
-    """Build the runner's ``on_step`` callback: persist each executed step."""
-    def on_step(seq: int, tool: str, args: dict, result: str, duration_ms: float) -> None:
+    """Build the runner's ``on_step`` callback: persist each executed step.
+
+    ``turn_in``/``turn_out`` are the usage of the assistant turn that asked for
+    this call, attributed to the turn's first executed step (see
+    ``agent.runner.OnStep``) — so the column sums to the run total even though
+    an individual sibling step reads 0.
+    """
+    def on_step(seq: int, tool: str, args: dict, result: str, duration_ms: float,
+                turn_in: int = 0, turn_out: int = 0) -> None:
         text = result if isinstance(result, str) else str(result)
         rt.store.add_step(
             investigation_id,
@@ -139,8 +150,44 @@ def _step_recorder(rt: Runtime, investigation_id: int):
             result_bytes=len(text),
             blocked=_is_blocked(text),
             duration_ms=int(round(duration_ms)),
+            input_tokens=int(turn_in or 0),
+            output_tokens=int(turn_out or 0),
         )
     return on_step
+
+
+#: Hard ceiling on a stored transcript (roadmap §5.6). Transcripts exist for
+#: post-morteming a wrong root cause, and the newest turns are the ones that
+#: produced the conclusion — so the cap drops turns from the FRONT and leaves a
+#: marker entry saying how many went, rather than truncating mid-JSON or
+#: silently storing a prefix that stops before the reasoning.
+TRANSCRIPT_MAX_BYTES = 512 * 1024
+
+
+def _transcript_json(entries: list[dict] | None) -> str:
+    """Serialize a transcript, capped at ``TRANSCRIPT_MAX_BYTES``.
+
+    Returns '' for an empty transcript (the "not collected" value the column
+    defaults to). A single oversized turn degenerates to the marker alone —
+    honest about having kept nothing, rather than writing half a JSON array.
+    """
+    kept = list(entries or [])
+    if not kept:
+        return ""
+    dropped = 0
+    while True:
+        marker = [{
+            "role": "system",
+            "truncated": dropped,
+            "content": [{"type": "text", "text": (
+                f"… {dropped} earlier turn(s) dropped — transcript capped at "
+                f"{TRANSCRIPT_MAX_BYTES // 1024} KB, newest kept.")}],
+        }] if dropped else []
+        text = json.dumps(marker + kept, ensure_ascii=False, default=str)
+        if len(text.encode("utf-8")) <= TRANSCRIPT_MAX_BYTES or not kept:
+            return text
+        kept.pop(0)
+        dropped += 1
 
 
 #: How often the approval wait re-reads ``investigations.approval_decision``.
@@ -304,11 +351,18 @@ async def run_investigation(
             system = _build_system_prompt(rt, jenv, req)
             ctx = ToolContext(config=cfg, tag=req.tag, feed=rt.feed, audit=rt.audit)
             tools = load_tools(agent_cfg.tools, cfg, ctx)
-            result = await run_agent(agent_cfg, system=system, user_prompt=brief, tools=tools,
-                                     on_step=_step_recorder(rt, inv_id))
+            result = await run_agent(
+                agent_cfg, system=system, user_prompt=brief, tools=tools,
+                on_step=_step_recorder(rt, inv_id),
+                collect_transcript=cfg.settings.store_transcripts,
+            )
 
             # --------------------------------------------------------- rendering
             report = salvage(result.output_text, ftext)
+            # §5.6: price the run. An unpriced model stores 0 — the dashboard
+            # renders that as an em dash, never as "$0.00".
+            cost = cost_of(agent_cfg.model, result.input_tokens, result.output_tokens,
+                           cfg.settings.model_prices)
             rt.store.update_investigation(
                 inv_id,
                 status="incomplete" if report.incomplete else "complete",
@@ -317,6 +371,8 @@ async def run_investigation(
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
                 n_steps=len(result.steps),
+                cost=float(cost or 0.0),
+                transcript_json=_transcript_json(getattr(result, "transcript", None)),
                 finished_at=rt.now_iso(),
             )
             subject, html = investigation_email(
@@ -417,6 +473,7 @@ async def run_investigation(
         "steps": len(result.steps),
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
+        "cost": float(cost or 0.0),
         "subject": subject,
         "report_md": report.report_md,
     }

@@ -18,6 +18,7 @@ from heim.incidents.loki_events import finding_and_category_events, incident_eve
 from heim.incidents.reconcile import fingerprint_for, reconcile
 from heim.incidents.state import compute_state
 from heim.config import expand_env
+from heim.costing import cost_of
 from heim.llm import analyst_complete, parse_analysis
 from heim.metrics.aggregate import aggregate
 from heim.metrics.queries import build_window, load_queries
@@ -125,7 +126,7 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     block = suppression_prompt_block(sup_rows)
     if block:
         user += "\n\n" + block
-    text, model_used = await analyst_complete(cfg.analyst, system, user)
+    text, model_used, usage = await analyst_complete(cfg.analyst, system, user)
     analysis = parse_analysis(text)
     if analysis is None:
         await rt.notify(f"⚠️ HEIM daily run: analyst output unparseable (model {model_used}); no report sent.")
@@ -149,6 +150,11 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     # survive only in the email. Fingerprints come from the same pure helper
     # reconcile uses, so a finding row links to the incident it reconciled into.
     findings = list(analysis.get("findings") or [])
+    # §5.6: price the completion against the model that actually answered (the
+    # fallback is a different price). An unpriced model stores 0, which the UI
+    # renders as an em dash rather than a confident "free".
+    cost = cost_of(model_used, usage.get("input"), usage.get("output"),
+                   cfg.settings.model_prices)
     try:
         run_id = rt.store.insert_run(
             kind="daily", run_at=run_at,
@@ -158,6 +164,13 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
             # delivery steps and the fire-and-forget investigation dispatch
             duration_s=round(time.time() - t0, 3),
             counts_json=json.dumps(counts, ensure_ascii=False, default=str),
+            input_tokens=int(usage.get("input") or 0),
+            output_tokens=int(usage.get("output") or 0),
+            cost=float(cost or 0.0),
+            # what the analyst actually said — until now it survived only in
+            # the email; the dashboard's health card reads it from here
+            headline=str(analysis.get("headline") or ""),
+            summary=str(analysis.get("executiveSummary") or ""),
         )
         rt.store.insert_findings(
             run_id, run_at, "daily", findings,
