@@ -1,4 +1,4 @@
-<img src="docs/logo-lockup.svg" alt="HEIM wordmark — the H drawn as a house with a roof, chimney and four-pane window, flanked by a small sun and crescent moon over grass, in ember orange" width="280">
+<img src="docs/HEIM_logo_rustic.svg" alt="HEIM logo — a rustic wordmark where the H forms a house with a roof, chimney and four-pane window, with a sun, a crescent moon and small plants on a cream background" width="340">
 
 # HEIM — Homelab Event & Incident Monitor
 
