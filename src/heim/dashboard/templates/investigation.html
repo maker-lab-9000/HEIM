@@ -9,19 +9,46 @@
 
 <section class="card head">
   <h2 class="ihost">{{ inv.host }} {{ m.pill(inv.status) }}</h2>
+  {#- one <div class="kv"> per pair: the grid places whole pairs, so a label can
+      never end up in a different column than its value (long values wrap
+      inside their own cell instead). -#}
   <dl class="imeta">
-    <dt class="eyebrow">trigger</dt><dd class="eyebrow">{{ inv.trigger or DASH }}</dd>
-    <dt class="eyebrow">agent</dt><dd class="mono">{{ inv.agent_name or 'investigator' }} · {{ inv.model or DASH }}</dd>
-    <dt class="eyebrow">tokens</dt><dd class="mono">{{ inv.input_tokens|tokens }} in → {{ inv.output_tokens|tokens }} out</dd>
-    <dt class="eyebrow">duration</dt><dd class="mono">{% if inv.status == 'running' %}{{ elapsed(inv.started_at) }} so far{% else %}{{ duration(inv.started_at, inv.finished_at) }}{% endif %}</dd>
-    <dt class="eyebrow">started</dt><dd>{{ m.when(inv.started_at) }}</dd>
-    <dt class="eyebrow">fingerprint</dt><dd class="mono ink2">{{ inv.fingerprint or DASH }}</dd>
+    <div class="kv"><dt class="eyebrow">trigger</dt><dd class="eyebrow">{{ inv.trigger or DASH }}</dd></div>
+    <div class="kv"><dt class="eyebrow">agent</dt><dd class="mono">{{ inv.agent_name or 'investigator' }} · {{ inv.model or DASH }}</dd></div>
+    <div class="kv"><dt class="eyebrow">tokens</dt><dd class="mono">{{ inv.input_tokens|tokens }} in → {{ inv.output_tokens|tokens }} out</dd></div>
+    <div class="kv"><dt class="eyebrow">duration</dt><dd class="mono">{% if inv.status == 'running' %}{{ elapsed(inv.started_at) }} so far{% else %}{{ duration(inv.started_at, inv.finished_at) }}{% endif %}</dd></div>
+    <div class="kv"><dt class="eyebrow">started</dt><dd>{{ m.when(inv.started_at) }}</dd></div>
+    <div class="kv"><dt class="eyebrow">fingerprint</dt><dd class="mono ink2">{{ inv.fingerprint or DASH }}</dd></div>
     {%- if inv.retry_of %}
-    <dt class="eyebrow">lineage</dt>
-    <dd class="mono"><a href="/investigations/{{ inv.retry_of }}">re-run of #{{ inv.retry_of }}</a></dd>
+    <div class="kv"><dt class="eyebrow">lineage</dt>
+      <dd class="mono"><a href="/investigations/{{ inv.retry_of }}">re-run of #{{ inv.retry_of }}</a></dd></div>
     {%- endif %}
   </dl>
   {% include "partials/_inv_acts.html" %}
+</section>
+
+{#- provenance: what the agent was asked to look into, and the brief it got.
+    Rendered for every status — it is the reason the run exists, before and
+    after there is a report. -#}
+<section class="card">
+  <h2 class="eyebrow">triggered by</h2>
+  {%- if findings %}
+  <ul class="flist">
+    {%- for f in findings %}
+    <li><p class="fhead">{{ m.sev(f.severity) }}
+      {%- if f.metric %} <span class="mono ink2">{{ f.metric }}</span>{% endif %}
+      {%- if f.detail %} <span class="ink2">{{ f.detail }}</span>{% endif %}</p></li>
+    {%- endfor %}
+  </ul>
+  {%- else %}
+  <p class="empty">Manual investigation — no incident findings attached.</p>
+  {%- endif %}
+  {%- if brief_html %}
+  <details class="brief">
+    <summary>Brief sent to the agent</summary>
+    <div class="prose">{{ brief_html|safe }}</div>
+  </details>
+  {%- endif %}
 </section>
 
 <section class="card">

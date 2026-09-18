@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import logging
 import os
 import secrets
@@ -409,6 +410,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             request, "investigation.html", page_title=f"investigations / #{inv_id}",
             inv=row, steps=steps, burn=fmt.burn_segments(steps),
             report_html=_md_to_html(row.get("report_md") or "") if row.get("report_md") else "",
+            findings=_trigger_findings(row),
+            brief_html=_md_to_html(row.get("brief_md") or "") if row.get("brief_md") else "",
             outcome=_outcome_line(row),
         )
 
@@ -757,6 +760,32 @@ def _muted_text(suppression: dict | None) -> str:
     return f"Marked false positive — muted until {fmt.day(until)}."
 
 
+def _trigger_findings(row: dict) -> list[dict]:
+    """The findings that triggered an investigation, as the card renders them.
+
+    ``findings_json`` is written when the row is created (pipelines/investigate),
+    so it is there for a pending or declined run too — an empty list is the
+    honest answer for a manual run, not a missing value.
+    """
+    try:
+        parsed = json.loads(row.get("findings_json") or "[]")
+    except (TypeError, ValueError):
+        log.warning("investigation #%s has unreadable findings_json", row.get("id"))
+        return []
+    if not isinstance(parsed, list):
+        return []
+    out = []
+    for f in parsed:
+        if not isinstance(f, dict):
+            continue
+        out.append({
+            "severity": str(f.get("severity") or ""),
+            "metric": str(f.get("metric") or f.get("label") or ""),
+            "detail": str(f.get("detail") or f.get("summary") or ""),
+        })
+    return out
+
+
 def _outcome_line(row: dict) -> dict | None:
     """The closing line of the detail page (the actions sit in the header)."""
     status = str(row.get("status") or "")
@@ -782,5 +811,7 @@ def _outcome_line(row: dict) -> dict | None:
     if status == "running":
         return {"icon": "●", "cls": "st-running", "text": "Still working…"}
     if status == "pending_approval":
-        return {"icon": "◷", "cls": "st-warn", "text": "Waiting for approval in Telegram"}
+        return {"icon": "◷", "cls": "st-warn",
+                "text": "Waiting for approval — approve or decline above, or "
+                        "answer in Telegram."}
     return None

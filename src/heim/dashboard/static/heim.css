@@ -162,8 +162,11 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
   display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 6px 16px; margin: 10px 0 0;
 }
+/* the grid places whole pairs: label and value can never split across columns */
+.imeta .kv { min-width: 0; }
 .imeta dt { margin: 0; }
-.imeta dd { margin: 0 0 4px; font-size: 0.8125rem; word-break: break-all; }
+.imeta dd { margin: 0 0 4px; font-size: 0.8125rem; overflow-wrap: anywhere; }
+.brief { margin-top: 8px; }
 .ihost { margin: 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
 .burn {
@@ -220,7 +223,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .host .hline { margin: 6px 0 0; font-size: 0.8125rem; color: var(--ink-2); display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
 
 .prose { color: var(--ink-2); font-size: 0.875rem; margin: 6px 0; }
-.prose h2, .prose h3 { color: var(--ink); font: 1.0625rem/1.3 var(--sans); margin: 16px 0 6px; }
+.prose h1, .prose h2, .prose h3 { color: var(--ink); font: 1.0625rem/1.3 var(--sans); margin: 16px 0 6px; }
 .prose h2:first-child { margin-top: 4px; }
 .prose code, .prose pre { background: var(--raised); border-radius: 4px; font-family: var(--mono); font-size: 0.8125rem; }
 .prose code { padding: 1px 4px; }

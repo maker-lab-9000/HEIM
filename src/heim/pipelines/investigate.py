@@ -6,7 +6,9 @@ Decline / timeout / needs-human all reset the incident's ``investigated``
 flag so it is re-proposed on the next run.
 
 Every investigation is also *persisted* (roadmap §5.1): a row is created before
-the approval is asked and carries its status through the flow, while the
+the approval is asked — carrying its provenance (the triggering ``findings``
+and the rendered brief) from the start, so a pending or declined run still
+shows what it was about — and carries its status through the flow, while the
 runner's ``on_step`` callback streams the agent's tool timeline into
 ``investigation_steps`` as it happens. The agent phase runs under a
 process-wide semaphore (``settings.max_concurrent_investigations``) acquired
@@ -230,6 +232,19 @@ async def run_investigation(
     ftext = findings_text(req.findings)
     generated_at = rt.now_iso()
 
+    # The brief is pure template rendering with no side effects, so it is built
+    # *before* the approval gate and stored with the row: the human deciding on
+    # a pending investigation — and anyone reading a declined one later — can
+    # see exactly what the agent was going to be asked. The same string is
+    # handed to the agent below, unchanged.
+    template = _ROLE_TEMPLATE.get(req.host_role, "guest")
+    brief = expand_env(
+        jenv.get_template(f"briefs/{template}.md.j2").render(
+            host=req.host, findings_text=ftext, is_temperature=bool(_TEMP_RE.search(ftext)),
+        ),
+        source=f"briefs/{template}.md.j2",
+    )
+
     # --------------------------------------------------- tracking row (§5.1)
     require = cfg.settings.approvals.require if require_approval is None else require_approval
     # A human gate is needed whenever approvals are required and this is not a
@@ -247,6 +262,8 @@ async def run_investigation(
         status="pending_approval" if will_ask else "running",
         started_at=generated_at,
         retry_of=req.retry_of,
+        brief_md=brief,
+        findings_json=json.dumps(req.findings, ensure_ascii=False, default=str),
     )
     if on_start is not None:
         try:
@@ -284,14 +301,6 @@ async def run_investigation(
     try:
         async with rt.investigation_slot():
             # -------------------------------------------------------- the agent
-            template = _ROLE_TEMPLATE.get(req.host_role, "guest")
-            brief = expand_env(
-                jenv.get_template(f"briefs/{template}.md.j2").render(
-                    host=req.host, findings_text=ftext, is_temperature=bool(_TEMP_RE.search(ftext)),
-                ),
-                source=f"briefs/{template}.md.j2",
-            )
-            rt.store.update_investigation(inv_id, brief_md=brief)
             system = _build_system_prompt(rt, jenv, req)
             ctx = ToolContext(config=cfg, tag=req.tag, feed=rt.feed, audit=rt.audit)
             tools = load_tools(agent_cfg.tools, cfg, ctx)

@@ -135,6 +135,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "investigations": [
         ("retry_of", "INTEGER NOT NULL DEFAULT 0"),
         ("approval_decision", "TEXT NOT NULL DEFAULT ''"),
+        # the findings that triggered the run, as the pipeline received them —
+        # the provenance the dashboard's "triggered by" card reads
+        ("findings_json", "TEXT NOT NULL DEFAULT ''"),
     ],
 }
 
@@ -149,7 +152,7 @@ _INVESTIGATION_COLS = [
     "fingerprint", "host", "host_role", "agent_name", "model", "trigger", "status",
     "started_at", "finished_at", "input_tokens", "output_tokens", "n_steps",
     "brief_md", "report_md", "incomplete_reason", "outcome", "retry_of",
-    "approval_decision",
+    "approval_decision", "findings_json",
 ]
 
 _RUN_COLS = ["run_at", "kind", "overall", "model_used", "duration_s", "counts_json"]
