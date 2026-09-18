@@ -8,6 +8,11 @@
   --ok: #0ca30c; --warn: #fab219; --serious: #ec835a; --crit: #d03b3b;
   --tool-ssh: #C97A35; --tool-prometheus: #4A8AC2; --tool-ha: #C2609A;
   --tool-discover: #4F9E5A; --tool-proxmox: #8A6FD1; --tool-other: #A89E8C;
+  /* host slots alias the SAME validated categorical palette as the tools above
+     — one palette, two semantics; slots are handed out in config order and a
+     badge always prints the host name next to its dot. */
+  --host-1: #C97A35; --host-2: #4A8AC2; --host-3: #C2609A;
+  --host-4: #4F9E5A; --host-5: #8A6FD1;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --r: 6px; --pad: 8px;
@@ -156,6 +161,15 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .t-discover .tdot { background: var(--tool-discover); }
 .t-proxmox .tdot { background: var(--tool-proxmox); }
 
+.hbadge {
+  display: inline-flex; gap: 6px; align-items: baseline; white-space: nowrap;
+  font-family: var(--mono); font-size: 0.8125rem; color: var(--ink);
+}
+.hbadge .hdot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  transform: translateY(-1px); background: var(--ink-3);
+}
+
 /* investigation */
 
 .imeta {
@@ -206,6 +220,16 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 }
 
 /* findings & hosts */
+
+/* the findings table: fixed column widths so the summary column absorbs all
+   the slack and nothing shifts between runs */
+.ftbl .c-sev { width: 8em; }
+.ftbl .c-host { width: 12em; }
+.ftbl .c-metric { width: 12em; }
+.ftbl .c-verdict { width: 15em; }
+.ftbl .fsum { color: var(--ink); }
+.ftbl td .acts { margin: 0; flex-direction: column; align-items: flex-start; gap: 4px; }
+.ftbl details { margin-top: 2px; }
 
 .flist { list-style: none; margin: 0; padding: 0; }
 .flist > li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 0.8125rem; }
@@ -269,7 +293,9 @@ form.act { display: inline-block; margin: 0; }
   padding: 2px 8px; color: var(--ink-2); cursor: pointer;
   font: 0.6875rem/1.6 var(--mono); letter-spacing: .08em; text-transform: uppercase;
 }
+a.btn { display: inline-block; text-decoration: none; }
 .btn:hover { border-color: var(--ember); color: var(--ember); }
+a.btn:hover { text-decoration: none; }
 .btn.ember { border-color: var(--ember-dim); color: var(--ember); }
 .btn[disabled] { color: var(--ink-3); cursor: not-allowed; }
 .btn[disabled]:hover { border-color: var(--line); color: var(--ink-3); }
@@ -302,3 +328,7 @@ form.act { display: inline-block; margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+.runline.dim { color: var(--ink-2); }
+.qlink { color: var(--ember); text-decoration: none; }
+.qlink:hover { text-decoration: underline; }

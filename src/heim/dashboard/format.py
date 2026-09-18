@@ -270,6 +270,38 @@ def tool_key(tool: str | None) -> str:
     return _TOOL_KEY.get(str(tool or ""), "other")
 
 
+# ----------------------------------------------------------------- hosts
+
+#: How many hosts can carry a color. The host badges reuse the SAME validated
+#: categorical palette as the tool badges (spec §1) — aliased in the stylesheet
+#: as ``--host-1..--host-5`` — so there are exactly five slots. A sixth host, or
+#: any host that is not configured (a Proxmox guest showing up under its own
+#: name), renders with the muted ink instead of a recycled, misleading color.
+HOST_SLOTS = 5
+
+#: what an unslotted host gets: dot in faint ink, name still spelled out
+HOST_MUTED = "--ink-3"
+
+
+def host_color(host: str | None, hosts=()) -> str:
+    """The CSS variable name for ``host``'s badge dot.
+
+    Slots are handed out in *config order* so a host keeps the same color on
+    every page for as long as the config is stable — color follows the entity,
+    exactly like the tool badges. The color is never the only encoding: the
+    badge always prints the host name next to the dot.
+    """
+    name = str(host or "").strip()
+    order = [str(h) for h in (hosts or [])]
+    if not name or name not in order:
+        return HOST_MUTED
+    slot = order.index(name)
+    return f"--host-{slot + 1}" if slot < HOST_SLOTS else HOST_MUTED
+
+
+# -------------------------------------------------------------- transcript
+
+
 def burn_segments(steps: list[dict]) -> list[dict]:
     """Segment widths for the burn line.
 

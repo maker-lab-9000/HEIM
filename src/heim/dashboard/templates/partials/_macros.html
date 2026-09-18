@@ -9,6 +9,16 @@
 <span class="tool t-{{ name|tool_key }}"><span class="tdot" aria-hidden="true"></span>{{ name }}</span>
 {%- endmacro %}
 
+{#- a host badge: colored dot + the host NAME, always both. The dot color comes
+    from the five categorical host slots (assigned in config order by
+    `host_var`); an unconfigured or sixth host gets the muted ink. Color never
+    carries identity on its own — the name is the primary encoding. -#}
+{% macro hostbadge(name) -%}
+{%- if name %}<span class="hbadge"><span class="hdot" aria-hidden="true"
+  style="background: var({{ name|host_var }})"></span>{{ name }}</span>
+{%- else %}<span class="ink3">{{ DASH }}</span>{% endif %}
+{%- endmacro %}
+
 {% macro sev(value) -%}
 {%- set p = value|pill -%}
 <span class="sev {{ p.cls }}"><span class="dot" aria-hidden="true">{{ p.icon }}</span>{{ p.label }}</span>

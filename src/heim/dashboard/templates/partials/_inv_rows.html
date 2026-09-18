@@ -20,7 +20,7 @@
     <td class="c-id mono"><a href="/investigations/{{ r.id }}">#{{ r.id }}</a></td>
     <td>{{ m.pill(r.status) }}</td>
     <td class="eyebrow">{{ r.trigger or DASH }}</td>
-    <td>{{ r.host or DASH }}</td>
+    <td>{{ m.hostbadge(r.host) }}</td>
     <td class="mono ink2" title="{{ r.fingerprint }}">{{ r.fingerprint|fp }}</td>
     <td class="num mono">{{ r.n_steps }}</td>
     <td class="num mono">{{ r.input_tokens|tokens }} → {{ r.output_tokens|tokens }}</td>

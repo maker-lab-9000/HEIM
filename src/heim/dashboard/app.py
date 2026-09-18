@@ -285,6 +285,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     )
     templates.env.filters.update(mval=fmt.value, mtrend=fmt.trend,
                                  mdelta=fmt.delta)
+    # host badge colors are handed out in config order, so the filter is bound
+    # to this app's config rather than being a free function on fmt
+    host_order = tuple(cfg.hosts)
+    templates.env.filters["host_var"] = lambda h: fmt.host_color(h, host_order)
     templates.env.globals.update(duration=fmt.duration, elapsed=fmt.elapsed,
                                  DASH=fmt.DASH)
     app.state.templates = templates
@@ -400,10 +404,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         counts = reader.read(lambda s: s.counts_by_status())
         invs = reader.read(lambda s: s.investigations(limit=60))
         findings = reader.read(lambda s: s.recent_findings(limit=60))
-        daily = reader.read(lambda s: s.runs(limit=1, kind="daily"))
+        daily = reader.read(lambda s: s.runs(limit=10, kind="daily"))
         queued = reader.read(lambda s: s.queued_count())
         latest = daily[0] if daily else None
-        headline_findings = _findings_of_run(findings, latest)
+        sev_counts = reader.read(
+            lambda s: s.finding_severity_counts([r["id"] for r in daily]))
+        run_list = [
+            {"run": r, "line": _counts_line(sev_counts.get(r["id"], {}))}
+            for r in daily
+        ]
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         tok_in = tok_out = 0
         for row in invs:
@@ -428,7 +437,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         ]
         return page(
             request, "overview.html", page_title="overview", kpis=kpis,
-            latest_run=latest, headline=_headline(headline_findings),
+            latest_run=latest, run_list=run_list,
             investigations=invs[:8], findings=findings[:6],
             empty=not invs and not findings and not open_incidents and not queued,
         )
@@ -716,20 +725,40 @@ def _incident_meta(rows: list[dict]) -> str:
     return f"{crit} critical · {len(rows) - crit} warning"
 
 
-def _findings_of_run(findings: list[dict], run: dict | None) -> list[dict]:
-    if not run:
-        return []
-    return [f for f in findings if f.get("run_id") == run.get("id")]
-
-
 _SEV_RANK = {"critical": 0, "crit": 0, "warning": 1, "warn": 1, "info": 2, "": 3}
 
 
-def _headline(findings: list[dict]) -> dict | None:
-    if not findings:
-        return None
-    return sorted(findings, key=lambda f: _SEV_RANK.get(
-        str(f.get("severity") or "").lower(), 3))[0]
+def _counts_line(sev_counts: dict[str, int]) -> str:
+    """"4 findings (1 crit · 2 warn)" from grouped severity counts."""
+    total = sum(sev_counts.values())
+    if not total:
+        return ""
+    crit = sum(n for s, n in sev_counts.items()
+               if _SEV_RANK.get(str(s or "").lower(), 3) == 0)
+    warn = sum(n for s, n in sev_counts.items()
+               if _SEV_RANK.get(str(s or "").lower(), 3) == 1)
+    line = f"{total} finding{'' if total == 1 else 's'}"
+    parts = ([f"{crit} crit"] if crit else []) + ([f"{warn} warn"] if warn else [])
+    return f"{line} ({' · '.join(parts)})" if parts else line
+
+
+def _findings_line(findings: list[dict]) -> str:
+    """"4 findings (1 crit · 2 warn)" — the run's findings at a glance.
+
+    The overview card is a header line, not a reader: it says how much the run
+    found and how bad the worst of it is, and the Findings page says the rest.
+    The parenthetical only appears when something needs attention; a run of
+    pure info findings is just a count, and a clean run adds nothing at all.
+    """
+    total = len(findings)
+    if not total:
+        return ""
+    ranks = [_SEV_RANK.get(str(f.get("severity") or "").lower(), 3)
+             for f in findings]
+    crit, warn = ranks.count(0), ranks.count(1)
+    line = f"{total} finding{'' if total == 1 else 's'}"
+    parts = ([f"{crit} crit"] if crit else []) + ([f"{warn} warn"] if warn else [])
+    return f"{line} ({' · '.join(parts)})" if parts else line
 
 
 def _live(rows: list[dict], ghosts: list[dict]) -> bool:

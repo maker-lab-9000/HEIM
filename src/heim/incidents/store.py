@@ -404,6 +404,21 @@ class IncidentStore:
         self._db.commit()
         return len(rows)
 
+    def finding_severity_counts(self, run_ids: list[int]) -> dict[int, dict[str, int]]:
+        """Per-run finding counts by severity, one grouped query (overview run list)."""
+        if not run_ids:
+            return {}
+        marks = ",".join("?" for _ in run_ids)
+        cur = self._db.execute(
+            f"SELECT run_id, severity, COUNT(*) AS n FROM findings "
+            f"WHERE run_id IN ({marks}) GROUP BY run_id, severity",
+            [int(r) for r in run_ids],
+        )
+        out: dict[int, dict[str, int]] = {}
+        for row in cur.fetchall():
+            out.setdefault(row["run_id"], {})[str(row["severity"] or "")] = row["n"]
+        return out
+
     def recent_findings(self, limit: int = 100) -> list[dict]:
         cur = self._db.execute("SELECT * FROM findings ORDER BY id DESC LIMIT ?", (limit,))
         return [dict(r) for r in cur.fetchall()]

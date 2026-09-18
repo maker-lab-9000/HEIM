@@ -402,6 +402,9 @@ def test_findings_grouped_by_run(client):
     assert "sdb peaked at 48C." in html
     assert "Cap the PhotoPrism container." in html
     assert html.count("detail &amp; recommendation") == 2   # one per finding
+    # the findings of a run are a real table (structure: test_findings_table.py)
+    assert '<table class="tbl dense ftbl">' in html
+    assert '<th scope="col" class="c-host">host</th>' in html
     # worst severity first inside a run
     assert html.index("Memory climbing on ubuntu-server") < html.index("Drive temperature high")
 
@@ -425,12 +428,13 @@ def test_weight_budget_and_no_cdn():
     no runtime CDN reference anywhere in the templates.
 
     The budget was ~12 KB through v1; the actions slice (spec §5: button
-    language, feedback lines, ghost rows) deliberately grew it to 14 KB. It is
-    still one hand-written file with no build step, and still the only
-    stylesheet the pages load.
+    language, feedback lines, ghost rows) deliberately grew it to 14 KB, and
+    the findings table (column widths, host badges, the host color slots)
+    grows it to 15.5 KB. It is still one hand-written file with no build step,
+    and still the only stylesheet the pages load.
     """
     static = Path(__file__).resolve().parent.parent / "src/heim/dashboard/static"
-    assert (static / "heim.css").stat().st_size <= 14_336
+    assert (static / "heim.css").stat().st_size <= 15_872
     assert (static / "htmx.min.js").stat().st_size > 10_000
     templates = (Path(__file__).resolve().parent.parent
                  / "src/heim/dashboard/templates")

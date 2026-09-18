@@ -5,27 +5,41 @@
 {%- if groups %}
 <p class="eyebrow subhead">{{ total }} finding{{ '' if total == 1 else 's' }} · newest first</p>
 {%- for g in groups %}
-<section class="card">
+<section class="card"{% if g.run %} id="run-{{ g.run.id }}"{% endif %}>
   <h2 class="runline mono">{{ g.source or 'run' }} · {{ g.run_at|day }} {{ g.run_at|clock }}
     {%- if g.run %} · {{ g.run.model_used or DASH }} · overall {{ m.pill(g.run.overall) }}{% endif %}</h2>
-  <ul class="flist">
-    {%- for f in g.findings %}
-    <li>
-      <p class="fhead">{{ m.sev(f.severity) }} <span class="mono ink2">{{ f.host }}{% if f.metric %} · {{ f.metric }}{% endif %}</span>
-        <span class="fsum">{{ f.summary }}</span></p>
-      {#- outside the <p>: an action is a real form, which no paragraph may hold -#}
-      {% include "partials/_verdict.html" %}
-      {%- if f.detail or f.recommendation %}
-      <details>
-        <summary>detail &amp; recommendation</summary>
-        {%- if f.detail %}<p class="prose">{{ f.detail }}</p>{% endif %}
-        {%- if f.recommendation %}<p class="prose rec"><span class="eyebrow">recommendation</span> {{ f.recommendation }}</p>{% endif %}
-        {%- if f.fingerprint %}<p class="mono ink3">{{ f.fingerprint }}</p>{% endif %}
-      </details>
-      {%- endif %}
-    </li>
-    {%- endfor %}
-  </ul>
+  <table class="tbl dense ftbl">
+    <thead><tr>
+      <th scope="col" class="c-sev">severity</th>
+      <th scope="col" class="c-host">host</th>
+      <th scope="col" class="c-metric">metric</th>
+      <th scope="col">finding</th>
+      <th scope="col" class="c-verdict">verdict</th>
+    </tr></thead>
+    <tbody>
+      {%- for f in g.findings %}
+      <tr>
+        <td class="c-sev">{{ m.sev(f.severity) }}</td>
+        <td class="c-host">{{ m.hostbadge(f.host) }}</td>
+        <td class="c-metric mono ink2">{{ f.metric or DASH }}</td>
+        <td>
+          <span class="fsum">{{ f.summary }}</span>
+          {#- detail, recommendation and fingerprint stay folded away in the cell -#}
+          {%- if f.detail or f.recommendation %}
+          <details>
+            <summary>detail &amp; recommendation</summary>
+            {%- if f.detail %}<p class="prose">{{ f.detail }}</p>{% endif %}
+            {%- if f.recommendation %}<p class="prose rec"><span class="eyebrow">recommendation</span> {{ f.recommendation }}</p>{% endif %}
+            {%- if f.fingerprint %}<p class="mono ink3">{{ f.fingerprint }}</p>{% endif %}
+          </details>
+          {%- endif %}
+        </td>
+        {#- a verdict is a real form; forms are legal cell content -#}
+        <td class="c-verdict">{% include "partials/_verdict.html" %}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
 </section>
 {%- endfor %}
 {%- else %}

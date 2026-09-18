@@ -23,19 +23,14 @@
 </section>
 
 <section class="card">
-  <h2 class="eyebrow">latest daily run</h2>
+  <h2 class="eyebrow">latest runs</h2>
   {%- if latest_run %}
-  <p class="runline mono">daily · {{ latest_run.run_at|day }} {{ latest_run.run_at|clock }}
-    · {{ latest_run.model_used or DASH }} · overall {{ m.pill(latest_run.overall) }}
-    · {{ latest_run.duration_s|dur_s }}</p>
-  {%- if headline %}
-  <p class="headline">{{ m.sev(headline.severity) }} <strong>{{ headline.summary }}</strong>
-    <span class="mono ink2">{{ headline.host }}{% if headline.metric %} · {{ headline.metric }}{% endif %}</span></p>
-  {%- if headline.detail %}<p class="prose">{{ headline.detail }}</p>{% endif %}
-  <p><a href="/findings">All findings from this run</a></p>
-  {%- else %}
-  <p class="empty">That run reported no findings.</p>
-  {%- endif %}
+  {%- for r in run_list %}
+  <p class="runline mono{{ '' if loop.first else ' dim' }}">daily · {{ r.run.run_at|day }} {{ r.run.run_at|clock }}
+    · {{ r.run.model_used or DASH }} · overall {{ m.pill(r.run.overall) }}
+    · {{ r.run.duration_s|dur_s }}{% if r.line %} · {{ r.line }}{% endif %}
+    · <a class="qlink" href="/findings#run-{{ r.run.id }}">details</a></p>
+  {%- endfor %}
   {%- else %}
   <p class="empty">No daily run recorded yet. The first scheduled run writes the headline here.</p>
   {%- endif %}
