@@ -210,7 +210,42 @@ waiting); the investigations list shows queued jobs as ghost rows (`--ink-3`,
 14 KB (one button style, a feedback line, ghost rows). Still one hand-written
 file, still no build step, still the only stylesheet the pages load.
 
-## 6. Still out of scope
+## 6. Metrics page (the daily email's data, live)
+
+`/metrics` shows everything the daily report email shows — per-host metric detail over
+the 3-day window with trend and status — but live and in the app's own language. Data
+comes from the SAME code path as the email (query catalog → aggregate), fetched from
+Prometheus on demand with a ~10-minute in-process cache, so numbers and flags always
+match what the analyst saw.
+
+- **Header card:** overall status pill · `N crit · N warn · N no-data` (mono) ·
+  "3-day window · as of 22:14 (cached 3m)" · a quiet `REFRESH` button (forces a
+  refetch; disabled-looking while one is running).
+- **Filter row:** host select (all hosts / one), category select — same pattern as
+  investigations.
+- **Per-host sections:** host name (mono, 1.0625rem) + the host's worst flag as a
+  status pill. Inside, one dense table per category that has rows for that host
+  (category name as a mono-caps eyebrow):
+
+| col | render |
+|---|---|
+| status | flag pill: ✓ ok (ok) / ⚠ warn / ✳ crit / · n/a (--ink-3), icon+label |
+| metric | label in --ink, `name` (device/mount/chip) in mono --ink-2 |
+| current | mono, humanized unit |
+| avg | mono --ink-2; min/max in the cell's `title` |
+| 3-day trend | the three day averages in mono: `31.1 → 33.2 → 43.3` |
+| Δ | ▲/▼/▬ + changePct% in mono; colored by the row's flag ONLY when warn/crit (status colors never decorate healthy rows); `—` when null |
+
+- Rows sort: flag severity first (crit, warn, ok, na), then |Δ%| desc — the eye lands
+  on what's moving.
+- **Empty/error states:** Prometheus unreachable → "Prometheus unreachable at <url> —
+  the numbers here come straight from it. Check `heim check`." Cached data older than
+  the TTL still renders with the "as of" timestamp; never show stale data silently.
+- Nav: `Metrics` sits between Findings and Hosts in the rail.
+- No charts, no new JS: the three-value trend + arrow IS the sparkline, and it stays
+  legible in a mono column.
+
+## 7. Still out of scope
 
 "Load 50 more" pagination (lists cap at 200 rows) and the Recommendations page —
 deferred; tracked in AGENTS.md §5.3.
