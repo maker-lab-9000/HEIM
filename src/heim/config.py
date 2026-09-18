@@ -104,6 +104,12 @@ class Settings(BaseModel):
     # (roadmap §5.6). Off by default: it is large, and only needed when
     # post-morteming a wrong root cause. Capped at 512 KB per investigation.
     store_transcripts: bool = False
+    # Exact model ids offered in the dashboard's investigate dropdown and to
+    # `heim investigate --model` (design spec §5.1). Empty = default only: no
+    # select is rendered and every run uses the investigator agent's own model.
+    # Anything listed here should also have a `model_prices` entry, or its runs
+    # render an em dash instead of a cost.
+    investigator_models: list[str] = []
     # instance-label address prefix -> host name (used by the alert poller to
     # attribute a firing alert's `instance` label to a configured host)
     instance_host_map: dict[str, str] = {}

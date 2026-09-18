@@ -350,6 +350,12 @@ a.btn:hover { text-decoration: none; }
 .btn.ember { border-color: var(--ember-dim); color: var(--ember); }
 .btn[disabled] { color: var(--ink-3); cursor: not-allowed; }
 .btn[disabled]:hover { border-color: var(--line); color: var(--ink-3); }
+/* the trigger-time model picker (§5.1) — quiet, sits inside the act form */
+.mselect {
+  background: var(--raised); color: var(--ink-2); border: 1px solid var(--line);
+  border-radius: 4px; padding: 1px 4px; margin-right: 6px;
+  font: 0.6875rem/1.6 var(--mono);
+}
 .flash { flex-basis: 100%; margin: 2px 0 0; font-size: 0.6875rem; color: var(--ink-2); }
 .flash.err { color: var(--serious); }
 .loadmore, .loadmore td { text-align: center; margin: 8px 0; }

@@ -311,6 +311,8 @@ def test_enqueue_investigation_payload(store):
     assert job["payload"] == {
         "host": "ubuntu-server", "host_role": "guest", "fingerprint": "u|mem_used|",
         "findings": [{"severity": "warning", "detail": "mem"}],
+        # §5.1: always present, "" meaning the configured model
+        "model": "",
     }
 
 

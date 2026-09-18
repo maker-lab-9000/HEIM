@@ -91,6 +91,13 @@ currency: USD                 # "$" for USD, otherwise the bare code ("EUR 0.42"
 # cassette an offline replay serves back to another model.
 store_transcripts: false
 
+# Exact model ids offered in the dashboard's investigate dropdown; empty =
+# default only (no select is rendered, every run uses the investigator agent's
+# model). List only ids that appear in `model_prices` above, so a run on the
+# chosen model is still priced. Example:
+#   investigator_models: [claude-opus-4-6, claude-haiku-4-5]
+investigator_models: []
+
 # Maps Prometheus `instance` label address prefixes to host names — used by the
 # alert poller and the daily aggregation to attribute metrics/alerts to hosts.
 # Matched in order: put longer / more specific prefixes FIRST. Extend when you

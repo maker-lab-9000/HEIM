@@ -318,11 +318,12 @@ Endpoints, schedules, recipients, timeouts — see the commented
 that channel; the pipelines degrade gracefully (e.g. no email config → reports are
 written to `out/`).
 
-Two knobs are worth setting deliberately:
+Three knobs are worth setting deliberately:
 
 | Setting | Effect |
 |---|---|
 | `model_prices` + `currency` | model id → `{input, output}` price **per million tokens**. Ships commented out with placeholder numbers — fill in your provider's current pricing and investigations, runs and the 24h tile start showing money. A model with no entry stays *unpriced*: the UI shows an em dash, never a made-up `$0.00`. |
+| `investigator_models` | exact model ids offered when *triggering* an investigation — a compact select next to every `INVESTIGATE` button and `heim investigate --model X`. Empty (the default) renders no select and every run uses the investigator agent's own model. The chosen model overrides that agent for **that run only** and is recorded on the investigation row, so costs and tool usage segment by it. List only ids you also priced in `model_prices`. |
 | `store_transcripts` | keep each agent's full message history with its investigation (capped at 512 KB, oldest turns dropped) for post-morteming a wrong root cause, and the prerequisite for `heim replay` (the transcript is the cassette). Off by default — it is large. |
 
 ### `config/hosts/*.yaml` — add a host, add a file

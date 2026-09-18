@@ -35,7 +35,22 @@
 {#- an action button: a real form first, htmx second (design spec §5).
     `fields` is the whole payload — fingerprints travel as form fields, never
     in the URL. Import this macro `with context` so `back` resolves. -#}
-{% macro act(action, label, fields, confirm='', cls='') -%}
+{#- the model picker (spec §5.1), rendered inside an investigate form when
+    settings.investigator_models lists anything. The empty first option means
+    "whatever the investigator agent is configured with", so the plain
+    no-JS post of an untouched form behaves exactly as it did before. -#}
+{% macro modelselect() -%}
+{%- if models %}
+  <select class="mselect mono" name="model" aria-label="Model for this run">
+    <option value="">default ({{ default_model }})</option>
+    {%- for mid in models %}
+    <option value="{{ mid }}">{{ mid }}</option>
+    {%- endfor %}
+  </select>
+{%- endif %}
+{%- endmacro %}
+
+{% macro act(action, label, fields, confirm='', cls='', model=false) -%}
 <form class="act" method="post" action="{{ action }}" hx-post="{{ action }}"
       hx-target="closest .acts" hx-swap="outerHTML"
       {%- if confirm %} hx-confirm="{{ confirm }}"{% endif %}>
@@ -43,6 +58,7 @@
   <input type="hidden" name="{{ name }}" value="{{ value }}">
   {%- endfor %}
   <input type="hidden" name="back" value="{{ back|default('/', true) }}">
+  {%- if model %}{{ modelselect() }}{% endif %}
   <button class="btn{{ ' ember' if cls }}" type="submit">{{ label }}</button>
 </form>
 {%- endmacro %}

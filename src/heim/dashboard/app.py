@@ -270,6 +270,30 @@ def _rec_key_field(fields: dict) -> str:
     return value
 
 
+def _default_model(cfg: Config) -> str:
+    """The investigator's configured model — the dropdown's first option."""
+    agent = cfg.agents.get("investigator")
+    return agent.model if agent is not None else ""
+
+
+def _model_field(fields: dict, allowed: list[str]) -> str:
+    """The model an investigate form chose (§5.1). "" = the configured default.
+
+    Validated against ``settings.investigator_models`` and nothing else: the
+    value ends up in a job payload the daemon will run on, so an id that was
+    never offered is refused rather than passed to the API.
+    """
+    value = str(fields.get("model") or "").strip()
+    if value and value not in allowed:
+        raise ActionError(
+            f"{value} is not a model this deployment offers.",
+            "Pick one of the models in settings.investigator_models — the "
+            "dropdown lists exactly those." if allowed else
+            "settings.investigator_models is empty, so every investigation "
+            "runs on the investigator agent's own model.", 400)
+    return value
+
+
 def _back_to(request: Request, fields: dict) -> str:
     """Where a plain (non-htmx) form POST returns to.
 
@@ -340,8 +364,13 @@ def create_app(config: Config | None = None) -> FastAPI:
     # money needs the deployment's currency, so it is bound here too (§5.6)
     currency = cfg.settings.currency
     templates.env.filters["money"] = lambda v: fmt.money(v, currency)
+    # §5.1: the investigate forms need the offered models everywhere they are
+    # rendered — page and htmx fragment alike — so they are globals rather than
+    # a context key every action response would have to remember to pass.
+    investigator_models = list(cfg.settings.investigator_models)
     templates.env.globals.update(duration=fmt.duration, elapsed=fmt.elapsed,
-                                 DASH=fmt.DASH)
+                                 DASH=fmt.DASH, models=investigator_models,
+                                 default_model=_default_model(cfg))
     app.state.templates = templates
 
     # ------------------------------------------------------- metrics cache
@@ -740,9 +769,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         # From an incident: the same subject reconcile would have dispatched.
         # Otherwise a bare manual run — the agent starts from the host itself.
         findings = [_finding_from_incident(incident)] if incident else []
+        model = _model_field(fields, investigator_models)
         job_id = reader.write(lambda s: enqueue_investigation(
             s, host=host, host_role=host_cfg.role, fingerprint=fingerprint,
-            findings=findings, requested_by="dashboard"))
+            findings=findings, requested_by="dashboard", model=model))
         flash = {"text": QUEUED.format(job=job_id)}
         if incident:
             return respond(request, fields, "partials/_incident_acts.html", flash,

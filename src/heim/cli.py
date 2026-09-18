@@ -162,6 +162,15 @@ async def _cmd_investigate(args) -> int:
         return 2
 
     rt = build_runtime(dry_run=args.dry_run)
+    # §5.1: the CLI offers the same list the dashboard's dropdown does — the
+    # config is only readable once the runtime is built, so this is checked
+    # here rather than by argparse's `choices`.
+    model = str(getattr(args, "model", "") or "").strip()
+    offered = list(rt.config.settings.investigator_models)
+    if model and model not in offered:
+        print(f"error: {model} is not in settings.investigator_models "
+              f"({', '.join(offered) if offered else 'empty'})")
+        return 2
     if not args.host:
         # --fingerprint alone: pull the subject out of the incident store
         incident = rt.store.incident(args.fingerprint)
@@ -180,6 +189,9 @@ async def _cmd_investigate(args) -> int:
                          "trend": "", "detail": args.finding, "recommendation": ""}]
         req = InvestigationRequest(host=args.host, host_role=role,
                                    fingerprint=args.fingerprint or "", findings=findings)
+    req.model_override = model
+    if model:
+        print(f"model: {model} (this run only)")
     result = await run_investigation(rt, req, require_approval=False if args.no_approval else None)
     if result is None:
         print("declined / timed out — nothing ran")
@@ -449,6 +461,9 @@ def _build_parser() -> argparse.ArgumentParser:
     inv.add_argument("--severity", default="warning")
     inv.add_argument("--fingerprint", default="")
     inv.add_argument("--no-approval", action="store_true")
+    inv.add_argument("--model", default="",
+                     help="run on one of settings.investigator_models "
+                          "(default: the investigator's own model)")
     inv.add_argument("--dry-run", action="store_true")
 
     ic = sub.add_parser("incidents", help="show the incident store / mute fingerprints")

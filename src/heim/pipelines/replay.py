@@ -32,6 +32,7 @@ from heim.pipelines.investigate import (
     build_system_prompt,
     findings_text,
     record_tool_feedback,
+    with_model,
 )
 from heim.reports.render import salvage
 from heim.runtime import Runtime
@@ -95,9 +96,7 @@ async def run_replay(
     transcript = _load_transcript(original)
     cassette = Cassette.from_transcript(transcript)
 
-    agent_cfg = cfg.agents["investigator"]
-    if model:
-        agent_cfg = agent_cfg.model_copy(update={"model": model})
+    agent_cfg = with_model(cfg.agents["investigator"], model)
     jenv = Environment(loader=FileSystemLoader(cfg.prompts_dir))
     host = str(original.get("host") or "")
     system = build_system_prompt(rt, jenv, host, prompt_file=prompt_file)

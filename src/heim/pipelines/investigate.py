@@ -38,7 +38,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
 from heim.agent.runner import run_agent
-from heim.config import expand_env
+from heim.config import AgentCfg, expand_env
 from heim.costing import cost_of
 from heim.channels.telegram import chunk_text
 from heim.reports.render import (
@@ -63,11 +63,24 @@ class InvestigationRequest:
     fingerprint: str = ""
     findings: list[dict] = field(default_factory=list)
     retry_of: int = 0                 # investigation id this one re-runs (§5.5)
+    model_override: str = ""          # this run only; "" = the configured model (§5.1)
 
     @property
     def tag(self) -> str:
         qid = self.fingerprint.split("|")[1] if "|" in self.fingerprint else ""
         return f"{self.host}|{qid}" if qid else self.host
+
+
+def with_model(agent: AgentCfg, model: str | None) -> AgentCfg:
+    """The agent config to run with, given an optional per-run model override.
+
+    A *copy* — never a mutation of ``cfg.agents["investigator"]``, which is
+    shared by every concurrent run and by the next one. Introduced by the
+    replay harness (§5.6) and reused verbatim by the trigger-time choice
+    (§5.1), so there is exactly one place that decides what "override the
+    model" means; both then price and record the model the copy carries.
+    """
+    return agent.model_copy(update={"model": model}) if model else agent
 
 
 def findings_text(findings: list[dict]) -> str:
@@ -100,8 +113,11 @@ def _approval_text(req: InvestigationRequest, ftext: str) -> str:
         else "SSH in (read-only)" if req.host_role == "guest"
         else "query Prometheus and the HA API (read-only)"
     )
+    # §5.1: name the model only when the trigger chose one — on the default
+    # path there is nothing to disclose, and the line would be noise.
+    chosen = f" · model: {req.model_override}" if req.model_override else ""
     return (
-        f"🔍 Investigation approval needed for host \"{req.host}\".{note}\n\n"
+        f"🔍 Investigation approval needed for host \"{req.host}\".{chosen}{note}\n\n"
         f"Findings that triggered it:\n{ftext}\n\n"
         f"Approve to let the monitoring agent {how} and find the root cause. If you decline or "
         f"don't respond, no investigation runs and it will be re-proposed on the next monitoring run."
@@ -322,7 +338,9 @@ async def run_investigation(
     (the queue worker) can capture it.
     """
     cfg = rt.config
-    agent_cfg = cfg.agents["investigator"]
+    # §5.1: the trigger may pick the model for this run only — same copy the
+    # replay harness makes, so the row, the cost and the API call all agree.
+    agent_cfg = with_model(cfg.agents["investigator"], req.model_override)
     jenv = Environment(loader=FileSystemLoader(cfg.prompts_dir))
     ftext = findings_text(req.findings)
     generated_at = rt.now_iso()
