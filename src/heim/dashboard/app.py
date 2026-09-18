@@ -579,8 +579,11 @@ def create_app(config: Config | None = None) -> FastAPI:
              "href": "/investigations"},
         ]
         # the triage queue (spec §12): the runs that did not finish cleanly,
-        # with the total behind them so the card knows whether it is truncating
-        attention = reader.read(lambda s: s.needs_attention())
+        # with the total behind them so the card knows whether it is truncating.
+        # The reason line is the detail page's own sentence (_outcome_line) —
+        # `outcome` stores keywords ("needs_human", "timeout"), never prose.
+        attention = [{**r, "reason": (_outcome_line(r) or {}).get("text", "")}
+                     for r in reader.read(lambda s: s.needs_attention())]
         attention_count = reader.read(lambda s: s.needs_attention_count())
         feedback = reader.read(lambda s: s.latest_tool_feedback())
         tool_usage = _tool_usage(reader.read(lambda s: s.tool_usage(limit=12)), feedback)
@@ -1647,18 +1650,26 @@ def _stored_transcript(row: dict) -> tuple[list[dict], str]:
 
 
 def _outcome_line(row: dict) -> dict | None:
-    """The closing line of the detail page (the actions sit in the header)."""
+    """Why a run ended the way it did, in a sentence.
+
+    The closing line of the detail page (the actions sit in the header), and
+    the reason line of the overview's needs-attention card (§12) — one
+    function so the two can never drift apart.
+    """
     status = str(row.get("status") or "")
     outcome = str(row.get("outcome") or "")
     when = fmt.clock(row.get("finished_at"))
     if outcome == "resolved" or status == "resolved":
         return {"icon": "✓", "cls": "st-ok", "text": f"Resolved by operator · {when}"}
-    if outcome == "needs_human" or status == "needs_human":
-        return {"icon": "⚠", "cls": "st-serious",
-                "text": "Needs human — re-proposed next run"}
+    # a timed-out ask is also stored as status=needs_human (pipelines/
+    # investigate), so it has to be answered *before* the needs_human case —
+    # nobody said "needs human", the question simply went unanswered
     if outcome == "timeout":
         return {"icon": "◌", "cls": "st-muted",
                 "text": "No outcome confirmed — the ask timed out"}
+    if outcome == "needs_human" or status == "needs_human":
+        return {"icon": "⚠", "cls": "st-serious",
+                "text": "Needs human — re-proposed next run"}
     if status == "declined":
         return {"icon": "○", "cls": "st-muted",
                 "text": "Declined — re-proposed next run"}

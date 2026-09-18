@@ -53,7 +53,7 @@
 {# the triage queue (design spec §12): the runs that did not finish cleanly,
     directly under the health card because bad news travels first. Each row
     says what happened (pill), where (host badge), which run (#id), why (the
-    reason line — incomplete_reason, or the outcome for needs_human) and when,
+    reason line — the detail page's own sentence, built by _outcome_line) and when,
     and offers the one action that helps: re-run it. The empty state stays
     visible as good news rather than disappearing. -#}
 <section class="card">
@@ -67,8 +67,8 @@
       <span class="acts">{{ m.act('/actions/retrigger', 'RE-RUN',
         {'investigation_id': r.id},
         confirm='Re-run investigation #' ~ r.id ~ '?') }}</span>
-      {%- if r.incomplete_reason or r.outcome %}
-      <p class="runline">{{ r.incomplete_reason or r.outcome }}</p>
+      {%- if r.reason %}
+      <p class="runline">{{ r.reason }}</p>
       {%- endif %}
     </li>
     {%- endfor %}
@@ -77,7 +77,7 @@
   <p><a class="qlink" href="/investigations">all ({{ attention_count }})</a></p>
   {%- endif %}
   {%- else %}
-  <p class="empty ok-empty">● Nothing needs attention.</p>
+  <p class="empty ok-empty"><span aria-hidden="true">●</span> Nothing needs attention.</p>
   {%- endif %}
 </section>
 
