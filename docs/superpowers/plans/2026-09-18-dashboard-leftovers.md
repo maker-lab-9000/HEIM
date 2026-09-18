@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close out the HEIM dashboard's deferred items: list pagination, the Recommendations page, light mode, and per-investigation model choice.
+**Goal:** Close out the HEIM dashboard's deferred items: list pagination, the Recommendations page, light mode, per-investigation model choice, and the token-usage-by-weekday chart.
 
 **Architecture:** All four are dashboard-layer changes on the existing FastAPI + Jinja + htmx app (`src/heim/dashboard/`), plus one new SQLite action table for recommendation states. No pipeline/daemon changes. Pure logic gets unit tests; routes get TestClient tests.
 
 **Tech Stack:** Python 3.11+, FastAPI, Jinja2, htmx (vendored), sqlite3, pytest.
 
-**Spec:** `docs/design/dashboard-ui.md` §8 (pagination), §9 (recommendations), §10 (light mode), §5.1 (model choice). §1–4 define the design system every task must match.
+**Spec:** `docs/design/dashboard-ui.md` §8 (pagination), §9 (recommendations), §10 (light mode), §5.1 (model choice), §11 (token chart). §1–4 define the design system every task must match.
 
 ## Global Constraints
 
@@ -470,4 +470,69 @@ Approval texts: append ` · model: <id>` when overridden (Telegram ask + pending
 ```bash
 .venv/bin/pytest tests/test_model_choice.py -q && .venv/bin/pytest -q
 git add -A && git commit -m "investigations: per-trigger model choice (dashboard select, CLI --model)"
+```
+
+---
+
+### Task 6: Token usage by weekday (overview chart)
+
+**Files:**
+- Modify: `src/heim/incidents/store.py` (daily token totals query), `src/heim/dashboard/app.py` (overview context), `src/heim/dashboard/templates/overview.html` (the card + inline SVG), `src/heim/dashboard/static/heim.css` (chart styles)
+- Test: `tests/test_token_chart.py` (new)
+
+**Interfaces:**
+- Consumes: investigations(started_at, input_tokens, output_tokens), runs(run_at, input_tokens, output_tokens).
+- Produces: `store.daily_token_totals(days: int = 14, now_iso: str | None = None) -> list[dict]` — exactly `days` entries oldest→newest: `{"date": "YYYY-MM-DD", "weekday": "mo", "tokens": int}` (zero-filled days included); overview context `token_chart` = that list + precomputed bar heights/max.
+
+**Spec:** `docs/design/dashboard-ui.md` §11 — its dataviz rules are binding (single series, no legend, ember bars, selective labels, per-bar title tooltips, zero stubs, server-rendered SVG).
+
+- [ ] **Step 1: Failing store test**
+
+```python
+# tests/test_token_chart.py
+from heim.incidents.store import IncidentStore
+
+def test_daily_token_totals_zero_filled_and_summed(tmp_path):
+    s = IncidentStore(tmp_path / "t.sqlite3")
+    s.create_investigation(fingerprint="f", host="h", trigger="daily", status="complete",
+                           started_at="2026-09-16T10:00:00", input_tokens=1000, output_tokens=200)
+    s.insert_run(kind="daily", run_at="2026-09-16T22:00:00", overall="healthy",
+                 model_used="m", duration_s=1.0, counts_json="{}",
+                 input_tokens=300, output_tokens=50)
+    rows = s.daily_token_totals(days=3, now_iso="2026-09-17T12:00:00")
+    assert [r["date"] for r in rows] == ["2026-09-15", "2026-09-16", "2026-09-17"]
+    assert rows[0]["tokens"] == 0 and rows[1]["tokens"] == 1550 and rows[2]["tokens"] == 0
+    assert rows[1]["weekday"] == "we"   # 2026-09-16 is a Wednesday
+    s.close()
+```
+
+- [ ] **Step 2: Run to verify failure** → FAIL (method missing)
+
+- [ ] **Step 3: Implement store method**
+
+Group by `substr(started_at,1,10)` / `substr(run_at,1,10)` in two grouped queries, merge in Python, zero-fill the window from `now_iso` (or local now) backwards, weekday via `datetime.date.fromisoformat(...).weekday()` → "mo tu we th fr sa su". Run Step 1 → PASS, commit.
+
+- [ ] **Step 4: Failing render test**
+
+```python
+def test_overview_renders_token_chart(seeded_client):
+    html = seeded_client.get("/").text
+    assert "token usage" in html and "<svg" in html and 'class="tchart"' in html
+    assert html.count("<rect") >= 14                      # one bar per day incl. zero stubs
+    assert 'title>' in html or "<title>" in html          # per-bar tooltips
+    assert "14d:" in html and "busiest" in html
+
+def test_token_chart_empty_state(empty_client):
+    assert "No token usage recorded yet." in empty_client.get("/").text
+```
+
+- [ ] **Step 5: Run to verify failure**, then **Step 6: Implement**
+
+Overview route: `token_chart = store.daily_token_totals(14)`; compute `mx = max(tokens)`; template renders a fixed-viewBox SVG (e.g. `viewBox="0 0 336 72"`, 14 slots of 24px: bar width 20, gap 4), heights = `round(60 * tokens / mx)` (min 2 for zero-days), rects `fill="var(--ember)"` rx="2" y-anchored to the 70px baseline, a baseline `<line>` in var(--line), weekday letters as 0.6875rem mono `<text>` under each slot, ONLY the max bar gets a `<text>` value label (humanized), every rect wrapped with `<title>YYYY-MM-DD · N tokens</title>`. Summary line + empty state per spec. CSS: `.tchart text { font-family: var(--mono); fill: var(--ink-3); }` etc.
+
+- [ ] **Step 7: Run tests, full suite, commit**
+
+```bash
+.venv/bin/pytest tests/test_token_chart.py -q && .venv/bin/pytest -q
+git add -A && git commit -m "overview: token usage by weekday — 14-day ember bar chart (server-rendered SVG)"
 ```

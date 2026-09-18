@@ -358,7 +358,24 @@ close to the common cream/terracotta default — this direction is the ruling.)
   The dark terminal islands complete it: charcoal windows on an ash morning desk. The
   theme toggle uses the lockup's own vocabulary: ☀ light · ☾ dark · ◐ auto.
 
-## 11. Still out of scope
+## 11. Token usage by weekday (overview chart)
+
+A small "token usage" card on the overview (below tool usage): the last **14 days** as
+one bar per day — x labels are weekday initials (mo tu we th fr sa su, mono-caps,
+today rightmost), bar height = that day's total tokens (investigations by started_at +
+runs by run_at, in+out). This shows both the weekly rhythm the user asked about and
+recency, without aggregating away real days.
+
+Dataviz rules (binding): single series → NO legend, the card title names it; bars are
+the ember accent (tokens ARE agent activity) as thin marks with 4px rounded tops,
+2px gaps, on a baseline hairline (--line); value labels are SELECTIVE — only the max
+bar carries an inline mono label, every bar has a `title` tooltip with date + exact
+count; zero-days render a 2px stub so the axis stays readable. Pure server-rendered
+inline SVG (heights precomputed server-side, viewBox fixed) — no JS, no chart library.
+Below the chart one mono summary line: `14d: <total> · busiest <weekday> <date> (<n>)`.
+Empty state: "No token usage recorded yet."
+
+## 12. Still out of scope
 
 Nothing — as of this revision every previously deferred dashboard item is specced
 above.
