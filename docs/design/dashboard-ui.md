@@ -330,7 +330,20 @@ logic inverted, and the SAME identity colors.
   a form GET `?theme=<auto|light|dark>` handled server-side (sets the cookie,
   `SameSite=Lax`, 1 year, then redirects back).
 - Components read tokens only — any hardcoded dark hex discovered during
-  implementation is a bug to fix in place.
+  implementation is a bug to fix in place. ONE deliberate exception, and it is light
+  mode's signature: **the terminal surfaces stay dark**. Transcript command lines,
+  result previews, and code/pre blocks keep their charcoal treatment in light mode
+  (scoped rule, e.g. `[data-theme="light"] .cmd, [data-theme="light"] pre { background:
+  #1B1917; color: #E9E2D4; }` — literal values allowed HERE only, they are the terminal's
+  own colors, not theme tokens). Terminals do not have a light mode; the agent's shell
+  keeps its native habitat as dark islands on the paper. The burn line keeps the original
+  ember #E88C3A inside those dark blocks.
+- Design rationale on the palette (recorded so nobody "fixes" it later): warm paper +
+  ember superficially resembles the common cream/terracotta default, but here both are
+  derived — the paper is the rustic logo plaque's own #F8F4EA, ember is the established
+  agent-activity semantic, and the identity stays mono-first ops density rather than the
+  default's serif-editorial look. The theme toggle uses the lockup's own vocabulary:
+  ☀ light · ☾ dark · ◐ auto.
 
 ## 11. Still out of scope
 
