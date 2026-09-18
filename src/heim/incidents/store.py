@@ -166,6 +166,16 @@ CREATE TABLE IF NOT EXISTS suppressions (
     created_at  TEXT NOT NULL DEFAULT ''
 );
 
+-- §9: what the user has already done about a recommendation. Keyed by the
+-- content hash of the advice (see dashboard.recommendations.rec_key), not by a
+-- row id, so ticking an item off survives the finding or report being
+-- regenerated with the same text.
+CREATE TABLE IF NOT EXISTS recommendation_states (
+    key        TEXT PRIMARY KEY,
+    state      TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_steps_investigation ON investigation_steps (investigation_id, seq);
 CREATE INDEX IF NOT EXISTS idx_tool_feedback_tool ON tool_feedback (tool, id);
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings (run_id);
@@ -856,6 +866,37 @@ class IncidentStore:
             "SELECT approval_decision FROM investigations WHERE id = ?", (int(investigation_id),)
         ).fetchone()
         return str(row["approval_decision"] or "") if row is not None else ""
+
+    # ------------------------------------------------- §9 recommendations
+
+    #: The only states a recommendation can be in. "open" is the absence of a
+    #: row, not a value — storing it would make the table grow with every item
+    #: the page has ever rendered.
+    RECOMMENDATION_STATES = ("done", "dismissed")
+
+    def set_recommendation_state(self, key: str, state: str) -> None:
+        """Mark ``key`` done/dismissed, replacing any previous mark."""
+        if state not in self.RECOMMENDATION_STATES:
+            raise ValueError(
+                f"unknown recommendation state: {state!r} "
+                f"(expected one of {', '.join(self.RECOMMENDATION_STATES)})"
+            )
+        self._db.execute(
+            "INSERT OR REPLACE INTO recommendation_states (key, state, created_at) "
+            "VALUES (?, ?, ?)",
+            (str(key), state, self._now()),
+        )
+        self._db.commit()
+
+    def recommendation_states(self) -> dict[str, dict]:
+        """``key → {"state": …, "created_at": …}`` for every marked item."""
+        rows = self._db.execute(
+            "SELECT key, state, created_at FROM recommendation_states"
+        ).fetchall()
+        return {
+            str(r["key"]): {"state": str(r["state"]), "created_at": str(r["created_at"])}
+            for r in rows
+        }
 
     # ------------------------------------------------------------- internals
 
