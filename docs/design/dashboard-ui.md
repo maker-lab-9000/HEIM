@@ -206,6 +206,10 @@ Errors follow the store-error copy rules. No toasts, no JS state.
 waiting); the investigations list shows queued jobs as ghost rows (`--ink-3`,
 "queued · waiting for daemon") above running ones.
 
+**Weight:** this slice deliberately raises §4's CSS budget from ~12 KB to
+14 KB (one button style, a feedback line, ghost rows). Still one hand-written
+file, still no build step, still the only stylesheet the pages load.
+
 ## 6. Still out of scope
 
 "Load 50 more" pagination (lists cap at 200 rows) and the Recommendations page —

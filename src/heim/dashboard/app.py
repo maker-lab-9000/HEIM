@@ -1,13 +1,17 @@
-"""The HEIM dashboard — a read-only web view of the pipeline's own records.
+"""The HEIM dashboard — a web view of the pipeline's own records, plus actions.
 
 Stack per AGENTS.md §5.3: FastAPI + Jinja + vendored htmx, no build step. The
 UI is specified in ``docs/design/dashboard-ui.md``; this module only assembles
 the data each page needs.
 
-**Read-only in v1.** The daemon is the sole writer of the pipeline tables
-(AGENTS.md §2 invariants); this process opens exactly one SQLite connection and
-never issues a write. WAL (enabled by ``IncidentStore``) is what makes a second
-reader safe alongside the running daemon.
+**Reads everything, writes action rows only** (design spec §5). The daemon
+remains the sole executor and the sole writer of the pipeline tables
+(AGENTS.md §2 invariants); the dashboard's entire write surface is the
+allow-list in ``_ACTION_HELPERS``: queue a job, decide an approval, judge a
+finding, mute/unmute a fingerprint. No route ever touches ``incidents``,
+``investigations``, ``runs`` or ``jobs`` outside those helpers. WAL (enabled by
+``IncidentStore``) is what makes this second connection safe alongside the
+running daemon.
 
 Run it with ``heim dashboard`` (uvicorn), or mount ``create_app()`` yourself.
 """
@@ -24,9 +28,15 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
+from urllib.parse import parse_qsl, urlsplit
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -34,6 +44,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from heim.config import Config, load_config
 from heim.dashboard import format as fmt
 from heim.incidents.store import IncidentStore
+from heim.pipelines.queue import enqueue_investigation, enqueue_retry
+from heim.pipelines.suppression import mark_false_positive, suppress_fingerprint
 from heim.reports.render import _md_to_html
 
 log = logging.getLogger(__name__)
@@ -51,22 +63,30 @@ DAEMON_FRESH_S = 20 * 60
 STORE_ERROR = ("Store unreadable at {path} — is the daemon running with the "
                "same volume?")
 
+#: The dashboard's complete write surface (design spec §5). Anything else —
+#: incident lifecycle, investigation rows, run/finding inserts, job claiming —
+#: belongs to the daemon alone, so no route may call it.
+_ACTION_HELPERS = (
+    "enqueue_investigation", "enqueue_retry", "set_approval_decision",
+    "set_finding_verdict", "mark_false_positive", "suppress", "unsuppress",
+    "set_incident_status",   # only via suppress/unsuppress, mirroring the CLI
+)
+
 
 # --------------------------------------------------------------- data access
 
 
 class StoreReader:
-    """Serialized read access to the one store connection.
+    """Serialized access to the one store connection.
 
     Routes are ``async def`` (they run on the event loop) but Starlette may
-    still touch us from a portal thread in tests, so every read takes a lock
+    still touch us from a portal thread in tests, so every call takes a lock
     and the connection is opened with ``check_same_thread=False``.
 
-    The only statements this process ever issues beyond SELECTs are the
-    idempotent ``CREATE TABLE IF NOT EXISTS`` in ``IncidentStore.__init__``
-    (so a dashboard started before the first daemon run still has a schema to
-    read). No pipeline row is ever written here — the daemon stays the sole
-    writer (AGENTS.md §2).
+    ``read`` issues SELECTs (plus the idempotent ``CREATE TABLE IF NOT EXISTS``
+    in ``IncidentStore.__init__``, so a dashboard started before the first
+    daemon run still has a schema to read). ``write`` exists for the action
+    slice only and is passed nothing but the ``_ACTION_HELPERS`` allow-list.
     """
 
     def __init__(self, path: str | Path):
@@ -75,6 +95,15 @@ class StoreReader:
         self._store = IncidentStore(self.path, check_same_thread=False)
 
     def read(self, fn: Callable[[IncidentStore], object]):
+        with self._lock:
+            return fn(self._store)
+
+    def write(self, fn: Callable[[IncidentStore], object]):
+        """Run one action helper against the store (serialized like reads).
+
+        Separate from ``read`` on purpose: grepping for ``reader.write`` shows
+        the dashboard's whole write surface in one screen.
+        """
         with self._lock:
             return fn(self._store)
 
@@ -96,6 +125,113 @@ def _auth_ok(header: str | None, token: str) -> bool:
     except (binascii.Error, ValueError, IndexError):
         return False
     return secrets.compare_digest(password, token)
+
+
+# ---------------------------------------------------------------- actions
+#
+# Security posture for the write path (accepted risk, design spec §5): the
+# dashboard is a LAN-only page behind optional HTTP basic auth, so these
+# same-origin forms carry **no CSRF token**. A token would need minting,
+# storing and rotating for a surface whose worst forged POST queues a
+# read-only investigation or mutes a fingerprint an operator can unmute in one
+# click — not worth the machinery here. If the dashboard is ever published
+# beyond the LAN, adding a per-session token to `_ACTION_HELPERS`' forms is the
+# first thing to do.
+
+
+class ActionError(Exception):
+    """A rejected action: rendered through the standard error template.
+
+    Bad input is a 400 ("the form said something impossible"), a missing row a
+    404 ("there is nothing to act on") — htmx ignores non-2xx bodies, so the
+    page the operator is looking at simply stays put.
+    """
+
+    def __init__(self, message: str, detail: str = "", status: int = 400):
+        super().__init__(message)
+        self.message = message
+        self.detail = detail
+        self.status = status
+
+
+async def _fields(request: Request) -> dict:
+    """Form fields as plain strings.
+
+    Parsed here rather than through FastAPI's ``Form(...)`` /
+    ``request.form()``: both pull in python-multipart, and the dashboard only
+    ever posts ``application/x-www-form-urlencoded`` — what a plain
+    ``<form method="post">`` and htmx both send by default. One less runtime
+    dependency for the same three lines, and a file upload or JSON body is
+    refused instead of silently half-parsed.
+
+    Fingerprints contain ``|`` and ``/`` (mountpoints), so they travel as form
+    fields and never as path segments — nothing here is put into a URL either.
+    """
+    ctype = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if ctype != "application/x-www-form-urlencoded":
+        raise ActionError(
+            "That action did not arrive as a form.",
+            f"Expected application/x-www-form-urlencoded, got {ctype or '(nothing)'}.")
+    body = (await request.body()).decode("utf-8", "replace")
+    return {k: v for k, v in parse_qsl(body, keep_blank_values=True)}
+
+
+def _int_field(fields: dict, name: str) -> int:
+    raw = str(fields.get(name) or "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ActionError(f"That action needs a numeric {name.replace('_', ' ')}.",
+                          f"The form posted {name}={raw!r}.", 400) from None
+    if value <= 0:
+        raise ActionError(f"That action needs a real {name.replace('_', ' ')}.",
+                          f"The form posted {name}={raw!r}.", 400)
+    return value
+
+
+def _choice_field(fields: dict, name: str, allowed: tuple[str, ...]) -> str:
+    value = str(fields.get(name) or "").strip().lower()
+    if value not in allowed:
+        raise ActionError(
+            f"{value or '(nothing)'} is not a valid {name}.",
+            f"Expected one of {', '.join(allowed)} — check the form markup.", 400)
+    return value
+
+
+def _text_field(fields: dict, name: str, what: str) -> str:
+    value = str(fields.get(name) or "").strip()
+    if not value:
+        raise ActionError(f"{what} needs a {name.replace('_', ' ')}.",
+                          "The form posted an empty value.", 400)
+    return value
+
+
+def _back_to(request: Request, fields: dict) -> str:
+    """Where a plain (non-htmx) form POST returns to.
+
+    The ``back`` field first, then the Referer; both are accepted only as
+    same-site paths so the redirect can never be pointed off the box.
+    """
+    for candidate in (fields.get("back"), request.headers.get("referer")):
+        text = str(candidate or "").strip()
+        if text.startswith("/") and not text.startswith("//"):
+            return text
+        if text:
+            try:
+                url = urlsplit(text)
+            except ValueError:  # pragma: no cover - urlsplit is very forgiving
+                continue
+            if url.netloc == request.url.netloc and url.path.startswith("/"):
+                return url.path + (f"?{url.query}" if url.query else "")
+    return "/"
+
+
+#: the inline feedback lines (spec §5: mono, --ink-2, no toasts)
+QUEUED = "Queued as job #{job} — the daemon picks it up within a few seconds."
+APPROVED = "Approved — the daemon starts the investigation within a few seconds."
+DECLINED = "Declined — nothing runs; it is re-proposed next run."
+CONFIRMED = "Confirmed — kept in the findings history."
+UNMUTED = "Unmuted — the pipelines report this fingerprint again."
 
 
 # ------------------------------------------------------------------- app
@@ -152,18 +288,33 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     def page(request: Request, template: str, status: int = 200, **ctx) -> HTMLResponse:
         now = datetime.now(tz)
+        query = request.url.query
         base = {
             "now": now,
             "clock": now.strftime("%H:%M"),
             "env_chip": _env_chip(cfg, now),
             "daemon": _daemon_chip(reader),
             "nav": NAV,
+            # where action forms send a no-JS operator back to (spec §5)
+            "back": request.url.path + (f"?{query}" if query else ""),
         }
         base.update(ctx)
         return templates.TemplateResponse(request, template, base, status_code=status)
 
     def partial(request: Request, template: str, **ctx) -> HTMLResponse:
         return templates.TemplateResponse(request, template, ctx)
+
+    def respond(request: Request, fields: dict, template: str, flash: dict, **ctx):
+        """The two faces of every action (spec §5).
+
+        Plain form POST → 303 back to the page it came from, so a browser with
+        no JS lands on fresh server-rendered HTML. htmx POST → just the
+        affected panel, re-rendered with the inline feedback line.
+        """
+        if request.headers.get("hx-request"):
+            return partial(request, template, flash=flash,
+                           back=_back_to(request, fields), **ctx)
+        return RedirectResponse(_back_to(request, fields), status_code=303)
 
     @app.exception_handler(sqlite3.Error)
     async def _store_error(request: Request, exc: sqlite3.Error):
@@ -176,6 +327,13 @@ def create_app(config: Config | None = None) -> FastAPI:
              "page_title": "error"},
             status_code=500,
         )
+
+    @app.exception_handler(ActionError)
+    async def _action_error(request: Request, exc: ActionError):
+        log.info("action refused (%d): %s", exc.status, exc.message)
+        return page(request, "error.html", status=exc.status,
+                    page_title="not found" if exc.status == 404 else "bad request",
+                    message=exc.message, detail=exc.detail)
 
     # -------------------------------------------------------------- routes
 
@@ -190,6 +348,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         invs = reader.read(lambda s: s.investigations(limit=60))
         findings = reader.read(lambda s: s.recent_findings(limit=60))
         daily = reader.read(lambda s: s.runs(limit=1, kind="daily"))
+        queued = reader.read(lambda s: s.queued_count())
         latest = daily[0] if daily else None
         headline_findings = _findings_of_run(findings, latest)
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
@@ -210,28 +369,31 @@ def create_app(config: Config | None = None) -> FastAPI:
              "href": "/investigations?status=pending_approval"},
             {"label": "tokens 24h", "value": fmt.tokens(tok_in + tok_out),
              "meta": f"{fmt.tokens(tok_in)} in → {fmt.tokens(tok_out)} out"},
+            {"label": "queued", "value": str(queued),
+             "meta": "waiting for the daemon" if queued else "queue empty",
+             "href": "/investigations"},
         ]
         return page(
             request, "overview.html", page_title="overview", kpis=kpis,
             latest_run=latest, headline=_headline(headline_findings),
             investigations=invs[:8], findings=findings[:6],
-            empty=not invs and not findings and not open_incidents,
+            empty=not invs and not findings and not open_incidents and not queued,
         )
 
     @app.get("/investigations", response_class=HTMLResponse)
     async def investigations(request: Request, status: str = "", host: str = "",
                              trigger: str = ""):
-        rows, filters = _investigation_rows(reader, cfg, status, host, trigger)
+        rows, ghosts, filters = _investigation_rows(reader, cfg, status, host, trigger)
         return page(request, "investigations.html", page_title="investigations",
-                    rows=rows, filters=filters,
-                    live=any(r["status"] == "running" for r in rows))
+                    rows=rows, ghosts=ghosts, filters=filters,
+                    live=_live(rows, ghosts))
 
     @app.get("/investigations/rows", response_class=HTMLResponse)
     async def investigation_rows(request: Request, status: str = "", host: str = "",
                                  trigger: str = ""):
-        rows, _ = _investigation_rows(reader, cfg, status, host, trigger)
-        return partial(request, "partials/_inv_rows.html", rows=rows,
-                       live=any(r["status"] == "running" for r in rows),
+        rows, ghosts, _ = _investigation_rows(reader, cfg, status, host, trigger)
+        return partial(request, "partials/_inv_rows.html", rows=rows, ghosts=ghosts,
+                       live=_live(rows, ghosts),
                        query=_query(status=status, host=host, trigger=trigger))
 
     @app.get("/investigations/{inv_id}", response_class=HTMLResponse)
@@ -261,13 +423,17 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/incidents", response_class=HTMLResponse)
     async def incidents(request: Request):
+        # all_rows() is status-blind, so suppressed incidents are listed too —
+        # they are exactly the rows an operator needs in order to unmute.
         rows = reader.read(lambda s: s.all_rows(limit=200))
         invs = reader.read(lambda s: s.investigations(limit=200))
+        sups = _suppressions(reader)
         by_fp: dict[str, list[dict]] = {}
         for inv in invs:
             by_fp.setdefault(str(inv.get("fingerprint") or ""), []).append(inv)
         for row in rows:
             row["investigations"] = by_fp.get(row["fingerprint"], [])
+            row["suppression"] = sups.get(row["fingerprint"])
         return page(request, "incidents.html", page_title="incidents", rows=rows)
 
     @app.get("/findings", response_class=HTMLResponse)
@@ -308,6 +474,123 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "investigation": next((i for i in invs if i.get("host") == host.name), None),
             })
         return page(request, "hosts.html", page_title="hosts", cards=cards)
+
+    # ------------------------------------------------------- action routes
+    #
+    # Everything below inserts an action row and nothing else: the daemon
+    # still decides, runs and records. All of them sit behind the same auth
+    # middleware as the pages (it is method-agnostic) and take their subject
+    # from form fields only — never from the URL, because a fingerprint
+    # carries `|` and `/`.
+
+    @app.post("/actions/investigate")
+    async def action_investigate(request: Request):
+        fields = await _fields(request)
+        fingerprint = str(fields.get("fingerprint") or "").strip()
+        incident = reader.read(lambda s: s.incident(fingerprint)) if fingerprint else None
+        host = str((incident or {}).get("host") or fields.get("host") or "").strip()
+        if not host:
+            raise ActionError(
+                "An investigation needs a host.",
+                "The form posted no host and no known fingerprint to take one from.")
+        host_cfg = cfg.hosts.get(host)
+        if host_cfg is None:
+            raise ActionError(
+                f"No host named {host} is configured.",
+                "Add a file under config/hosts/ and restart the daemon — it only "
+                "investigates hosts it has a profile for.")
+        # From an incident: the same subject reconcile would have dispatched.
+        # Otherwise a bare manual run — the agent starts from the host itself.
+        findings = [_finding_from_incident(incident)] if incident else []
+        job_id = reader.write(lambda s: enqueue_investigation(
+            s, host=host, host_role=host_cfg.role, fingerprint=fingerprint,
+            findings=findings, requested_by="dashboard"))
+        flash = {"text": QUEUED.format(job=job_id)}
+        if incident:
+            return respond(request, fields, "partials/_incident_acts.html", flash,
+                           **_incident_ctx(reader, fingerprint))
+        return respond(request, fields, "partials/_host_acts.html", flash,
+                       host=host)
+
+    @app.post("/actions/retrigger")
+    async def action_retrigger(request: Request):
+        fields = await _fields(request)
+        inv_id = _int_field(fields, "investigation_id")
+        job_id = reader.write(lambda s: enqueue_retry(s, inv_id, requested_by="dashboard"))
+        if job_id is None:
+            raise ActionError(f"No investigation #{inv_id}.",
+                              "Nothing to re-run — the list shows everything the "
+                              "store has.", 404)
+        return respond(request, fields, "partials/_inv_acts.html",
+                       {"text": QUEUED.format(job=job_id)},
+                       inv=reader.read(lambda s: s.investigation(inv_id)))
+
+    @app.post("/actions/approval")
+    async def action_approval(request: Request):
+        fields = await _fields(request)
+        inv_id = _int_field(fields, "investigation_id")
+        decision = _choice_field(fields, "decision", ("approve", "decline"))
+        if reader.read(lambda s: s.investigation(inv_id)) is None:
+            raise ActionError(f"No investigation #{inv_id}.",
+                              "There is nothing waiting for a decision under that "
+                              "id.", 404)
+        # The daemon's approval wait polls this column and races it against the
+        # Telegram button; writing it is the whole of "approve from the web".
+        reader.write(lambda s: s.set_approval_decision(inv_id, decision))
+        flash = {"text": APPROVED if decision == "approve" else DECLINED}
+        return respond(request, fields, "partials/_inv_acts.html", flash,
+                       inv=reader.read(lambda s: s.investigation(inv_id)))
+
+    @app.post("/actions/verdict")
+    async def action_verdict(request: Request):
+        fields = await _fields(request)
+        finding_id = _int_field(fields, "finding_id")
+        verdict = _choice_field(fields, "verdict", ("confirmed", "false_positive"))
+        days = cfg.settings.suppression_days
+        if verdict == "false_positive":
+            # one call: verdict + suppression + the incident status flip
+            row = reader.write(lambda s: mark_false_positive(
+                s, finding_id, days=days, now=datetime.now(tz)))
+            flash = {"text": _muted_text((row or {}).get("suppression"))}
+        else:
+            row = reader.write(lambda s: s.set_finding_verdict(finding_id, "confirmed"))
+            flash = {"text": CONFIRMED}
+        if row is None:
+            raise ActionError(f"No finding #{finding_id}.",
+                              "Findings are pruned with their run — the history "
+                              "page shows what is left.", 404)
+        return respond(request, fields, "partials/_verdict.html", flash, f=row)
+
+    @app.post("/actions/mute")
+    async def action_mute(request: Request):
+        fields = await _fields(request)
+        fingerprint = _text_field(fields, "fingerprint", "Muting")
+        days = cfg.settings.suppression_days
+        if str(fields.get("days") or "").strip():
+            days = _int_field(fields, "days")
+        res = reader.write(lambda s: suppress_fingerprint(
+            s, fingerprint, days=days, reason="marked a false positive from the dashboard",
+            now=datetime.now(tz)))
+        return respond(request, fields, "partials/_incident_acts.html",
+                       {"text": _muted_text(res)},
+                       **_incident_ctx(reader, fingerprint))
+
+    @app.post("/actions/unmute")
+    async def action_unmute(request: Request):
+        fields = await _fields(request)
+        fingerprint = _text_field(fields, "fingerprint", "Unmuting")
+        if not reader.write(lambda s: s.unsuppress(fingerprint)):
+            raise ActionError(f"{fingerprint} is not muted.",
+                              "Nothing to lift — the muted rows are the ones with a "
+                              "muted pill.", 404)
+        # same as `heim incidents unmute`: only a suppressed row goes back to open
+        incident = reader.read(lambda s: s.incident(fingerprint))
+        if incident and incident.get("status") == "suppressed":
+            reader.write(lambda s: s.set_incident_status(fingerprint, "open"))
+        return respond(
+            request, fields, "partials/_incident_acts.html",
+            {"text": UNMUTED},
+            **_incident_ctx(reader, fingerprint))
 
     return app
 
@@ -374,13 +657,42 @@ def _headline(findings: list[dict]) -> dict | None:
         str(f.get("severity") or "").lower(), 3))[0]
 
 
+def _live(rows: list[dict], ghosts: list[dict]) -> bool:
+    """Poll the table while anything can change under it — a running agent
+    appends steps, and a queued job turns into a row of its own."""
+    return bool(ghosts) or any(r.get("status") == "running" for r in rows)
+
+
+def _ghost_rows(reader: StoreReader, host: str) -> list[dict]:
+    """Queued jobs, as the ghost rows that sit above the real ones (spec §5).
+
+    Oldest first — that is the order the daemon claims them in.
+    """
+    jobs = reader.read(lambda s: s.jobs(limit=50, status="queued"))
+    ghosts = []
+    for job in reversed(list(jobs)):
+        payload = job.get("payload") or {}
+        ghosts.append({
+            "id": int(job.get("id") or 0),
+            "host": str(payload.get("host") or ""),
+            "fingerprint": str(payload.get("fingerprint") or ""),
+            "requested_by": str(job.get("requested_by") or ""),
+            "retry_of": int(job.get("retry_of") or 0),
+            "created_at": job.get("created_at") or "",
+        })
+    if host:
+        ghosts = [g for g in ghosts if g["host"] == host]
+    return ghosts
+
+
 def _investigation_rows(reader: StoreReader, cfg: Config, status: str, host: str,
-                        trigger: str) -> tuple[list[dict], dict]:
-    """Filtered rows + the option lists the filter row renders.
+                        trigger: str) -> tuple[list[dict], list[dict], dict]:
+    """Filtered rows + queued ghost rows + the option lists the filter row renders.
 
     Status filtering happens in SQL (the store supports it); host/trigger are
     low-cardinality so they are filtered here rather than widening the store's
-    read API.
+    read API. Ghost rows are jobs, not investigations, so they only show when
+    the status filter would not contradict them (any status, or "queued").
     """
     rows = reader.read(lambda s: s.investigations(limit=200, status=status or None))
     all_rows = reader.read(lambda s: s.investigations(limit=200))
@@ -388,22 +700,65 @@ def _investigation_rows(reader: StoreReader, cfg: Config, status: str, host: str
         rows = [r for r in rows if r.get("host") == host]
     if trigger:
         rows = [r for r in rows if r.get("trigger") == trigger]
+    ghosts = [] if (status and status != "queued") or trigger else _ghost_rows(reader, host)
     statuses = sorted({str(r.get("status") or "") for r in all_rows if r.get("status")})
     hosts = sorted({str(r.get("host") or "") for r in all_rows if r.get("host")}
                    | set(cfg.hosts))
     triggers = sorted({str(r.get("trigger") or "") for r in all_rows if r.get("trigger")}
                       | set(_TRIGGERS))
+    if ghosts and "queued" not in statuses:
+        statuses = sorted(statuses + ["queued"])
     filters = {
         "status": status, "host": host, "trigger": trigger,
         "statuses": statuses, "hosts": hosts, "triggers": triggers,
         "query": _query(status=status, host=host, trigger=trigger),
     }
-    return rows, filters
+    return rows, ghosts, filters
+
+
+def _finding_from_incident(incident: dict) -> dict:
+    """The one-finding brief a stored incident becomes when it is investigated.
+
+    Same shape ``heim investigate --fingerprint`` and ``enqueue_retry`` build,
+    so a dashboard-queued job reads exactly like a daily/poller dispatch.
+    """
+    return {
+        "severity": incident.get("severity", ""),
+        "host": incident.get("host", ""),
+        "metric": incident.get("metric", ""),
+        "trend": "",
+        "detail": incident.get("description", ""),
+        "recommendation": "",
+    }
+
+
+def _suppressions(reader: StoreReader) -> dict:
+    return {str(r.get("fingerprint") or ""): r for r in reader.read(lambda s: s.suppressed())}
+
+
+def _incident_ctx(reader: StoreReader, fingerprint: str) -> dict:
+    """Context for the incident action cell after a mute/unmute/queue.
+
+    The incident row may not exist (a fingerprint can be muted before it ever
+    opens), so the fingerprint itself is the fallback subject.
+    """
+    row = reader.read(lambda s: s.incident(fingerprint))
+    return {"r": row or {"fingerprint": fingerprint, "host": "", "status": ""},
+            "sup": _suppressions(reader).get(fingerprint)}
+
+
+def _muted_text(suppression: dict | None) -> str:
+    """The feedback line for a mute — the verdict half is implied by the pill."""
+    until = str((suppression or {}).get("until") or "")
+    if not suppression:
+        return "Marked false positive — no fingerprint to mute."
+    if not until:
+        return "Marked false positive — muted for good; unmute it from incidents."
+    return f"Marked false positive — muted until {fmt.day(until)}."
 
 
 def _outcome_line(row: dict) -> dict | None:
-    """The closing line of the detail page (read-only in v1; actions land with
-    the jobs queue, AGENTS.md §5.2)."""
+    """The closing line of the detail page (the actions sit in the header)."""
     status = str(row.get("status") or "")
     outcome = str(row.get("outcome") or "")
     when = fmt.clock(row.get("finished_at"))

@@ -253,6 +253,8 @@ _STATUS = {
     "declined": ("○", "st-muted", "declined"),
     "open": ("●", "st-crit", "open"),
     "clearing": ("◐", "st-warn", "clearing"),
+    "suppressed": ("◌", "st-muted", "suppressed"),
+    "queued": ("◌", "st-muted", "queued"),
     "critical": ("✕", "st-crit", "critical"),
     "warning": ("⚠", "st-warn", "warning"),
     "warn": ("⚠", "st-warn", "warning"),

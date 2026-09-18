@@ -21,3 +21,23 @@
 {% macro empty(text) -%}
 <p class="empty">{{ text }}</p>
 {%- endmacro %}
+
+{#- an action button: a real form first, htmx second (design spec §5).
+    `fields` is the whole payload — fingerprints travel as form fields, never
+    in the URL. Import this macro `with context` so `back` resolves. -#}
+{% macro act(action, label, fields, confirm='', cls='') -%}
+<form class="act" method="post" action="{{ action }}" hx-post="{{ action }}"
+      hx-target="closest .acts" hx-swap="outerHTML"
+      {%- if confirm %} hx-confirm="{{ confirm }}"{% endif %}>
+  {%- for name, value in fields.items() %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {%- endfor %}
+  <input type="hidden" name="back" value="{{ back|default('/', true) }}">
+  <button class="btn{{ ' ember' if cls }}" type="submit">{{ label }}</button>
+</form>
+{%- endmacro %}
+
+{% macro muted(sup) -%}
+<span class="pill st-muted"><span class="dot" aria-hidden="true">◌</span>muted · until
+  {{ sup.until|day if sup.until else 'further notice' }}</span>
+{%- endmacro %}

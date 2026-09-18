@@ -1,0 +1,5 @@
+{% import "partials/_macros.html" as m with context %}
+<div class="acts">
+  {{ m.act('/actions/investigate', 'INVESTIGATE', {'host': host}) }}
+  {% include "partials/_flash.html" %}
+</div>

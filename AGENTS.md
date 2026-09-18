@@ -42,7 +42,7 @@ edges** (tools, channels, pipelines).
 | Human loop | Telegram inline-button approvals (long-poll, no inbound ports) raced against a store-written decision (dashboard/CLI, works with no Telegram at all) · decline/timeout → re-proposed next run · outcome confirm (Resolved / Needs human) |
 | Delivery | n8n-faithful HTML dashboard email · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
 | Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · crash-safe investigation job queue (`heim jobs`, restart sweep, re-trigger with `retry_of`) · Docker/compose deployment (outbound-only, plus the optional dashboard port) · `.env` interpolation for all deployment identity |
-| Dashboard | Read-only web UI (`heim dashboard`, FastAPI + Jinja + vendored htmx): overview KPIs, investigations list/filters, the agent-transcript detail page with burn line, incidents, findings history, host cards · optional HTTP basic auth · one SQLite reader (WAL), never a writer |
+| Dashboard | Web UI (`heim dashboard`, FastAPI + Jinja + vendored htmx): overview KPIs incl. queue depth, investigations list/filters with queued ghost rows, the agent-transcript detail page with burn line, incidents, findings history, host cards · actions (queue an investigation, re-run, approve/decline, finding verdicts, mute/unmute) as real forms enhanced by htmx · optional HTTP basic auth · one SQLite connection (WAL) that writes action rows only |
 
 ---
 
@@ -208,7 +208,7 @@ daemon start. Enqueue helpers live in `pipelines/queue.py`
 Scheduled daily/poller dispatch still goes straight to `asyncio.create_task` —
 the queue is the path for *requested* work.
 
-### 5.3 The HEIM dashboard (self-contained web UI) — ✅ read-only v1 shipped
+### 5.3 The HEIM dashboard (self-contained web UI) — ✅ v1 + the actions slice shipped
 
 Grafana stays for time-series exploration — but it is read-only over Loki and can't
 *act*. A proprietary dashboard is justified exactly where actions and rich per-entity
@@ -243,10 +243,21 @@ read-only half — Overview, Investigations (list + filters + the transcript det
 with the burn line), Incidents, Findings, Hosts, plus `/healthz`. `heim dashboard
 --host --port` (uvicorn) and an optional `dashboard` compose service on `:8300`;
 optional HTTP basic auth from `HEIM_DASHBOARD_TOKEN`; htmx used only for filter swaps
-and 5 s polling of running investigations. It opens **one SQLite reader** (WAL) and
-writes nothing — every action (approve, re-trigger, verdicts, recommendations) is
-deliberately deferred to the jobs queue in §5.2, §5.4 and §5.5; the pages reserve their
-spots (outcome line, verdict column). Also deferred: the Recommendations page, "load 50
+and 5 s polling of running investigations.
+
+**Shipped (v2 — the actions slice, UI spec §5):** six POST routes under
+`/actions/` — `investigate`, `retrigger`, `approval`, `verdict`, `mute`, `unmute` —
+each a real `<form method="post">` (303 back to the page) enhanced by htmx
+(`HX-Request` → just the affected panel, re-rendered with an inline feedback line).
+Queue visibility: a `QUEUED` KPI tile and ghost rows for queued jobs above the
+investigations table. The dashboard's **entire write surface** is the allow-list in
+`dashboard/app.py` (`_ACTION_HELPERS`): `enqueue_investigation`, `enqueue_retry`,
+`set_approval_decision`, `set_finding_verdict`, `mark_false_positive`,
+`suppress`/`unsuppress` and the incident status flip those last two own — the daemon
+stays the sole executor and the sole writer of the pipeline tables. Subjects travel as
+form fields, never as path segments (fingerprints carry `|` and `/`). Accepted risk,
+documented in the module: no CSRF token, on the strength of LAN-only + basic auth and
+same-origin forms. Still deferred: the Recommendations page, manual "resolve", "load 50
 more" pagination (lists cap at 200 rows), and the live Telegram-feed stream.
 
 ### 5.4 False-positive handling — ✅ implemented

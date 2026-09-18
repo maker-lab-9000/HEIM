@@ -360,10 +360,16 @@ def test_unreadable_store_says_what_to_check(tmp_path, monkeypatch):
 
 
 def test_weight_budget_and_no_cdn():
-    """The spec's quality floor: one hand-written CSS file under ~12 KB and a
-    vendored htmx — no runtime CDN reference anywhere in the templates."""
+    """The spec's quality floor: one hand-written CSS file and a vendored htmx —
+    no runtime CDN reference anywhere in the templates.
+
+    The budget was ~12 KB through v1; the actions slice (spec §5: button
+    language, feedback lines, ghost rows) deliberately grew it to 14 KB. It is
+    still one hand-written file with no build step, and still the only
+    stylesheet the pages load.
+    """
     static = Path(__file__).resolve().parent.parent / "src/heim/dashboard/static"
-    assert (static / "heim.css").stat().st_size <= 12_800
+    assert (static / "heim.css").stat().st_size <= 14_336
     assert (static / "htmx.min.js").stat().st_size > 10_000
     templates = (Path(__file__).resolve().parent.parent
                  / "src/heim/dashboard/templates")

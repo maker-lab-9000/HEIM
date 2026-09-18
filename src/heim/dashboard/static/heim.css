@@ -45,7 +45,9 @@ a:hover { text-decoration: underline; }
   color: var(--ink); font: 1.0625rem/1 var(--mono); letter-spacing: .12em;
 }
 .mark:hover { text-decoration: none; }
-.spark { color: var(--ember); width: 17px; height: 22px; flex: none; }
+.spark { color: var(--ember); width: 17px; height: 22px; flex: none; display: none; }
+.lockup { color: var(--ember); width: 128px; height: auto; flex: none; }
+.visually-hidden { position: absolute; left: -9999px; }
 .nav { list-style: none; margin: 0; padding: 0; flex: 1; }
 .nav a {
   display: flex; gap: 10px; align-items: center; padding: 7px 16px;
@@ -254,12 +256,33 @@ details > summary:hover { color: var(--ink); }
 .filters button:hover { border-color: var(--ember-dim); }
 .filters .clear { font: 0.8125rem/2.2 var(--mono); }
 
+/* actions (spec §5) — one quiet button style everywhere */
+
+.acts { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-top: 8px; }
+.vacts { margin-top: 4px; }
+form.act { display: inline-block; margin: 0; }
+.btn {
+  background: none; border: 1px solid var(--line); border-radius: 4px;
+  padding: 2px 8px; color: var(--ink-2); cursor: pointer;
+  font: 0.6875rem/1.6 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+}
+.btn:hover { border-color: var(--ember); color: var(--ember); }
+.btn.ember { border-color: var(--ember-dim); color: var(--ember); }
+.btn[disabled] { color: var(--ink-3); cursor: not-allowed; }
+.btn[disabled]:hover { border-color: var(--line); color: var(--ink-3); }
+.flash { flex-basis: 100%; margin: 2px 0 0; font-size: 0.6875rem; color: var(--ink-2); }
+.flash.err { color: var(--serious); }
+.ghost td { color: var(--ink-3); }
+.ghost:hover { background: none; }
+
 /* responsive */
 
 @media (max-width: 900px) {
   .rail { width: 56px; }
   .mark { justify-content: center; padding: 4px 0 16px; }
   .mark .word, .nav .lbl, .daemon .lbl { position: absolute; left: -9999px; }
+  .lockup { display: none; }
+  .spark { display: block; }
   .nav a { justify-content: center; padding: 10px 0; }
   .daemon { justify-content: center; padding: 12px 0 0; }
   .topbar, main { margin-left: 56px; }

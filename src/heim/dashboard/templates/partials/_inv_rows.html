@@ -1,6 +1,20 @@
 {% import "partials/_macros.html" as m %}
 <tbody id="inv-rows"{% if live %} hx-get="/investigations/rows{{ query }}" hx-trigger="every 5s" hx-swap="outerHTML"{% endif %}>
-  {%- if rows %}
+  {#- queued jobs first: no investigation row exists yet, so they are ghosts -#}
+  {%- for g in ghosts %}
+  <tr class="ghost">
+    <td class="c-id mono ink3" title="job #{{ g.id }}">job #{{ g.id }}</td>
+    <td class="mono ink3"><span aria-hidden="true">◌</span> queued · waiting for daemon</td>
+    <td class="eyebrow ink3">{{ g.requested_by or DASH }}</td>
+    <td class="ink3">{{ g.host or DASH }}</td>
+    <td class="mono ink3" title="{{ g.fingerprint }}">{{ g.fingerprint|fp }}</td>
+    <td class="num mono ink3">{{ DASH }}</td>
+    <td class="num mono ink3">{{ DASH }}</td>
+    <td class="num mono ink3">{{ DASH }}</td>
+    <td class="ink3">{% if g.retry_of %}<a class="mono" href="/investigations/{{ g.retry_of }}">re-run of #{{ g.retry_of }}</a>
+      {% else %}{{ m.when(g.created_at) }}{% endif %}</td>
+  </tr>
+  {%- endfor %}
   {%- for r in rows %}
   <tr>
     <td class="c-id mono"><a href="/investigations/{{ r.id }}">#{{ r.id }}</a></td>
@@ -14,7 +28,7 @@
     <td>{{ m.when(r.started_at) }}</td>
   </tr>
   {%- endfor %}
-  {%- else %}
+  {%- if not rows and not ghosts %}
   <tr><td colspan="9"><p class="empty">No investigations match these filters. Clear them to see everything the store has.</p></td></tr>
   {%- endif %}
 </tbody>

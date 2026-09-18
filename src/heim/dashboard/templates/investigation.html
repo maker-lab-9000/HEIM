@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% import "partials/_macros.html" as m %}
+{% import "partials/_macros.html" as m with context %}
 {% block content %}
 
 <nav class="crumb" aria-label="Breadcrumb">
@@ -16,7 +16,12 @@
     <dt class="eyebrow">duration</dt><dd class="mono">{% if inv.status == 'running' %}{{ elapsed(inv.started_at) }} so far{% else %}{{ duration(inv.started_at, inv.finished_at) }}{% endif %}</dd>
     <dt class="eyebrow">started</dt><dd>{{ m.when(inv.started_at) }}</dd>
     <dt class="eyebrow">fingerprint</dt><dd class="mono ink2">{{ inv.fingerprint or DASH }}</dd>
+    {%- if inv.retry_of %}
+    <dt class="eyebrow">lineage</dt>
+    <dd class="mono"><a href="/investigations/{{ inv.retry_of }}">re-run of #{{ inv.retry_of }}</a></dd>
+    {%- endif %}
   </dl>
+  {% include "partials/_inv_acts.html" %}
 </section>
 
 <section class="card">

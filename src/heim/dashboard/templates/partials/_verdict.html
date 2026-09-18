@@ -1,0 +1,14 @@
+{% import "partials/_macros.html" as m with context %}
+<div class="acts vacts">
+  {%- if f.verdict == 'confirmed' %}
+  <span class="verdict st-ok"><span class="dot" aria-hidden="true">✓</span>confirmed</span>
+  {%- elif f.verdict %}
+  <span class="verdict">{{ f.verdict|replace('_', ' ') }}</span>
+  {%- else %}
+  {{ m.act('/actions/verdict', '✓ CONFIRM', {'finding_id': f.id, 'verdict': 'confirmed'}) }}
+  {{ m.act('/actions/verdict', '✗ FALSE POSITIVE',
+           {'finding_id': f.id, 'verdict': 'false_positive'},
+           confirm='Mark this a false positive and mute its fingerprint?') }}
+  {%- endif %}
+  {% include "partials/_flash.html" %}
+</div>
