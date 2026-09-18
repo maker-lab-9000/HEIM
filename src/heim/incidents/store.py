@@ -271,8 +271,10 @@ class IncidentStore:
         cur = self._db.execute("SELECT * FROM incidents WHERE status = 'open' ORDER BY firstSeen")
         return [self._to_dict(r) for r in cur.fetchall()]
 
-    def all_rows(self, limit: int = 200) -> list[dict]:
-        cur = self._db.execute("SELECT * FROM incidents ORDER BY lastSeen DESC LIMIT ?", (limit,))
+    def all_rows(self, limit: int = 200, offset: int = 0) -> list[dict]:
+        cur = self._db.execute(
+            "SELECT * FROM incidents ORDER BY lastSeen DESC LIMIT ? OFFSET ?",
+            (limit, offset))
         return [self._to_dict(r) for r in cur.fetchall()]
 
     def upsert(self, rows: list[dict]) -> None:
@@ -366,14 +368,15 @@ class IncidentStore:
         self._db.commit()
         return int(cur.lastrowid or 0)
 
-    def investigations(self, limit: int = 50, status: str | None = None) -> list[dict]:
+    def investigations(self, limit: int = 50, status: str | None = None,
+                       offset: int = 0) -> list[dict]:
         sql = "SELECT * FROM investigations"
         params: list = []
         if status:
             sql += " WHERE status = ?"
             params.append(status)
-        sql += " ORDER BY id DESC LIMIT ?"
-        params.append(limit)
+        sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params += [limit, offset]
         return [dict(r) for r in self._db.execute(sql, params).fetchall()]
 
     def investigation(self, investigation_id: int) -> dict | None:
@@ -522,14 +525,15 @@ class IncidentStore:
         self._db.commit()
         return int(cur.lastrowid or 0)
 
-    def runs(self, limit: int = 50, kind: str | None = None) -> list[dict]:
+    def runs(self, limit: int = 50, kind: str | None = None,
+             offset: int = 0) -> list[dict]:
         sql = "SELECT * FROM runs"
         params: list = []
         if kind:
             sql += " WHERE kind = ?"
             params.append(kind)
-        sql += " ORDER BY id DESC LIMIT ?"
-        params.append(limit)
+        sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params += [limit, offset]
         return [dict(r) for r in self._db.execute(sql, params).fetchall()]
 
     def insert_findings(
@@ -579,8 +583,9 @@ class IncidentStore:
             out.setdefault(row["run_id"], {})[str(row["severity"] or "")] = row["n"]
         return out
 
-    def recent_findings(self, limit: int = 100) -> list[dict]:
-        cur = self._db.execute("SELECT * FROM findings ORDER BY id DESC LIMIT ?", (limit,))
+    def recent_findings(self, limit: int = 100, offset: int = 0) -> list[dict]:
+        cur = self._db.execute(
+            "SELECT * FROM findings ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
         return [dict(r) for r in cur.fetchall()]
 
     def finding(self, finding_id: int) -> dict | None:
