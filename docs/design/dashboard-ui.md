@@ -317,16 +317,18 @@ paginated (few, always shown).
 ## 10. Light mode
 
 The token system was built for two modes; light mode is an override set, not a
-redesign. Direction: **the same hearth by daylight** — warm paper, the same warm-ink
-logic inverted, and the SAME identity colors.
+redesign. Direction: **morning ash** — the hearth gone cold by daylight: cool-neutral
+ash surfaces and neutral ink, with ember as the only warmth left glowing, and the SAME
+identity colors. (An earlier warm-cream direction was rejected by the operator as too
+close to the common cream/terracotta default — this direction is the ruling.)
 
 ```css
 [data-theme="light"] {
-  --bg: #F8F4EA;      /* warm paper — matches the rustic logo plaque */
-  --panel: #FFFDF7;   --raised: #F1EBDD;   --line: #E3DCCB;
-  --ink: #2A2620;     --ink-2: #6E6455;    --ink-3: #9A8F7C;
-  --ember: #B05E1A;   /* validated 4.3:1 on the paper; #E88C3A fails at 2.3:1 */
-  --ember-dim: #E8CDAA;
+  --bg: #ECEEED;      /* morning ash — cool neutral, deliberately NOT cream */
+  --panel: #FAFBFA;   --raised: #E4E6E4;   --line: #D6D9D6;
+  --ink: #22252B;     --ink-2: #5B6169;    --ink-3: #8B9199;
+  --ember: #B05E1A;   /* validated 4.0–4.5:1 on the ash surfaces */
+  --ember-dim: #E8D0B4;
   /* Tool/host categorical slots and the fixed status palette are
      MODE-INVARIANT: the five identity hexes pass the validator on BOTH
      surfaces (the light-mode CVD floor-band pair is mitigated by the
@@ -350,12 +352,11 @@ logic inverted, and the SAME identity colors.
   own colors, not theme tokens). Terminals do not have a light mode; the agent's shell
   keeps its native habitat as dark islands on the paper. The burn line keeps the original
   ember #E88C3A inside those dark blocks.
-- Design rationale on the palette (recorded so nobody "fixes" it later): warm paper +
-  ember superficially resembles the common cream/terracotta default, but here both are
-  derived — the paper is the rustic logo plaque's own #F8F4EA, ember is the established
-  agent-activity semantic, and the identity stays mono-first ops density rather than the
-  default's serif-editorial look. The theme toggle uses the lockup's own vocabulary:
-  ☀ light · ☾ dark · ◐ auto.
+- Design rationale (recorded so nobody "fixes" it later): the cool ash ground makes
+  ember read as the sole warm element — the residual glow in a cold hearth — which keeps
+  the accent's agent-activity meaning stronger in light mode than any warm ground could.
+  The dark terminal islands complete it: charcoal windows on an ash morning desk. The
+  theme toggle uses the lockup's own vocabulary: ☀ light · ☾ dark · ◐ auto.
 
 ## 11. Still out of scope
 
