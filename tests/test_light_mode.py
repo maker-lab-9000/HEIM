@@ -1,6 +1,7 @@
 """Light mode (spec §10): the `heim_theme` cookie, the no-JS toggle form, and
 the "morning ash" token override set — including the deliberate exception that
 keeps the terminal surfaces dark."""
+import html as html_mod
 import re
 import shutil
 from pathlib import Path
@@ -80,15 +81,14 @@ def test_redirect_drops_only_the_theme_param_and_cookie_is_durable(client):
 
 
 def test_toggle_form_cycles_auto_light_dark_and_works_without_js(client):
-    def toggle(theme: str | None) -> tuple[str, str]:
+    def toggle(theme: str | None, path: str = "/") -> tuple[str, str]:
         cookies = {"heim_theme": theme} if theme else {}
-        html = client.get("/", cookies=cookies).text
-        form = re.search(r'<form class="themetoggle" method="get">.*?</form>',
-                         html, re.S).group(0)
-        # a plain GET form with a single submit button: no hx-* attribute, so
-        # the switch is a normal page load with JS off
-        assert "hx-" not in form
-        return re.search(r'value="(\w+)"', form).group(1), form
+        html = client.get(path, cookies=cookies).text
+        link = re.search(r'<a class="btn themetoggle".*?</a>', html, re.S).group(0)
+        # a plain GET link: no hx-* attribute, so the switch is a normal page
+        # load with JS off
+        assert "hx-" not in link
+        return re.search(r'theme=(\w+)', link).group(1), link
 
     assert toggle(None)[0] == "light"          # auto → light
     assert toggle("light")[0] == "dark"        # light → dark
@@ -101,6 +101,25 @@ def test_toggle_form_cycles_auto_light_dark_and_works_without_js(client):
     # announced, so the button says what it does out loud
     assert 'aria-label="theme: light — switch to dark"' in toggle("light")[1]
     assert 'aria-label="theme: auto — switch to light"' in toggle(None)[1]
+
+
+def test_toggle_preserves_filters_and_paging(client):
+    """Switching the theme must not throw the operator's filters and offset
+    away: the toggle target is this URL with `theme` merged in, so the 303
+    (which drops only `theme`) lands back on the same filtered page."""
+    html = client.get("/incidents?status=open&offset=50").text
+    raw = re.search(r'<a class="btn themetoggle" href="([^"]+)"', html).group(1)
+    # the separators are escaped in the attribute, exactly like the paging links
+    assert "&amp;" in raw
+    href = html_mod.unescape(raw)
+    assert href.startswith("/incidents?")
+    params = sorted(href.split("?", 1)[1].split("&"))
+    assert params == ["offset=50", "status=open", "theme=light"]
+    # and the round trip really does come back to the filtered page
+    r = client.get(href, follow_redirects=False)
+    assert r.status_code == 303
+    assert sorted(r.headers["location"].removeprefix("/incidents?").split("&")) \
+        == ["offset=50", "status=open"]
 
 
 def test_bad_theme_value_still_renders_the_page_with_the_cookie_theme(client):

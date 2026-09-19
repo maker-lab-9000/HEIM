@@ -170,13 +170,44 @@ def test_bar_chart_is_reusable_for_a_second_series():
     assert chart["bars"][0]["h"] == chart["span"]
 
 
+def test_both_day_charts_get_the_same_now_window(seeded_client, monkeypatch):
+    """The overview's tokens-per-day (§11) and /costs' spend-per-day (§13)
+    share one macro and one spec section, so they must not disagree about
+    which day is "today". Passing no ``now_iso`` would let the store fall back
+    to this machine's UTC date, which between ~22:00 UTC and midnight is a
+    different calendar day than the configured timezone's — two charts, two
+    14-day windows. Both callers must hand the store a configured-tz now.
+    """
+    seen: dict[str, str | None] = {}
+
+    for name in ("daily_token_totals", "cost_by_day"):
+        real = getattr(IncidentStore, name)
+
+        def spy(self, days=14, now_iso=None, *, _real=real, _name=name):
+            seen[_name] = now_iso
+            return _real(self, days, now_iso)
+
+        monkeypatch.setattr(IncidentStore, name, spy)
+
+    assert seeded_client.get("/").status_code == 200
+    assert seeded_client.get("/costs").status_code == 200
+    assert set(seen) == {"daily_token_totals", "cost_by_day"}
+    assert seen["daily_token_totals"] is not None, \
+        "the overview chart fell back to the machine clock"
+    tok = fmt.parse_dt(seen["daily_token_totals"])
+    cost = fmt.parse_dt(seen["cost_by_day"])
+    # same calendar day, and the same timezone behind it — the window the
+    # store builds is a function of exactly those two
+    assert tok.utcoffset() == cost.utcoffset()
+    assert tok.date() == cost.date()
+
+
 # ------------------------------------------------------------------ render
 
 def test_overview_renders_token_chart(seeded_client):
     html = seeded_client.get("/").text
     assert "token usage" in html and "<svg" in html and 'class="tchart"' in html
     assert html.count("<rect") >= 14                      # one bar per day incl. zero stubs
-    assert 'title>' in html or "<title>" in html          # per-bar tooltips
     assert "14d:" in html and "busiest" in html
 
 
@@ -184,7 +215,7 @@ def test_token_chart_marks_one_value_label_and_tooltips_every_day(seeded_client)
     html = seeded_client.get("/").text
     assert html.count('class="val"') == 1                 # selective labels
     assert html.count("</title>") >= 14                   # incl. the zero days
-    assert 'fill="var(--ember)"' in html or "tchart" in html
+    assert 'fill="var(--ember)"' in html                  # bars read the token
     # the busiest day is yesterday's investigation + run: 126.3k tokens
     assert fmt.tokens(120_000 + 4_000 + 2_000 + 300) in html
 

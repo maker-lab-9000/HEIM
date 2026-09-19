@@ -250,7 +250,24 @@ def test_recommendations_renders_a_missing_timestamp_as_a_dash(seeded_client):
     assert "Replace the drive" in html
     row = html.split("Replace the drive", 1)[1].split("</tr>", 1)[0]
     assert "—" in row
-    assert ">—</time>" in row and 'datetime="—"' in row
+    # the dash is the element's TEXT; `datetime="—"` would be invalid HTML, so
+    # the attributes are dropped instead of carrying the placeholder
+    assert '<time class="mono">—</time>' in row
+    assert "datetime=" not in row and "title=" not in row
+
+
+def test_no_page_emits_a_dash_as_a_datetime_attribute(seeded_client):
+    """`datetime=` is a machine-readable timestamp — a dash parses as nothing
+    and makes the attribute invalid wherever a nullable column is empty. The
+    macro is shared by eleven call sites, so this sweeps the pages: none may
+    carry the placeholder, and real timestamps must still be marked up."""
+    stamped = False
+    for path in ("/", "/incidents", "/investigations", "/findings", "/hosts",
+                 "/recommendations", "/costs", "/investigations/1"):
+        html = seeded_client.get(path).text
+        assert 'datetime="—"' not in html, path
+        stamped = stamped or re.search(r'datetime="20\d\d-', html) is not None
+    assert stamped, "no page marked up a real timestamp at all"
 
 
 def test_recommendations_timestamps_are_time_elements(seeded_client):

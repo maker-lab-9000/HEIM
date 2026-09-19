@@ -24,8 +24,13 @@
 <span class="sev {{ p.cls }}"><span class="dot" aria-hidden="true">{{ p.icon }}</span>{{ p.label }}</span>
 {%- endmacro %}
 
+{#- a timestamp. When the value is missing or unparseable `iso` gives the dash,
+    which is not a valid `datetime=` — so the attributes (and the tooltip) are
+    dropped and only the dash text remains. -#}
 {% macro when(value) -%}
-<time class="mono" datetime="{{ value|iso }}" title="{{ value|iso }}">{{ value|rel }}</time>
+{%- set ts = value|iso -%}
+{%- if ts != DASH %}<time class="mono" datetime="{{ ts }}" title="{{ ts }}">{{ value|rel }}</time>
+{%- else %}<time class="mono">{{ value|rel }}</time>{% endif %}
 {%- endmacro %}
 
 {% macro empty(text) -%}

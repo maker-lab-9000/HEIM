@@ -39,12 +39,15 @@
   <div class="tmeta">
     <span class="chip">{{ env_chip }}</span>
     <span class="mono clock">{{ clock }}</span>
-    {#- no-JS theme switch: a GET form the server turns into a cookie + 303 (§10) -#}
-    <form class="themetoggle" method="get">
-      <button class="btn" name="theme" value="{{ next_theme }}"
-              aria-label="theme: {{ theme }} — switch to {{ next_theme }}"
-              title="theme: {{ theme }} — click for {{ next_theme }}">{{ theme_icon }}</button>
-    </form>
+    {#- no-JS theme switch: a plain GET link the server turns into a cookie +
+        303 (§10). A link rather than a bare form so the rest of the query
+        string — filters, paging — survives the switch; `qs_with` merges
+        `theme` into whatever is already in the URL. The error shell renders
+        without it, hence the fallback. -#}
+    {%- set theme_qs = qs_with(theme=next_theme) if qs_with else 'theme=' ~ next_theme %}
+    <a class="btn themetoggle" href="{{ request.url.path }}?{{ theme_qs }}"
+       aria-label="theme: {{ theme }} — switch to {{ next_theme }}"
+       title="theme: {{ theme }} — click for {{ next_theme }}">{{ theme_icon }}</a>
   </div>
 </header>
 

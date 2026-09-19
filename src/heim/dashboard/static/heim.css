@@ -407,9 +407,9 @@ a.btn:hover { text-decoration: none; }
 .qlink { color: var(--ember); text-decoration: none; }
 .qlink:hover { text-decoration: underline; }
 
-/* topbar theme toggle (§10): a one-button form, so it works with no JS */
-.themetoggle { margin: 0; display: flex; }
-.themetoggle .btn { font-size: 0.8125rem; letter-spacing: 0; padding: 0 6px; }
+/* topbar theme toggle (§10): a plain GET link, so it works with no JS and
+   carries the current query string (filters, paging) through the switch */
+.themetoggle { font-size: 0.8125rem; letter-spacing: 0; padding: 0 6px; }
 
 /* ------------------------------------------------------------- light mode
    §10 "morning ash": an override set, not a redesign. Cool-neutral ash

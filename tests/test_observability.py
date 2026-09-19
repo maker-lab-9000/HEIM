@@ -751,12 +751,20 @@ def test_settings_defaults_are_the_safe_ones(tmp_path, monkeypatch):
 
 
 def test_both_settings_yamls_document_the_new_knobs():
-    example = (ROOT / "config/settings.example.yaml").read_text()
-    live = (ROOT / "config/settings.yaml").read_text()
-    for text in (example, live):
+    texts = [(ROOT / "config/settings.example.yaml").read_text()]
+    # the live settings file is gitignored, so a fresh clone or CI checkout has
+    # only the example. Assert what is there; skip the rest rather than error.
+    live_path = ROOT / "config/settings.yaml"
+    if live_path.exists():
+        texts.append(live_path.read_text())
+    for text in texts:
         assert "\nmodel_prices:" in text
         assert "currency: USD" in text
         assert "store_transcripts: false" in text
+    if not live_path.exists():
+        pytest.skip(
+            "config/settings.yaml is gitignored; present only on a "
+            "configured deployment")
 
 
 def test_shipped_prices_are_real_sourced_and_dated():

@@ -588,8 +588,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         feedback = reader.read(lambda s: s.latest_tool_feedback())
         tool_usage = _tool_usage(reader.read(lambda s: s.tool_usage(limit=12)), feedback)
         # the weekly rhythm (spec §11): 14 zero-filled days, turned into bar
-        # geometry here so the template only places already-computed numbers
-        token_chart = fmt.bar_chart(reader.read(lambda s: s.daily_token_totals(14)))
+        # geometry here so the template only places already-computed numbers.
+        # The window is keyed on the configured timezone's now, exactly like
+        # /costs' by-day chart (§13) — the two share a macro and a spec
+        # section, so they must not disagree about which day is "today".
+        day_now = datetime.now(tz).isoformat()
+        token_chart = fmt.bar_chart(
+            reader.read(lambda s: s.daily_token_totals(14, day_now)))
         return page(
             request, "overview.html", page_title="overview", kpis=kpis,
             token_chart=token_chart,
