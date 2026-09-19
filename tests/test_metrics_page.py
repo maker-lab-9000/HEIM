@@ -160,13 +160,17 @@ def test_na_row_is_muted_and_dashed(client):
     assert '<td class="num mono c-delta">—</td>' in t   # changePct is null for a state
 
 
-def test_header_counts_and_overall_pill(client):
-    t = client.get("/metrics").text
-    assert "1 crit · 1 warn · 1 no-data" in t
-    assert "3-day window · as of" in t
-    assert ('<span class="pill st-crit"><span class="dot" aria-hidden="true">✕'
-            '</span>critical</span>') in t
-    assert 'class="btn" type="submit">refresh<' in t
+def test_header_is_freshness_and_refresh_only(client):
+    """The counts line, the overall pill and the window text were removed: the
+    offenders table below names every flagged row, so they only restated it.
+    Freshness is the one fact that table cannot carry."""
+    head = _header(client.get("/metrics").text)
+    assert "as of" in head
+    assert 'class="btn" type="submit">refresh<' in head
+    assert "no-data" not in head          # counts line gone
+    assert "3-day window" not in head     # window text gone
+    assert "pill st-crit" not in head.split("<table")[0]   # overall pill gone
+    assert "pill st-crit" in head          # ...but a crit ROW still has its pill
 
 
 # ------------------------------------------------- the header names offenders
@@ -194,7 +198,7 @@ def test_header_names_the_offending_host_and_resource(client):
 def test_header_table_is_absent_when_nothing_is_flagged(client, prom):
     prom.ok_only = True
     t = client.get("/metrics?refresh=1").text
-    assert "0 crit · 0 warn" in t
+    assert "as of" in _header(t)                   # freshness is all the header keeps
     assert "Swap used" in t                        # the ok row still renders
     assert "c-mname" in _tables(t)                 # ...in the tables below
     assert "c-mname" not in _header(t)             # but the header names nobody
@@ -244,8 +248,9 @@ def test_category_filter_narrows(client):
 def test_filters_that_match_nothing_say_so(client):
     t = client.get("/metrics?host=homelab&category=Temperature").text
     assert "No metrics match these filters" in t
-    # the header describes the payload, not the filtered view — it stays
-    assert "1 crit · 1 warn · 1 no-data" in t
+    # the header describes the payload, not the filtered view — its offenders
+    # table still names the flagged rows even though none of them match here
+    assert "c-mname" in _header(t)
 
 
 # -------------------------------------------------------------------- cache
@@ -289,3 +294,31 @@ def test_nav_has_metrics_between_findings_and_hosts(client):
     t = client.get("/").text
     assert '<a href="/metrics"' in t
     assert t.index('href="/findings"') < t.index('href="/metrics"') < t.index('href="/hosts"')
+
+
+def test_header_offenders_are_sorted_by_status_then_by_the_biggest_mover():
+    """Severity order is stated by this table alone now that the counts line
+    is gone, so it is applied here rather than inherited from aggregate()."""
+    from heim.dashboard.app import _offenders
+    payload = {
+        "counts": {"crit": 2, "warn": 2},
+        "topAlerts": [                                   # deliberately unsorted
+            {"sev": "warn", "label": "Memory used", "changePct": 10.1},
+            {"sev": "crit", "label": "Drive temp", "changePct": 13.3},
+            {"sev": "warn", "label": "Guests not backed up", "changePct": 100.0},
+            {"sev": "crit", "label": "VM CPU", "changePct": 3091.7},
+        ],
+    }
+    assert [r["label"] for r in _offenders(payload)["rows"]] == [
+        "VM CPU", "Drive temp",                  # crit first, biggest mover first
+        "Guests not backed up", "Memory used",   # then warn, same rule
+    ]
+
+
+def test_header_keeps_only_the_freshness_stamp(client):
+    """The offenders table names every flagged row, so the pill, the
+    crit/warn/no-data counts and the window text were removed as restatement."""
+    html = client.get("/metrics?refresh=1").text
+    head = html[html.index('class="mline"'):html.index("</section>")]
+    assert "as of" in head                       # the one thing the table cannot say
+    assert "no-data" not in head and "crit ·" not in head and "3-day window" not in head

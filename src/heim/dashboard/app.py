@@ -1441,13 +1441,22 @@ _OFFENDER_ROWS = 8
 
 
 def _offenders(payload: dict) -> dict:
-    """The crit/warn series the header names, worst first (spec Part B).
+    """The crit/warn series the header names, worst status first (spec Part B).
 
-    ``topAlerts`` is already the payload's crit-before-warn, biggest-mover-first
-    list (``aggregate`` sorts it), so this only caps it and counts the
-    remainder — the header must never disagree with the numbers beside it.
+    ``topAlerts`` already arrives crit-before-warn, biggest-mover-first, but the
+    ordering is re-applied here rather than inherited: this table is the only
+    place the page states severity order now that the counts line is gone, and
+    it should not silently reorder if ``aggregate``'s sort ever changes.
+    Ties break on the larger move, then the metric label so the order is stable
+    between renders of identical data.
     """
-    alerts = list(payload.get("topAlerts") or [])
+    rank = {"crit": 0, "warn": 1, "na": 2, "ok": 3}
+    alerts = sorted(
+        payload.get("topAlerts") or [],
+        key=lambda a: (rank.get(a.get("sev") or a.get("flag"), 9),
+                       -abs(a.get("changePct") or 0),
+                       str(a.get("label") or "")),
+    )
     counts = payload.get("counts") or {}
     total = int(counts.get("crit") or 0) + int(counts.get("warn") or 0)
     return {"rows": alerts[:_OFFENDER_ROWS],

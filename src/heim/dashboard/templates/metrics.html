@@ -6,9 +6,11 @@
     says how old the numbers are and offers the refetch (spec §6). -#}
 <section class="card mhdr">
   <p class="mline">
-    {%- if metrics.has_data %}{{ m.pill(metrics.overall) }}
-    <span class="mono counts">{{ metrics.counts.crit }} crit · {{ metrics.counts.warn }} warn · {{ metrics.counts.na }} no-data</span>
-    <span class="mono ink3">3-day window · as of {{ metrics.as_of }}{% if metrics.cached %} ({{ metrics.cached }}){% endif %}</span>
+    {#- the offenders table below names every crit/warn row, so a pill and a
+        count of them would only restate it; freshness is the one thing the
+        table cannot say, so that is all this line keeps. -#}
+    {%- if metrics.has_data %}
+    <span class="mono ink3">as of {{ metrics.as_of }}{% if metrics.cached %} ({{ metrics.cached }}){% endif %}</span>
     {%- endif %}
     <form class="mref" method="get" action="/metrics">
       {%- if filters.host %}<input type="hidden" name="host" value="{{ filters.host }}">{% endif %}
@@ -17,9 +19,10 @@
       <button class="btn" type="submit">refresh</button>
     </form>
   </p>
-  {#- the counts above say how many are crit/warn; this says WHICH host and
-      which resource, worst first. Only rendered when there is something to
-      name. Column classes are the metrics tables' own — no new CSS. -#}
+  {#- says WHICH host and which resource is flagged, worst status first
+      (crit, then warn), and within a status the biggest mover first. Only
+      rendered when there is something to name. Column classes are the
+      metrics tables' own — no new CSS. -#}
   {%- if metrics.offenders.rows %}
   <table class="tbl dense">
     <thead><tr>
