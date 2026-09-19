@@ -211,6 +211,10 @@ heim dashboard                      # http://localhost:8300
 docker compose up -d dashboard      # or as the optional compose service
 ```
 
+The containers create `./data` on first run and take ownership of it (they start as
+root only long enough to fix the bind mount's permissions, then drop to an
+unprivileged user) — no manual `mkdir`/`chown` needed on a fresh host.
+
 It opens the SQLite store over WAL and writes **action rows only** (jobs, approval
 decisions, verdicts, suppressions) — the daemon stays the sole executor and the sole
 writer of the pipeline tables. It is

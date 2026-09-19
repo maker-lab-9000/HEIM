@@ -20,7 +20,9 @@ ENV HEIM_CONFIG=/app/config \
 RUN mkdir -p /data && chown heim:heim /data
 VOLUME /data
 WORKDIR /data
-USER heim
 
-ENTRYPOINT ["heim"]
+# Runs as root only to make a bind-mounted /data writable, then drops to `heim`
+# via setpriv (see the script's comment). The container process is never root.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["daemon"]
