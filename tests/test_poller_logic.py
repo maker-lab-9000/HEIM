@@ -177,21 +177,56 @@ def test_n8n_net_spike_maps_to_ssh_host_with_fixed_name() -> None:
 
 
 def test_pve_id_label_falls_back_to_hypervisor_host() -> None:
+    """A PVE object with no usable ``instance`` still belongs to the hypervisor.
+
+    That fallback is the ONE call-site adaptation in ``_identity_for``: an
+    alert need not carry an instance label the way a series does. Everything
+    else about a ``pve_`` fingerprint now comes from the shared
+    ``series_identity`` helper, so the poller names it exactly as the daily
+    and threshold paths do.
+    """
     d = decide(
-        resp(
-            alert(
-                "pve_pool_used",
-                instance="192.168.178.241:9221",  # exporter runs elsewhere
-                labels={"id": "qemu/101"},
-            )
-        ),
+        resp(alert("pve_pool_used", instance="",
+                   labels={"id": "storage/local-lvm"})),
         [],
     )
     row = d.rows_to_upsert[0]
-    assert row["fingerprint"] == "homelab|pve_pool_used|qemu/101"
     assert row["host"] == "homelab"
+    # the storage/ prefix is stripped — aggregate()'s convention, not the raw id
+    assert row["fingerprint"] == "homelab|pve_pool_used|local-lvm"
     # disk category on the hypervisor -> investigable
     assert len(d.dispatches) == 1
+
+
+def test_pve_object_resolves_its_host_from_the_instance_label() -> None:
+    """With an instance label the shared helper decides — same answer here."""
+    d = decide(
+        resp(alert("pve_pool_used", instance="192.168.178.2:9221",
+                   labels={"id": "storage/local-lvm"})),
+        [],
+    )
+    row = d.rows_to_upsert[0]
+    assert row["host"] == "homelab"
+    assert row["fingerprint"] == "homelab|pve_pool_used|local-lvm"
+
+
+def test_a_pve_guest_alert_is_attributed_to_the_guest() -> None:
+    """``qemu/``/``lxc/`` series belong to the guest, not to the hypervisor.
+
+    This is ``series_identity``'s guest override, and it is why the poller
+    now takes a ``guest_names`` map: without it the id stands in for the name,
+    which is still identical across all three paths, just less readable.
+    """
+    firing = resp(alert("pve_vm_up", instance="192.168.178.2:9221",
+                        labels={"id": "qemu/101"}))
+
+    d = decide(firing, [])
+    assert d.rows_to_upsert[0]["fingerprint"] == "qemu/101|pve_vm_up|"
+
+    named = diff_and_decide(firing, [], NOW, ROUTING, HOST_MAP,
+                            guest_names={"qemu/101": "home-assistant"})
+    assert named.rows_to_upsert[0]["fingerprint"] == "home-assistant|pve_vm_up|"
+    assert named.rows_to_upsert[0]["host"] == "home-assistant"
 
 
 def test_fs_used_fingerprint_uses_device_and_mountpoint() -> None:
