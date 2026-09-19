@@ -161,6 +161,10 @@ then the outcome line ("✓ Resolved by operator · 21:58" /
 **Incidents** — store table: severity pill, status (open/clearing/resolved + 🔒 when
 investigated-locked), host, metric, fingerprint, seen ×N, missed, first/last seen
 (mono). Row expands (details element) to description + linked investigations.
+`seen ×N` counts *sightings by the path that owns the row*, and those cadences differ:
+a `[metric] ` (threshold-detected) incident is seen once per poll (~288/day), an
+`[alert] ` one only on state changes, and a daily-born one once per run (2/day) — so
+compare the column within an ownership prefix, never across them.
 
 **Findings** — history grouped by run (run header: `daily · 2026-09-18 07:00 ·
 claude-opus-4-6 · overall WARNING`, mono). Each finding: severity icon + host +

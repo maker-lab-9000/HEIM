@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from heim.config import load_config
+from heim.incidents.poller_logic import diff_and_decide
 from heim.incidents.reconcile import fingerprint_for
 from heim.incidents.store import IncidentStore
 from heim.incidents.types import HostRouting
@@ -293,6 +294,127 @@ def _range(qdef: QueryDef, metric: dict, values: list[float]) -> dict:
     }
 
 
+#: The three-way parity cases. Every qid here exists in BOTH
+#: ``config/queries/daily.yaml`` and ``prometheus/alerts.yml``, so all three
+#: paths can genuinely see the same underlying event and MUST name it
+#: identically. The label sets are the ones the shipped PromQL produces.
+NODE_INSTANCE = "10.0.0.10:9100"
+HV_INSTANCE = "10.0.0.2:9221"
+
+PARITY_CASES = {
+    # the node/ id shape — a Proxmox host outage, the worst event watched
+    "pve_node_up": {
+        "qdef": QueryDef(qid="pve_node_up", category="Proxmox",
+                         label="PVE node status", unit="online", dir="one",
+                         warn=1, crit=1, promql='pve_up{id="node/homelab"}'),
+        "labels": {"instance": HV_INSTANCE, "id": "node/homelab"},
+        "value": 0.0,
+        "finding_metric": "PVE node status",
+        "expected": "homelab|pve_node_up|",
+    },
+    # the storage/ id shape
+    "pve_pool_used": {
+        "qdef": QueryDef(qid="pve_pool_used", category="Proxmox",
+                         label="Pool used", unit="%", dir="high", warn=80,
+                         crit=90, promql="100 * pve_disk_usage_bytes"),
+        "labels": {"instance": HV_INSTANCE, "id": "storage/local-lvm"},
+        "value": 97.0,
+        "finding_metric": "Pool used local-lvm",
+        "expected": "homelab|pve_pool_used|local-lvm",
+    },
+    # the guest qemu/ id shape, with the guest map resolving the name
+    "pve_vm_up": {
+        "qdef": QueryDef(qid="pve_vm_up", category="Proxmox", label="VM status",
+                         unit="state", dir="vmup", warn=0, crit=0,
+                         promql='pve_up{id=~"qemu/.*"}'),
+        "labels": {"instance": HV_INSTANCE, "id": "qemu/100"},
+        "value": 0.0,
+        "finding_metric": "VM status",
+        "expected": "ubuntu-server|pve_vm_up|",
+    },
+    # a non-pve series: the device + mountpoint name shape
+    "fs_used": {
+        "qdef": QueryDef(qid="fs_used", category="Disk", label="Filesystem used",
+                         unit="%", dir="high", warn=80, crit=90,
+                         promql="100 * (1 - node_filesystem_avail_bytes)"),
+        "labels": {"instance": NODE_INSTANCE, "device": "/dev/sda2",
+                   "mountpoint": "/"},
+        "value": 94.0,
+        "finding_metric": "Filesystem used",
+        "expected": "ubuntu-server|fs_used|/dev/sda2 /",
+    },
+    # a non-pve series: the bare device name shape
+    "smart_status": {
+        "qdef": QueryDef(qid="smart_status", category="Disk Health",
+                         label="SMART status", unit="", dir="one", warn=1,
+                         crit=1, promql="smartctl_device_smart_status"),
+        "labels": {"instance": NODE_INSTANCE, "device": "sdb"},
+        "value": 0.0,
+        "finding_metric": "SMART status",
+        "expected": "ubuntu-server|smart_status|sdb",
+    },
+}
+
+#: the guest map the PVE exporter publishes, shared by all three paths
+PARITY_GUESTS = [({"id": "qemu/100", "name": "ubuntu-server",
+                   "instance": HV_INSTANCE}, 1.0)]
+PARITY_HOSTMAP = {"10.0.0.10": "ubuntu-server", "10.0.0.2": "homelab",
+                  "10.0.0.3": "home-assistant"}
+
+
+def _alerts_response(qid: str, labels: dict) -> dict:
+    """What ``/api/v1/alerts`` returns while that rule is firing."""
+    return {"status": "success", "data": {"alerts": [{
+        "state": "firing",
+        "labels": {**labels, "alertname": "Firing", "qid": qid,
+                   "severity": "critical"},
+        "annotations": {"description": "it is on fire"},
+    }]}}
+
+
+@pytest.mark.parametrize("qid", sorted(PARITY_CASES))
+def test_all_three_paths_agree_on_the_fingerprint(qid):
+    """Daily reconcile, alert poller and threshold detection, side by side.
+
+    The plan requires byte-identical fingerprints across **all three** paths:
+    the same underlying problem must be ONE incident no matter which path sees
+    it first. Two identities means two incidents, each able to dispatch its own
+    agent and page the human — for ``pve_node_up`` that is a Proxmox host
+    outage investigated twice.
+    """
+    case = PARITY_CASES[qid]
+    qdef, labels = case["qdef"], case["labels"]
+
+    # --- 1. the daily path: query_range -> aggregate -> fingerprint_for
+    results = [_range(qdef, labels, [case["value"]] * 3),
+               _range(PVE_GUEST_INFO, PARITY_GUESTS[0][0], [1.0, 1.0, 1.0])]
+    payload = aggregate(results, instance_host_map=PARITY_HOSTMAP)["payload"]
+    payload_rows = [r for rows in payload["categories"].values() for r in rows]
+    daily_fp = fingerprint_for(
+        {"host": "", "metric": case["finding_metric"]}, payload_rows)
+
+    # --- 2. the alert poller: /api/v1/alerts -> diff_and_decide
+    dec = diff_and_decide(_alerts_response(qid, labels), [], NOW, ROUTING,
+                          PARITY_HOSTMAP, guest_names=_guest_map())
+    [alert_row] = dec.rows_to_upsert
+    poller_fp = alert_row["fingerprint"]
+
+    # --- 3. threshold detection: instant query -> build_samples
+    instant = [_instant(qdef, [(labels, case["value"])]),
+               _instant(PVE_GUEST_INFO, PARITY_GUESTS)]
+    [sample] = [s for s in build_samples(instant, PARITY_HOSTMAP)
+                if s["qid"] == qid]
+    threshold_fp = sample["fingerprint"]
+
+    assert daily_fp == case["expected"], "daily path"
+    assert poller_fp == case["expected"], "alert poller"
+    assert threshold_fp == case["expected"], "threshold detection"
+
+
+def _guest_map() -> dict[str, str]:
+    return {m["id"]: m["name"] for m, _ in PARITY_GUESTS}
+
+
 @pytest.mark.parametrize("named,host", [(True, "ubuntu-server"), (False, "qemu/100")])
 def test_threshold_and_daily_agree_on_the_fingerprint(named, host):
     """The test that stops the two paths double-investigating one problem.
@@ -398,6 +520,107 @@ async def test_the_poll_runs_both_halves_and_persists_the_streak(rt, monkeypatch
     [row] = rt.store.open_rows()
     assert row["description"].startswith(PREFIX) and row["severity"] == "critical"
     assert [r["kind"] for r in rt.store.runs()] == ["poll"]   # only the 2nd counted
+
+
+async def test_fetch_guest_names_asks_for_one_query_not_the_catalog(monkeypatch):
+    """It is handed the whole catalog but must query exactly one entry."""
+    asked: list = []
+
+    async def fake_instants(_url, qdefs):
+        asked.append([q.qid for q in qdefs])
+        return [_instant(PVE_GUEST_INFO, PARITY_GUESTS)]
+
+    monkeypatch.setattr(thresholds, "fetch_instants", fake_instants)
+    names = await thresholds.fetch_guest_names("http://prom", [PVE_VM_CPU,
+                                                               PVE_GUEST_INFO])
+    assert asked == [["pve_guest_info"]]
+    assert names == {"qemu/100": "ubuntu-server"}
+
+    # a catalog without the entry is not an error, just an empty map
+    monkeypatch.setattr(thresholds, "fetch_instants", fake_instants)
+    assert await thresholds.fetch_guest_names("http://prom", [PVE_VM_CPU]) == {}
+
+
+async def test_a_guest_alert_fetches_the_guest_map_exactly_once(rt, monkeypatch):
+    """The poller names a guest alert the way the metrics paths do.
+
+    That needs the ``pve_guest_info`` map, which the call site fetches — but
+    only when a firing alert is actually about a guest.
+    """
+    from heim.pipelines import poller
+
+    calls: list = []
+
+    async def fake_guest_names(_url, qdefs):
+        calls.append([q.qid for q in qdefs])
+        return {"qemu/100": "ubuntu-server"}
+
+    async def guest_alert(_url):
+        return _alerts_response("pve_vm_up", {"instance": HV_INSTANCE,
+                                              "id": "qemu/100"})
+
+    dispatched: list = []
+
+    async def fake_dispatch(rt_, items, *, concurrent, trigger="manual"):
+        dispatched.append([i["fingerprint"] for i in items])
+
+    rt.config.settings.threshold_detection = False
+    monkeypatch.setattr(poller, "_fetch_alerts", guest_alert)
+    monkeypatch.setattr(poller.thresholds, "fetch_guest_names", fake_guest_names)
+    monkeypatch.setattr(poller, "dispatch_all", fake_dispatch)
+
+    await poller.run_poll(rt, dispatch_concurrently=False)
+    assert len(calls) == 1 and "pve_guest_info" in calls[0]
+    assert dispatched == [["ubuntu-server|pve_vm_up|"]]
+    [row] = rt.store.open_rows()
+    assert row["fingerprint"] == "ubuntu-server|pve_vm_up|"
+
+
+async def test_a_poll_with_no_guest_alert_never_fetches_the_guest_map(rt, monkeypatch):
+    """The common poll must not pay for a query it has no use for."""
+    from heim.pipelines import poller
+
+    async def boom(_url, _qdefs):
+        raise AssertionError("must not be called")
+
+    async def host_alert(_url):
+        return _alerts_response("cpu_busy", {"instance": NODE_INSTANCE})
+
+    async def fake_dispatch(rt_, items, *, concurrent, trigger="manual"):
+        pass
+
+    rt.config.settings.threshold_detection = False
+    monkeypatch.setattr(poller, "_fetch_alerts", host_alert)
+    monkeypatch.setattr(poller.thresholds, "fetch_guest_names", boom)
+    monkeypatch.setattr(poller, "dispatch_all", fake_dispatch)
+
+    await poller.run_poll(rt, dispatch_concurrently=False)
+    assert [r["fingerprint"] for r in rt.store.open_rows()] == \
+        ["ubuntu-server|cpu_busy|"]
+
+
+async def test_a_failing_guest_map_degrades_to_the_raw_id(rt, monkeypatch):
+    """Best effort: a less readable identity, never a *different* one."""
+    from heim.pipelines import poller
+
+    async def broken(_url, _qdefs):
+        raise RuntimeError("pve exporter down")
+
+    async def guest_alert(_url):
+        return _alerts_response("pve_vm_up", {"instance": HV_INSTANCE,
+                                              "id": "qemu/100"})
+
+    async def fake_dispatch(rt_, items, *, concurrent, trigger="manual"):
+        pass
+
+    rt.config.settings.threshold_detection = False
+    monkeypatch.setattr(poller, "_fetch_alerts", guest_alert)
+    monkeypatch.setattr(poller.thresholds, "fetch_guest_names", broken)
+    monkeypatch.setattr(poller, "dispatch_all", fake_dispatch)
+
+    await poller.run_poll(rt, dispatch_concurrently=False)
+    assert [r["fingerprint"] for r in rt.store.open_rows()] == \
+        ["qemu/100|pve_vm_up|"]
 
 
 async def test_threshold_detection_off_skips_the_half(rt, monkeypatch):

@@ -132,6 +132,24 @@ async def fetch_instants(base_url: str, qdefs) -> list[dict]:
     return results
 
 
+#: The catalog entry that publishes the Proxmox guest ``id -> name`` map.
+GUEST_INFO_QID = "pve_guest_info"
+
+
+async def fetch_guest_names(base_url: str, qdefs) -> dict[str, str]:
+    """Just the guest map — one instant query, for callers that need only it.
+
+    The alert poller needs it to name a ``qemu/``/``lxc/`` alert the way the
+    metrics paths do, but it has no reason to fetch the other ~48 queries.
+    """
+    qdef = next((q for q in qdefs if q.qid == GUEST_INFO_QID), None)
+    if qdef is None:
+        return {}
+    results = await fetch_instants(base_url, [qdef])
+    return guest_name_map([s.get("metric")
+                           for s in _vector(results[0].get("data"))])
+
+
 def _vector(data: dict | None) -> list[dict]:
     """The ``result`` list of a successful instant query, else ``[]``."""
     if not isinstance(data, dict) or data.get("status") != "success":
@@ -164,7 +182,7 @@ def build_samples(results: list[dict],
     """
     guest_metrics: list[dict] = []
     for item in results:
-        if (item.get("query") or {}).get("qid") != "pve_guest_info":
+        if (item.get("query") or {}).get("qid") != GUEST_INFO_QID:
             continue
         guest_metrics += [s.get("metric") for s in _vector(item.get("data"))]
     guest_names = guest_name_map(guest_metrics)
@@ -174,7 +192,7 @@ def build_samples(results: list[dict],
     seen: dict[str, dict] = {}
     for item in results:
         mq = item.get("query") or {}
-        if mq.get("qid") == "pve_guest_info" or item.get("error") is not None:
+        if mq.get("qid") == GUEST_INFO_QID or item.get("error") is not None:
             continue
         for series in _vector(item.get("data")):
             cur = _value(series)
@@ -306,6 +324,12 @@ def decide(samples: list[dict], open_rows: list[dict], streaks: dict[str, dict],
         # it, never re-dispatch it; escalation is the one exception, exactly as
         # in the alert poller.
         prev_sev = norm_sev(prev.get("severity"))
+        # NOTE on `timesSeen` semantics: this path bumps it once per POLL
+        # (~288/day at the 5-minute cadence), whereas a daily-born incident is
+        # bumped once per RUN (2/day) and an [alert] one only on a state
+        # change. The incidents page renders all three in the same `seen ×N`
+        # column, so the number is only comparable within one ownership prefix
+        # — see docs/design/dashboard-ui.md §3, "Incidents".
         times = _int(prev.get("timesSeen")) + 1
         escalated = SEV_RANK[severity] > SEV_RANK[prev_sev]
         rows.append({

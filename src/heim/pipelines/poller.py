@@ -46,13 +46,49 @@ async def _fetch_alerts(base_url: str) -> dict:
         return {"status": "error", "error": str(exc)}
 
 
+def _has_guest_alert(resp: dict) -> bool:
+    """True when some firing alert is about a Proxmox guest (``qemu/``/``lxc/``).
+
+    The guest map is only needed to turn such an id into the guest's *name*,
+    so this keeps the extra query off every other poll — which is all of them,
+    almost always.
+    """
+    for a in ((resp.get("data") or {}).get("alerts") or []):
+        if not a or a.get("state") != "firing":
+            continue
+        mid = str((a.get("labels") or {}).get("id") or "")
+        if mid.startswith("qemu/") or mid.startswith("lxc/"):
+            return True
+    return False
+
+
+async def _guest_names(rt: Runtime, resp: dict) -> dict[str, str]:
+    """Proxmox guest ``id -> name``, fetched only when an alert needs it.
+
+    Best effort by design: an empty map degrades a guest alert's fingerprint
+    to the raw id, which is still what the daily and threshold paths would
+    produce from the same empty map — never a *different* identity, only a
+    less readable one.
+    """
+    if not _has_guest_alert(resp):
+        return {}
+    try:
+        qdefs = load_queries(rt.config.queries_path)
+        return await thresholds.fetch_guest_names(
+            rt.config.settings.prometheus.url, qdefs)
+    except Exception:
+        log.exception("fetching the Proxmox guest map failed — using raw ids")
+        return {}
+
+
 async def _run_alerts(rt: Runtime, run_at: str, *, dispatch_concurrently: bool) -> dict:
     """The alert half. Returns its counters (or ``{"aborted": ...}``)."""
     cfg = rt.config
     resp = await _fetch_alerts(cfg.settings.prometheus.url)
     open_rows = rt.store.open_rows()
     dec = diff_and_decide(resp, open_rows, rt.now_iso(), cfg.routing(),
-                          cfg.settings.instance_host_map)
+                          cfg.settings.instance_host_map,
+                          guest_names=await _guest_names(rt, resp))
 
     if dec.aborted:
         log.warning("poll aborted: %s (no writes, no resolves)", dec.aborted)

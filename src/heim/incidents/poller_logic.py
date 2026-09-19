@@ -36,6 +36,7 @@ Parameterization vs the JS (documented judgment calls):
 from __future__ import annotations
 
 from heim.incidents.types import HostRouting, PollerDecision
+from heim.metrics.aggregate import series_identity
 
 _CPU_QIDS = ("cpu_busy", "load_per_core", "cpu_psi", "procs_blocked")
 _MEMORY_QIDS = ("mem_used", "swap_used", "oom")
@@ -79,15 +80,18 @@ def _category_of_qid(qid: str) -> str:
 
 
 def _name_for(qid: str, labels: dict) -> str:
-    """Port of the JS ``nameFor`` — per-qid fingerprint name rules."""
+    """Port of the JS ``nameFor`` — per-qid fingerprint name rules.
+
+    ``pve_``-prefixed qids are NOT handled here: their identity comes from
+    :func:`~heim.metrics.aggregate.series_identity`, shared with the metrics
+    paths (see :func:`_identity_for` and the module docstring).
+    """
     if qid in ("fs_used", "inodes_used"):
         return (
             (labels.get("device") or "") + " " + (labels.get("mountpoint") or "")
         ).strip()
     if qid in ("drive_temp", "smart_status", "media_err", "sdb_crc", "net_err"):
         return labels.get("device") or ""
-    if qid.startswith("pve_"):
-        return labels.get("id") or ""
     if qid == "exporter_up":
         return labels.get("job") or ""
     if qid.startswith("container_"):
@@ -95,6 +99,34 @@ def _name_for(qid: str, labels: dict) -> str:
     if qid == "n8n_net_spike":
         return "n8n"
     return ""
+
+
+def _identity_for(qid: str, labels: dict, guest_names: dict[str, str],
+                  instance_host_map: dict[str, str],
+                  hypervisor_host: str) -> tuple[str, str]:
+    """``(host, name)`` for a ``pve_``-prefixed alert, the metrics way.
+
+    Delegates to :func:`heim.metrics.aggregate.series_identity` — the one
+    implementation shared by ``aggregate`` (daily) and ``pipelines.thresholds``
+    — so a PVE event carries the SAME ``host|qid|name`` fingerprint whichever
+    path notices it first. Before this, ``_name_for`` embedded the raw ``id``
+    verbatim (``node/homelab``, ``storage/local-lvm``, ``qemu/100``) while the
+    metrics paths blanked ``node/``/``cluster/`` ids, stripped the
+    ``storage/`` prefix and attributed a guest series to the guest itself, so a
+    Proxmox node outage opened TWO incidents under two identities.
+
+    The one adaptation is at this call site, where the shapes genuinely
+    differ: an *alert* need not carry a usable ``instance`` label, and the
+    poller's long-standing rule is that anything with a PVE ``id`` belongs to
+    the hypervisor. So an unresolvable host falls back to
+    ``routing.hypervisor_host`` instead of to ``series_identity``'s
+    ``"unknown"``.
+    """
+    identity = series_identity(labels, guest_names, instance_host_map)
+    if identity is None:  # the veth filter — unreachable for a pve_ id
+        return hypervisor_host, ""
+    host, name = identity
+    return (host if host and host != "unknown" else hypervisor_host), name
 
 
 def _investigable(host: str, category: str, routing: HostRouting) -> bool:
@@ -127,6 +159,7 @@ def diff_and_decide(
     now_iso: str,
     routing: HostRouting,
     instance_host_map: dict[str, str],
+    guest_names: dict[str, str] | None = None,
 ) -> PollerDecision:
     """Diff firing alerts against open incident rows and decide on writes.
 
@@ -139,6 +172,11 @@ def diff_and_decide(
         routing: host investigability routing (SSH hosts, hypervisor).
         instance_host_map: instance-label address prefix -> host name,
             matched in insertion order (replaces the JS hardcoded HOSTMAP).
+        guest_names: Proxmox guest ``id -> name`` (from ``pve_guest_info``),
+            so a ``qemu/``/``lxc/`` alert is attributed to the guest by the
+            same name the metrics paths use. Empty/omitted degrades to the
+            raw id, which is still identical across all three paths — just
+            less readable.
     """
     if str(alerts_resp.get("status")) != "success":
         # Prometheus unreachable or errored — do NOTHING (especially no
@@ -170,20 +208,21 @@ def diff_and_decide(
         labels = a.get("labels") or {}
         annotations = a.get("annotations") or {}
         qid = str(labels.get("qid") or "unknown")
-        # all containers live on the SSH host; PVE-exporter metrics (id
-        # label) belong to the hypervisor
+        # all containers live on the SSH host; PVE-exporter alerts (pve_ qids)
+        # get their host AND name from the shared metrics identity helper, so
+        # they fingerprint exactly as the daily and threshold paths do
         if qid.startswith("container_") or qid == "n8n_net_spike":
-            host = container_host
-        elif labels.get("id"):
-            host = hypervisor_host
+            host, nm = container_host, _name_for(qid, labels)
+        elif qid.startswith("pve_"):
+            host, nm = _identity_for(qid, labels, guest_names or {},
+                                     instance_host_map, hypervisor_host)
         else:
-            host = host_of(labels.get("instance"))
+            host, nm = host_of(labels.get("instance")), _name_for(qid, labels)
         sev = (
             "critical"
             if str(labels.get("severity") or "warning").lower() == "critical"
             else "warning"
         )
-        nm = _name_for(qid, labels)
         fp = f"{host}|{qid}|{nm}"
         rec = {
             "fingerprint": fp,
