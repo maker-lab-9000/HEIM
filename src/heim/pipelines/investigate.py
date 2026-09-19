@@ -52,6 +52,26 @@ from heim.tools.base import ToolContext, load_tools
 
 log = logging.getLogger(__name__)
 
+#: Strong references to detached follow-up tasks (the outcome confirm). Without
+#: this the event loop is the only owner and CPython may garbage-collect a task
+#: mid-await — the documented asyncio footgun. Discarded on completion.
+_BACKGROUND: set[asyncio.Task] = set()
+
+
+def _detach(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _BACKGROUND.add(task)
+    task.add_done_callback(_BACKGROUND.discard)
+    return task
+
+
+async def drain_background(timeout: float = 30.0) -> None:
+    """Await the detached follow-ups. For tests and a graceful shutdown —
+    production never needs it, since nothing depends on their result."""
+    if _BACKGROUND:
+        await asyncio.wait(set(_BACKGROUND), timeout=timeout)
+
+
 _ROLE_TEMPLATE = {"guest": "guest", "hypervisor": "hypervisor", "ha-guest": "ha-guest"}
 _TEMP_RE = re.compile(r"temp|thermal|°c", re.I)
 
@@ -513,7 +533,36 @@ async def run_investigation(
         return None
 
     # ------------------------------------------------------ outcome confirm
+    #
+    # DETACHED ON PURPOSE. The investigation is finished the moment its report
+    # is delivered — the outcome prompt is follow-up bookkeeping that waits on a
+    # human for up to `outcome_timeout_hours`. Awaiting it here blocked the
+    # queue worker (which awaits run_investigation) behind that human wait, so a
+    # second queued job sat unclaimed for hours behind an investigation the
+    # dashboard already showed as "complete". Observed live: job #3 queued while
+    # #1 and #2 read complete. The concurrency slot is already released above,
+    # so this task holds nothing; losing it to a restart is the same exposure
+    # the pending-approval path has, and is what roadmap §5.8 makes durable.
     if require and not rt.dry_run and rt.telegram is not None:
+        _detach(_confirm_outcome(rt, req, inv_id))
+
+    return {
+        "id": inv_id,
+        "host": req.host,
+        "incomplete": report.incomplete,
+        "steps": len(result.steps),
+        "input_tokens": result.input_tokens,
+        "output_tokens": result.output_tokens,
+        "cost": float(cost or 0.0),
+        "subject": subject,
+        "report_md": report.report_md,
+    }
+
+
+async def _confirm_outcome(rt: Runtime, req: InvestigationRequest, inv_id: int) -> None:
+    """Ask the operator how it went, and record the answer. Never raises."""
+    cfg = rt.config
+    try:
         outcome = await rt.telegram.ask(
             f"Investigation of \"{req.host}\" is complete (report delivered). Mark the outcome — "
             f"✅ Resolved = handled; ⚠️ Needs human = requires manual intervention (the incident "
@@ -534,20 +583,10 @@ async def run_investigation(
             if req.fingerprint:
                 rt.store.set_investigated(req.fingerprint, False)
             await rt.emit_loki([_action(req.host, "needs_human", req.fingerprint, "Flagged needs human", rt.now_iso())])
-
-    return {
-        "id": inv_id,
-        "host": req.host,
-        "incomplete": report.incomplete,
-        "steps": len(result.steps),
-        "input_tokens": result.input_tokens,
-        "output_tokens": result.output_tokens,
-        "cost": float(cost or 0.0),
-        "subject": subject,
-        "report_md": report.report_md,
-    }
-
-
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception("outcome confirm for investigation #%s failed", inv_id)
 def request_from_dispatch(item: dict, rt: Runtime) -> InvestigationRequest:
     """Build a request from a reconcile/poller dispatch item.
 

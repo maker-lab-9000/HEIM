@@ -522,24 +522,66 @@ async def test_timed_out_approval_records_declined(rt, monkeypatch):
 
 
 async def test_outcome_resolved_and_needs_human(rt, monkeypatch):
+    """The outcome prompt is answered AFTER run_investigation returns.
+
+    It is detached on purpose (it waits on a human for hours and would
+    otherwise block the queue worker), so the test drains the follow-up task
+    instead of expecting the row to be final on return.
+    """
+    from heim.pipelines.investigate import drain_background
     _stub_agent(monkeypatch)
     rt.dry_run = False
 
     rt.telegram = FakeTelegram({"ubuntu-server": [True, True]})   # approve, then resolved
     res = await run_investigation(rt, InvestigationRequest(host="ubuntu-server"))
+    assert rt.store.investigation(res["id"])["status"] == "complete"   # returns before the ask
+    await drain_background()
     row = rt.store.investigation(res["id"])
     assert row["status"] == "resolved" and row["outcome"] == "resolved"
 
     rt.telegram = FakeTelegram({"ubuntu-server": [True, False]})  # approve, then needs human
     res = await run_investigation(rt, InvestigationRequest(host="ubuntu-server",
                                                            fingerprint="u|x|"))
+    await drain_background()
     row = rt.store.investigation(res["id"])
     assert row["status"] == "needs_human" and row["outcome"] == "needs_human"
 
     rt.telegram = FakeTelegram({"ubuntu-server": [True, None]})   # approve, outcome times out
     res = await run_investigation(rt, InvestigationRequest(host="ubuntu-server"))
+    await drain_background()
     row = rt.store.investigation(res["id"])
     assert row["status"] == "needs_human" and row["outcome"] == "timeout"
+
+
+async def test_pending_outcome_does_not_block_the_caller(rt, monkeypatch):
+    """Regression: a queued job must not wait behind a human outcome prompt.
+
+    `daemon._queue_worker` awaits `run_investigation`, so anything this
+    function awaits serializes the whole queue. The outcome confirm waits on a
+    person for up to `outcome_timeout_hours` — live, that left job #3 queued
+    for hours behind two investigations the dashboard already showed complete.
+    """
+    from heim.pipelines.investigate import _BACKGROUND
+
+    _stub_agent(monkeypatch)
+    rt.dry_run = False
+    never = asyncio.Event()                       # the operator never taps a button
+
+    async def _hang():
+        await never.wait()
+
+    rt.telegram = FakeTelegram({"ubuntu-server": [True, _hang]})
+
+    # the caller returns while the outcome prompt is still outstanding
+    res = await asyncio.wait_for(run_investigation(rt, InvestigationRequest(host="ubuntu-server")),
+                                 timeout=5)
+    assert rt.store.investigation(res["id"])["status"] == "complete"
+    assert any(not task.done() for task in _BACKGROUND)   # still waiting, off to the side
+
+    for task in list(_BACKGROUND):                # do not leak it into the next test
+        task.cancel()
+    never.set()
+
 
 
 # ======================================================= the concurrency cap
