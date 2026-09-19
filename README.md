@@ -146,9 +146,12 @@ publishes **no ports**. All mutable state (SQLite store, audit log, dry-run repo
 lives in `./data`; `config/` is mounted read-only; secrets come from `.env`.
 
 ```bash
-cp .env.example .env && $EDITOR .env
-cp config/settings.example.yaml config/settings.yaml && $EDITOR config/settings.yaml
+cp .env.example .env && $EDITOR .env      # your IPs, ids and secrets live here
 echo "HEIM_SSH_KEY_FILE=$HOME/.ssh/pam_agent" >> .env   # host path of the agent's SSH key
+# config/settings.yaml is OPTIONAL: without it HEIM runs on settings.example.yaml,
+# which is fully ${VAR}-interpolated from .env. Copy it only to change structure
+# (schedules, retention, which channels are enabled):
+#   cp config/settings.example.yaml config/settings.yaml
 
 docker compose run --rm heim check          # validate config + connectivity
 docker compose run --rm heim daily --dry-run   # report lands in ./data/out/

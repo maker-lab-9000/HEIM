@@ -165,3 +165,29 @@ def test_incident_store_roundtrip(tmp_path):
     store.upsert(rows)
     assert store.open_rows() == []
     assert len(store.all_rows()) == 1
+
+
+def test_fresh_clone_falls_back_to_the_example_settings(tmp_path, monkeypatch, caplog):
+    """A fresh clone has no settings.yaml (it is gitignored) — HEIM must start
+    on the example rather than crash-loop the container."""
+    import logging
+    import shutil
+    for k, v in DUMMY_ENV.items():
+        monkeypatch.setenv(k, v)
+    croot = tmp_path / "config"
+    shutil.copytree(ROOT / "config", croot, ignore=shutil.ignore_patterns("settings.yaml"))
+    assert not (croot / "settings.yaml").exists()          # the fresh-clone state
+    with caplog.at_level(logging.INFO, logger="heim.config"):
+        cfg = load_config(croot)
+    assert cfg.settings.prometheus.url == "http://10.0.0.10:9090"   # example + .env identity
+    assert "settings.example.yaml" in caplog.text   # the fallback says so out loud
+
+
+def test_config_dir_without_any_settings_file_still_fails_loudly(tmp_path, monkeypatch):
+    """The fallback must not paper over a genuinely wrong config directory."""
+    for k, v in DUMMY_ENV.items():
+        monkeypatch.setenv(k, v)
+    croot = tmp_path / "config"
+    croot.mkdir()
+    with pytest.raises(FileNotFoundError, match="no settings.example.yaml to fall back to"):
+        load_config(croot)

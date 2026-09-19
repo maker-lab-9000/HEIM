@@ -13,6 +13,7 @@ Secrets never live in YAML — they come from the environment (see ``.env.exampl
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -25,6 +26,8 @@ from pydantic import BaseModel, Field
 
 from heim.incidents.types import HostRouting
 
+
+log = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- settings
 
@@ -265,11 +268,22 @@ def load_config(root: Path | None = None) -> Config:
 
     load_dotenv(root.parent / ".env")
 
+    # settings.yaml is gitignored (it is a deployment's own file), so a fresh
+    # clone has only the example. The example is fully ${VAR}-interpolated and
+    # is meant to be usable UNCHANGED — so fall back to it rather than
+    # crash-looping a container on first run. Deployment identity still comes
+    # from .env, and a missing required var still fails loudly and by name.
     settings_path = root / "settings.yaml"
     if not settings_path.exists():
-        raise FileNotFoundError(
-            f"{settings_path} missing — copy config/settings.example.yaml to config/settings.yaml and edit it"
-        )
+        example_path = root / "settings.example.yaml"
+        if not example_path.exists():
+            raise FileNotFoundError(
+                f"{settings_path} missing, and no {example_path.name} to fall back to — "
+                f"is {root} really the config directory?"
+            )
+        log.info("%s not found; using %s (copy it to settings.yaml to customise)",
+                 settings_path.name, example_path.name)
+        settings_path = example_path
     settings = Settings(**_load_yaml(settings_path))
 
     hosts = {h.name: h for h in (Host(**_load_yaml(p)) for p in sorted((root / "hosts").glob("*.yaml")))}
