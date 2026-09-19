@@ -368,6 +368,22 @@ incident row, and threads `retry_of` through `InvestigationRequest` into the new
   suggestion per tool under its row (and unmatched names as a `💡 general:` footnote,
   because a name that matches no tool is the prompt drifting, not noise to drop).
 
+### 5.8 Durable approvals (deferred 2026-09-19 — plan written, not built)
+
+An investigation awaiting approval currently expires after
+`approvals.approve_timeout_hours` (6h), is marked declined, and the incident is
+re-proposed next run. The operator wants approvals to queue indefinitely until
+answered. Full design in
+[`docs/superpowers/plans/2026-09-19-durable-approvals.md`](docs/superpowers/plans/2026-09-19-durable-approvals.md).
+
+The load-bearing finding from that plan, for whoever picks it up: removing the
+timeout alone makes things WORSE. Three mechanisms end a pending approval, and
+only one is the timeout — `sweep_interrupted()` fails every `pending_approval`
+row on daemon start, and Telegram `callback_data` keys an in-memory future, so
+after any restart the operator taps Approve and gets silence. Durability means
+buttons that carry the investigation id and resolve through the store, plus a
+restart that re-arms parked approvals instead of failing them.
+
 ### 5.7 Smaller, high-value items
 
 - **Dead-man's switch** — ✅ implemented. `channels/deadman.ping()` GETs
