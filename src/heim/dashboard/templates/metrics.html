@@ -17,6 +17,34 @@
       <button class="btn" type="submit">refresh</button>
     </form>
   </p>
+  {#- the counts above say how many are crit/warn; this says WHICH host and
+      which resource, worst first. Only rendered when there is something to
+      name. Column classes are the metrics tables' own — no new CSS. -#}
+  {%- if metrics.offenders.rows %}
+  <table class="tbl dense">
+    <thead><tr>
+      <th scope="col" class="c-flag">status</th>
+      <th scope="col">host</th>
+      <th scope="col" class="c-mname">resource</th>
+      <th scope="col" class="num c-cur">current</th>
+      <th scope="col" class="num c-delta">&Delta;</th>
+    </tr></thead>
+    <tbody>
+      {%- for r in metrics.offenders.rows %}
+      <tr>
+        <td class="c-flag">{{ m.pill(r.flag) }}</td>
+        <td>{{ m.hostbadge(r.host) }}</td>
+        <td class="c-mname">{{ r.label }}{% if r.name %} <span class="mono ink2">{{ r.name }}</span>{% endif %}</td>
+        <td class="num mono c-cur">{{ r.current|mval(r.unit) }}</td>
+        <td class="num mono c-delta st-{{ r.flag }}">{{ r.changePct|mdelta }}</td>
+      </tr>
+      {%- endfor %}
+      {%- if metrics.offenders.more %}
+      <tr class="ghost"><td colspan="5"><a class="mono" href="#mall">+{{ metrics.offenders.more }} more</a></td></tr>
+      {%- endif %}
+    </tbody>
+  </table>
+  {%- endif %}
   {%- if error %}
   <p class="errmsg">{{ prom_error }}</p>
   <p class="empty mono">{{ error }}</p>
@@ -24,7 +52,9 @@
 </section>
 
 {%- if metrics.has_data %}
-<form class="filters" method="get" action="/metrics">
+{#- `#mall` is where the header's "+N more" link lands: the full, unabridged
+    per-host tables that follow. -#}
+<form class="filters" id="mall" method="get" action="/metrics">
   <label>host
     <select name="host">
       <option value="">all hosts</option>

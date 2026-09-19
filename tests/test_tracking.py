@@ -58,6 +58,9 @@ def rt(tmp_path, monkeypatch) -> Runtime:
     cfg.settings.loki = None
     cfg.settings.email = None
     cfg.settings.home_assistant = None
+    # the poll cycle's threshold half talks to Prometheus for real; these
+    # tests are about the alert half, so keep the wire out of it
+    cfg.settings.threshold_detection = False
     return Runtime(
         config=cfg,
         store=IncidentStore(tmp_path / "rt.sqlite3"),

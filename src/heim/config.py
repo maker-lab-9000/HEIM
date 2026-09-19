@@ -116,6 +116,17 @@ class Settings(BaseModel):
     # instance-label address prefix -> host name (used by the alert poller to
     # attribute a firing alert's `instance` label to a configured host)
     instance_host_map: dict[str, str] = {}
+    # Open incidents from metric thresholds (config/queries/daily.yaml
+    # warn/crit), not just from prometheus/alerts.yml rules. Evaluated on the
+    # poller's cadence, inside the same cycle.
+    threshold_detection: bool = True
+    # Which flag counts as "over threshold": `crit` only, or `warn` (which
+    # includes crit — warn is the weaker of the two bounds).
+    threshold_severity: Literal["crit", "warn"] = "crit"
+    # Consecutive polls a series must stay over threshold before an incident
+    # opens. Hysteresis is not optional: a single scrape at 102% is a blip,
+    # and dispatching on it burns an agent run and a human approval.
+    threshold_consecutive: int = 2
 
 
 # --------------------------------------------------------------------------- hosts

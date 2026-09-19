@@ -56,6 +56,15 @@ from decimal import ROUND_HALF_UP, Decimal
 _DAY_SECONDS = 86400
 _TOP_ALERTS = 15
 
+__all__ = [
+    "aggregate",
+    "flag_for",
+    "guest_name_map",
+    "host_from_metric",
+    "series_identity",
+    "series_name",
+]
+
 #: instance-IP -> friendly host name. The JS ``hostFromMetric`` hardcoded the
 #: deployment's map; here it is passed in (``settings.instance_host_map``).
 
@@ -68,8 +77,14 @@ def _to_fixed(value: float, digits: int) -> float:
     return float(Decimal(value).quantize(quantum, rounding=ROUND_HALF_UP))
 
 
-def _host_from_metric(metric: dict | None, host_by_ip: dict[str, str]) -> str:
-    """Port of ``hostFromMetric``."""
+def host_from_metric(metric: dict | None, host_by_ip: dict[str, str]) -> str:
+    """Port of ``hostFromMetric``.
+
+    Public because the threshold-detection path (``pipelines/thresholds.py``)
+    must derive *exactly* the same host for a series as the daily run does —
+    two spellings of the same host would mean two fingerprints and a double
+    investigation.
+    """
     if not metric:
         return "unknown"
     instance = metric.get("instance") or ""
@@ -80,8 +95,9 @@ def _host_from_metric(metric: dict | None, host_by_ip: dict[str, str]) -> str:
     return instance or "unknown"
 
 
-def _series_name(metric: dict | None, guest_names: dict[str, str]) -> str:
-    """Port of ``seriesName``."""
+def series_name(metric: dict | None, guest_names: dict[str, str]) -> str:
+    """Port of ``seriesName`` (public for the same reason as
+    :func:`host_from_metric`)."""
     if not metric:
         return ""
     mid = metric.get("id")
@@ -105,7 +121,29 @@ def _series_name(metric: dict | None, guest_names: dict[str, str]) -> str:
     return " ".join(parts)
 
 
-def _flag_for(cur: float | None, mq: dict) -> str:
+def series_identity(metric: dict | None, guest_names: dict[str, str],
+                    instance_host_map: dict[str, str]) -> tuple[str, str] | None:
+    """``(host, name)`` for one series, or ``None`` when it must be skipped.
+
+    The single source of truth for *series identity*: host attribution, the
+    Proxmox guest override (a ``qemu/``/``lxc/`` series is attributed to the
+    guest itself, not to the hypervisor, and carries no name) and the veth
+    noise filter. :func:`aggregate` and the threshold detector both go through
+    here, so both derive byte-identical ``host|qid|name`` fingerprints.
+    """
+    host = host_from_metric(metric, instance_host_map or {})
+    name = series_name(metric, guest_names)
+    mid = (metric or {}).get("id")
+    if mid and (mid.startswith("qemu/") or mid.startswith("lxc/")):
+        host = guest_names.get(mid, mid)
+        name = ""
+    device = str((metric or {}).get("device") or "")
+    if host == "ubuntu-server" and _VETH_RE.match(device):
+        return None
+    return host, name
+
+
+def flag_for(cur: float | None, mq: dict) -> str:
     """Port of ``flagFor`` — ok/warn/crit/na by threshold direction."""
     if cur is None or (isinstance(cur, float) and math.isnan(cur)):
         return "na"
@@ -156,6 +194,20 @@ def _parse_pairs(series: dict) -> tuple[list[float], list[float]]:
     return ts, vals
 
 
+def guest_name_map(metrics) -> dict[str, str]:
+    """Proxmox guest ``id -> name`` from the ``pve_guest_info`` label sets.
+
+    Takes bare metric label dicts so it serves both response shapes: the daily
+    path's ``query_range`` matrices and the threshold detector's instant
+    vectors.
+    """
+    out: dict[str, str] = {}
+    for metric in metrics:
+        if metric and metric.get("id") and metric.get("name"):
+            out[metric["id"]] = metric["name"]
+    return out
+
+
 def aggregate(results: list[dict], now: datetime | None = None,
               instance_host_map: dict[str, str] | None = None) -> dict:
     """Fold query_range results into the daily payload (pure, no I/O).
@@ -167,17 +219,15 @@ def aggregate(results: list[dict], now: datetime | None = None,
         now = datetime.now(timezone.utc)
 
     # First pass: Proxmox guest id -> name map from the pve_guest_info query.
-    guest_names: dict[str, str] = {}
+    guest_metrics: list[dict] = []
     for item in results:
         if item["query"]["qid"] != "pve_guest_info":
             continue
         data = item.get("data")
         if not _valid_matrix(data):
             continue
-        for series in data["data"]["result"]:
-            metric = series.get("metric")
-            if metric and metric.get("id") and metric.get("name"):
-                guest_names[metric["id"]] = metric["name"]
+        guest_metrics += [s.get("metric") for s in data["data"]["result"]]
+    guest_names = guest_name_map(guest_metrics)
 
     categories: dict[str, list[dict]] = {}
     alerts: list[dict] = []
@@ -234,18 +284,13 @@ def aggregate(results: list[dict], now: datetime | None = None,
             if mq["unit"] in ("state", "online"):
                 change_pct = None
 
-            flag = _flag_for(cur, mq)
+            flag = flag_for(cur, mq)
 
-            metric = series.get("metric")
-            host = _host_from_metric(metric, instance_host_map or {})
-            name = _series_name(metric, guest_names)
-            mid = (metric or {}).get("id")
-            if mid and (mid.startswith("qemu/") or mid.startswith("lxc/")):
-                host = guest_names.get(mid, mid)
-                name = ""
-            device = str((metric or {}).get("device") or "")
-            if host == "ubuntu-server" and _VETH_RE.match(device):
+            identity = series_identity(series.get("metric"), guest_names,
+                                       instance_host_map or {})
+            if identity is None:
                 continue
+            host, name = identity
             hosts.add(host)
 
             row = {

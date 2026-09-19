@@ -34,6 +34,29 @@ class ReconcileResult:
 
 
 @dataclass
+class ThresholdDecision:
+    """Output of the pure threshold-detection step (``pipelines/thresholds``).
+
+    The first four fields mirror :class:`PollerDecision` so the pipeline can
+    apply them with exactly the same machinery (store upserts, Telegram,
+    Loki, ``dispatch_all``). The two streak fields are the hysteresis state to
+    persist: ``streak_writes`` are upserts into ``threshold_streaks``,
+    ``streak_clears`` the fingerprints that came back under threshold.
+    """
+
+    rows_to_upsert: list[dict] = field(default_factory=list)
+    dispatches: list[dict] = field(default_factory=list)
+    notifications: list[dict] = field(default_factory=list)
+    loki_events: list[dict] = field(default_factory=list)
+    streak_writes: list[dict] = field(default_factory=list)
+    streak_clears: list[str] = field(default_factory=list)
+    #: True only for rows that change an incident's *state* (new, escalated,
+    #: resolved) — a lastSeen refresh on a still-breaching series is not a
+    #: state change and must not emit a state event every five minutes.
+    state_changed: bool = False
+
+
+@dataclass
 class PollerDecision:
     """Output of the pure alert-poller diff step (port of PAM 11 Diff & Decide)."""
 

@@ -184,6 +184,17 @@ CREATE TABLE IF NOT EXISTS recommendation_states (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Threshold detection hysteresis: how many CONSECUTIVE polls a fingerprint
+-- has been over its configured threshold. Persisted (rather than kept in the
+-- poller's memory) so a daemon restart cannot reset a streak and re-arm a
+-- spike that was already two polls into being real.
+CREATE TABLE IF NOT EXISTS threshold_streaks (
+    fingerprint TEXT PRIMARY KEY,
+    count       INTEGER NOT NULL DEFAULT 0,
+    severity    TEXT NOT NULL DEFAULT '',
+    last_seen   TEXT NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_steps_investigation ON investigation_steps (investigation_id, seq);
 CREATE INDEX IF NOT EXISTS idx_tool_feedback_tool ON tool_feedback (tool, id);
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings (run_id);
@@ -902,6 +913,50 @@ class IncidentStore:
             "SELECT fingerprint FROM suppressions WHERE until = '' OR until > ?", (str(now_iso),)
         )
         return {str(r["fingerprint"]) for r in cur.fetchall()}
+
+    # ----------------------------------------------- threshold hysteresis
+
+    def threshold_streaks(self) -> dict[str, dict]:
+        """``fingerprint -> {count, severity, last_seen}`` for every live streak.
+
+        Read whole rather than per-fingerprint: a poll evaluates the entire
+        catalog at once, and the table only ever holds the handful of series
+        that are currently over threshold.
+        """
+        cur = self._db.execute(
+            "SELECT fingerprint, count, severity, last_seen FROM threshold_streaks"
+        )
+        return {str(r["fingerprint"]): {"fingerprint": str(r["fingerprint"]),
+                                        "count": int(r["count"] or 0),
+                                        "severity": str(r["severity"] or ""),
+                                        "last_seen": str(r["last_seen"] or "")}
+                for r in cur.fetchall()}
+
+    def save_threshold_streaks(self, rows: list[dict]) -> None:
+        """Upsert streak rows (``fingerprint``/``count``/``severity``/``last_seen``)."""
+        for row in rows or []:
+            self._db.execute(
+                """INSERT INTO threshold_streaks (fingerprint, count, severity, last_seen)
+                   VALUES (:fingerprint, :count, :severity, :last_seen)
+                   ON CONFLICT(fingerprint) DO UPDATE SET
+                     count = excluded.count, severity = excluded.severity,
+                     last_seen = excluded.last_seen""",
+                {"fingerprint": str(row.get("fingerprint") or ""),
+                 "count": int(row.get("count") or 0),
+                 "severity": str(row.get("severity") or ""),
+                 "last_seen": str(row.get("last_seen") or "")},
+            )
+        self._db.commit()
+
+    def clear_threshold_streaks(self, fingerprints) -> int:
+        """Drop the streaks of fingerprints that came back under threshold."""
+        n = 0
+        for fp in fingerprints or []:
+            n += self._db.execute(
+                "DELETE FROM threshold_streaks WHERE fingerprint = ?", (str(fp),)
+            ).rowcount
+        self._db.commit()
+        return int(n)
 
     # -------------------------------------------- backup & retention (§5.7)
 
