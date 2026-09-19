@@ -8,7 +8,15 @@ blowing up mid-page.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
+
+#: The metrics page shows the daily email's numbers, so it humanizes them with
+#: the daily email's own unit table rather than a second, subtly different one.
+#: ``reports.daily_dashboard`` is pure (no I/O, no clock reads) and ``_human``
+#: is written against exactly the units the aggregate rows carry — B, B/s, %,
+#: °C, days, /s, ratio, state, online.
+from heim.reports.daily_dashboard import _human as _human_value
 
 DASH = "—"
 
@@ -136,6 +144,27 @@ def tokens(n: int | float | None) -> str:
     return f"{n / 1_000_000:.1f}M"
 
 
+def money(amount: float | int | None, currency: str = "USD") -> str:
+    """"$0.42" / "EUR 0.42" / "—" when there is nothing to show.
+
+    Deliberately dumb: no conversion, no locale, no rounding to a currency's
+    minor unit. A stored 0 means *unpriced* (the model has no entry in
+    ``settings.model_prices``) and renders as an em dash — showing "$0.00"
+    would claim a run was free. Sub-cent amounts keep four decimals, because
+    "$0.00" for a real spend is the same lie in miniature.
+    """
+    try:
+        value = float(amount or 0)
+    except (TypeError, ValueError):
+        return DASH
+    if value == 0:
+        return DASH
+    code = str(currency or "USD").strip().upper() or "USD"
+    prefix = "$" if code == "USD" else f"{code} "
+    text = f"{value:.4f}" if abs(value) < 0.01 else f"{value:,.2f}"
+    return prefix + text
+
+
 def size(nbytes: int | float | None) -> str:
     """"2.1 KB" — result sizes in the transcript meta."""
     try:
@@ -147,6 +176,56 @@ def size(nbytes: int | float | None) -> str:
     if n < 1024 * 1024:
         return f"{n / 1024:.1f} KB"
     return f"{n / (1024 * 1024):.1f} MB"
+
+
+# ------------------------------------------------------------------ metrics
+
+#: |Δ%| below this reads as flat — the row is not moving (spec §6: `▬`).
+FLAT_PCT = 0.05
+
+_NUM_RE = re.compile(r"^[-+]?[0-9][0-9.,]*")
+
+
+def value(v: object, unit: object = None) -> str:
+    """A metric value, humanized exactly as the daily email humanizes it."""
+    return _human_value(v, unit)
+
+
+def _split_unit(text: str) -> tuple[str, str]:
+    """"2.90 GB" -> ("2.90", "GB"); "44.0°C" -> ("44.0", "°C")."""
+    m = _NUM_RE.match(text)
+    return (text[:m.end()], text[m.end():].strip()) if m else ("", text)
+
+
+def trend(day3d: list | None, unit: object = None) -> str:
+    """The three day averages as the spec's mono sparkline: `31.1 → 33.2 → 43.3`.
+
+    Values are humanized like every other number on the page, then the unit is
+    dropped when all of them share it — the current/avg columns right next door
+    already carry it, and the column has to stay narrow. A mixed set (KB next
+    to MB) keeps its units, because there the scale is the point.
+    """
+    vals = [v for v in (day3d or []) if v is not None]
+    if not vals:
+        return DASH
+    parts = [value(v, unit) for v in vals]
+    pairs = [_split_unit(p) for p in parts]
+    if len({u for _n, u in pairs}) == 1 and all(n for n, _u in pairs):
+        parts = [n for n, _u in pairs]
+    return " → ".join(parts)
+
+
+def delta(pct: object) -> str:
+    """`▲ 12.4%` / `▼ 3.2%` / `▬` (flat) / `—` (no comparable value)."""
+    if pct is None:
+        return DASH
+    try:
+        n = float(pct)
+    except (TypeError, ValueError):
+        return DASH
+    if abs(n) < FLAT_PCT:
+        return "▬"
+    return f"{'▲' if n > 0 else '▼'} {abs(n):.1f}%"
 
 
 def fingerprint(fp: str | None, width: int = 34) -> str:
@@ -212,31 +291,178 @@ def tool_key(tool: str | None) -> str:
     return _TOOL_KEY.get(str(tool or ""), "other")
 
 
+#: how much of a model id a narrow column can carry
+MODEL_WIDTH = 22
+
+
+def short_model(name: str | None) -> str:
+    """A model id trimmed to fit a table cell, without lying about which one.
+
+    Drops the vendor prefix and any ``:free``/``:beta`` variant suffix — the
+    parts that repeat down a column — and middle-truncates whatever is still
+    too long, keeping both ends so ``…-4-6`` and ``…-4-5`` stay distinct.
+    """
+    text = str(name or "").strip()
+    if not text:
+        return DASH
+    text = text.rsplit("/", 1)[-1].split(":", 1)[0]
+    if len(text) <= MODEL_WIDTH:
+        return text
+    head = (MODEL_WIDTH - 1 + 1) // 2
+    tail = MODEL_WIDTH - 1 - head
+    return text[:head] + "…" + (text[-tail:] if tail else "")
+
+
+# ----------------------------------------------------------------- hosts
+
+#: How many hosts can carry a color. The host badges reuse the SAME validated
+#: categorical palette as the tool badges (spec §1) — aliased in the stylesheet
+#: as ``--host-1..--host-5`` — so there are exactly five slots. A sixth host, or
+#: any host that is not configured (a Proxmox guest showing up under its own
+#: name), renders with the muted ink instead of a recycled, misleading color.
+HOST_SLOTS = 5
+
+#: what an unslotted host gets: dot in faint ink, name still spelled out
+HOST_MUTED = "--ink-3"
+
+
+def host_color(host: str | None, hosts=()) -> str:
+    """The CSS variable name for ``host``'s badge dot.
+
+    Slots are handed out in *config order* so a host keeps the same color on
+    every page for as long as the config is stable — color follows the entity,
+    exactly like the tool badges. The color is never the only encoding: the
+    badge always prints the host name next to the dot.
+    """
+    name = str(host or "").strip()
+    order = [str(h) for h in (hosts or [])]
+    if not name or name not in order:
+        return HOST_MUTED
+    slot = order.index(name)
+    return f"--host-{slot + 1}" if slot < HOST_SLOTS else HOST_MUTED
+
+
+# -------------------------------------------------------------- transcript
+
+
+#: what the burn line is measuring, spelled out in the caption and tooltips
+BURN_TOKENS = "input tokens"
+BURN_BYTES = "tool output"
+
+
 def burn_segments(steps: list[dict]) -> list[dict]:
     """Segment widths for the burn line.
 
-    The spec calls for cumulative *output-token* share per step, but tokens are
-    only accounted per investigation (not per turn — see AGENTS.md §5.6), so a
-    step's share of total tool-output bytes is used as the stand-in: it is the
-    closest stored proxy for "where the budget went", since tool output is what
-    gets fed back into the model's context. The tooltip says so explicitly.
+    Since §5.6 the runner attributes each assistant turn's usage to the first
+    tool call that turn requested, so the spec's "where did the budget go" bar
+    can be drawn from **real input tokens** whenever the steps carry them.
+    Rows written before that (or by a provider that reported no usage) have
+    only ``result_bytes``, so they keep the original proxy — a step's share of
+    total tool output, which is what gets fed back into the model's context —
+    under its own, different, honest label. The caption and every tooltip name
+    whichever basis was used; the two are never mixed in one bar.
     """
     steps = [s for s in (steps or [])]
-    total = sum(max(int(s.get("result_bytes") or 0), 0) for s in steps)
+    priced = any(int(s.get("input_tokens") or 0) > 0 for s in steps)
+    basis = BURN_TOKENS if priced else BURN_BYTES
+    key = "input_tokens" if priced else "result_bytes"
+    total = sum(max(int(s.get(key) or 0), 0) for s in steps)
     out: list[dict] = []
     for s in steps:
-        nbytes = max(int(s.get("result_bytes") or 0), 0)
-        pct = (nbytes / total * 100) if total else (100 / len(steps) if steps else 0)
+        n = max(int(s.get(key) or 0), 0)
+        pct = (n / total * 100) if total else (100 / len(steps) if steps else 0)
+        amount = f"{tokens(n)} tok" if priced else size(n)
+        share = f"{pct:.0f}% of {basis}" if priced else f"{pct:.0f}% share of {basis}"
         out.append({
             "seq": int(s.get("seq") or 0),
             "tool": s.get("tool") or "",
             "tool_key": tool_key(s.get("tool")),
             "blocked": bool(s.get("blocked")),
             "pct": round(pct, 3),
+            "basis": basis,
             "title": (f"{int(s.get('seq') or 0):02d} {s.get('tool') or ''} · "
-                      f"{size(nbytes)} · {pct:.0f}% share of tool output"),
+                      f"{amount} · {share}"),
         })
     return out
+
+
+# ---------------------------------------------------------------- bar chart
+
+#: Geometry of the daily bar charts (spec §11), in SVG user units, which the
+#: template emits 1:1 so the mono labels land on the CSS type scale (11px =
+#: 0.6875rem). One slot per day: a thin ember mark with a 2px gap to the next.
+CHART_SLOT = 24          # one day
+CHART_GAP = 2            # spec §11: 2px gaps
+CHART_TOP = 16           # tallest bar's top edge (headroom for its label)
+CHART_BASELINE = 62      # the hairline every bar sits on
+CHART_HEIGHT = 84        # viewBox height: baseline + the weekday letters
+CHART_LABEL_Y = 76       # weekday letters
+CHART_STUB = 2           # a zero day still shows, so the axis stays readable
+CHART_RADIUS = 4         # spec §11: 4px rounded tops
+
+
+def _exact(value) -> str:
+    return f"{int(value):,}"
+
+
+def bar_chart(points: list[dict], *, value_key: str = "tokens",
+              unit: str = "tokens", fmt_label=None, fmt_exact=None) -> dict:
+    """Precomputed geometry for a single-series daily bar chart (spec §11).
+
+    Pure: takes already-aggregated ``{"date", "weekday", <value_key>}`` points
+    oldest→newest and returns everything the template needs to emit a fixed
+    ``viewBox`` SVG — no JS, no chart library, no clock read. Bars are scaled to
+    the window's own max (a single series needs no shared axis), zero days get a
+    ``CHART_STUB`` mark, and labelling is selective: only the max bar carries an
+    inline label, while *every* bar carries a ``title`` tooltip with the date and
+    the exact amount.
+
+    The series is a parameter, not a hard-coded key, so a second series (the
+    cost-by-day chart) reuses the same geometry and stylesheet with its own
+    formatters — ``fmt_label`` for the one inline label, ``fmt_exact`` for the
+    tooltips.
+
+    Bars carry ``h`` (the visible height) and ``rh`` — the height to draw, which
+    overshoots below the baseline so a rect's ``rx`` rounds only the top; the
+    template clips at the baseline.
+    """
+    fmt_label = fmt_label or tokens
+    fmt_exact = fmt_exact or _exact
+    points = list(points or [])
+    span = CHART_BASELINE - CHART_TOP
+    values = [max(float(p.get(value_key) or 0), 0.0) for p in points]
+    top = max(values) if values else 0.0
+    peak = values.index(top) if values and top > 0 else -1
+    bars = []
+    for i, (point, value) in enumerate(zip(points, values)):
+        h = max(round(span * value / top), CHART_STUB) if top > 0 else CHART_STUB
+        amount = fmt_exact(value)
+        bars.append({
+            "date": str(point.get("date") or ""),
+            "weekday": str(point.get("weekday") or ""),
+            "value": value,
+            "x": i * CHART_SLOT + CHART_GAP // 2,
+            "w": CHART_SLOT - CHART_GAP,
+            "y": CHART_BASELINE - h,
+            "h": h,
+            "rh": h + CHART_RADIUS,
+            "mid": i * CHART_SLOT + CHART_SLOT // 2,
+            "is_max": i == peak,
+            "label": fmt_label(value) if i == peak else "",
+            "title": f"{point.get('date') or ''} · {amount} {unit}".rstrip(),
+        })
+    return {
+        "bars": bars,
+        "width": len(bars) * CHART_SLOT,
+        "height": CHART_HEIGHT,
+        "baseline": CHART_BASELINE,
+        "label_y": CHART_LABEL_Y,
+        "radius": CHART_RADIUS,
+        "span": span,
+        "max": int(top) if float(top).is_integer() else top,
+        "total": int(sum(values)) if all(float(v).is_integer() for v in values) else sum(values),
+        "busiest": bars[peak] if peak >= 0 else None,
+    }
 
 
 # ------------------------------------------------------------------ statuses
@@ -261,7 +487,16 @@ _STATUS = {
     "info": ("·", "st-muted", "info"),
     "ok": ("✓", "st-ok", "ok"),
     "healthy": ("✓", "st-ok", "healthy"),
+    # metric flags (spec §6): `crit` is the aggregate's own word for a breached
+    # threshold — a reading, not a failed run, hence ✳ rather than ✕.
+    "crit": ("✳", "st-crit", "crit"),
+    "na": ("·", "st-muted", "n/a"),
     "timeout": ("◌", "st-muted", "timed out"),
+    # recommendation states (spec §9): done reads as ok, dismissed as muted —
+    # the operator ticked it off either way, the difference is whether it was
+    # worth doing.
+    "done": ("✓", "st-ok", "done"),
+    "dismissed": ("○", "st-muted", "dismissed"),
 }
 
 

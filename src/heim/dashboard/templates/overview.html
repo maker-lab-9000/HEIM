@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% import "partials/_macros.html" as m %}
+{#- `with context` so the action macro can read `back` (partials/_macros.html) -#}
+{% import "partials/_macros.html" as m with context %}
 {% block content %}
 
 {% if empty %}
@@ -22,22 +23,153 @@
   {%- endfor %}
 </section>
 
+{#- the health card (design spec §3): where the house stands. The per-host
+    strip is live off the incident store; above it, the latest analysis in
+    words — severity icon + headline + executive summary, linking to the
+    findings that back it — which only appears once a run recorded one. -#}
+{%- if health %}
+<section class="card health">
+  {%- if health.headline %}
+  <p class="headline">{{ m.pill(health.overall) }}
+    <span class="htext">{{ health.headline }}</span></p>
+  {%- if health.summary %}
+  <p class="prose">{{ health.summary }}</p>
+  {%- endif %}
+  <p class="eyebrow ink3">{{ health.run_at|day }} {{ health.run_at|clock }}
+    {%- if health.line %} · {{ health.line }}{% endif %}
+    · <a class="qlink" href="/findings#run-{{ health.id }}">findings</a></p>
+  {%- endif %}
+  {%- if health.hosts %}
+  <ul class="hstrip" aria-label="Per-host health">
+    {%- for h in health.hosts %}
+    <li><a href="/hosts">{{ m.hostbadge(h.name) }} {{ m.pill(h.flag) }}
+      <span class="ink3 mono">{{ h.label }}</span></a></li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+</section>
+{%- endif %}
+
+{# the triage queue (design spec §12): the runs that did not finish cleanly,
+    directly under the health card because bad news travels first. Each row
+    says what happened (pill), where (host badge), which run (#id), why (the
+    reason line — the detail page's own sentence, built by _outcome_line) and when,
+    and offers the one action that helps: re-run it. The empty state stays
+    visible as good news rather than disappearing. -#}
 <section class="card">
-  <h2 class="eyebrow">latest daily run</h2>
-  {%- if latest_run %}
-  <p class="runline mono">daily · {{ latest_run.run_at|day }} {{ latest_run.run_at|clock }}
-    · {{ latest_run.model_used or DASH }} · overall {{ m.pill(latest_run.overall) }}
-    · {{ latest_run.duration_s|dur_s }}</p>
-  {%- if headline %}
-  <p class="headline">{{ m.sev(headline.severity) }} <strong>{{ headline.summary }}</strong>
-    <span class="mono ink2">{{ headline.host }}{% if headline.metric %} · {{ headline.metric }}{% endif %}</span></p>
-  {%- if headline.detail %}<p class="prose">{{ headline.detail }}</p>{% endif %}
-  <p><a href="/findings">All findings from this run</a></p>
-  {%- else %}
-  <p class="empty">That run reported no findings.</p>
+  <h2 class="eyebrow">needs attention</h2>
+  {%- if attention %}
+  <ul class="flist">
+    {%- for r in attention %}
+    <li>{{ m.pill(r.status) }} {{ m.hostbadge(r.host) }}
+      <a class="mono" href="/investigations/{{ r.id }}">#{{ r.id }}</a>
+      {{ m.when(r.started_at) }}
+      <span class="acts">{{ m.act('/actions/retrigger', 'RE-RUN',
+        {'investigation_id': r.id},
+        confirm='Re-run investigation #' ~ r.id ~ '?') }}</span>
+      {%- if r.reason %}
+      <p class="runline">{{ r.reason }}</p>
+      {%- endif %}
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- if attention_count > attention|length %}
+  <p><a class="qlink" href="/investigations">all ({{ attention_count }})</a></p>
   {%- endif %}
   {%- else %}
+  <p class="empty ok-empty"><span aria-hidden="true">●</span> Nothing needs attention.</p>
+  {%- endif %}
+</section>
+
+<section class="card">
+  <h2 class="eyebrow">latest runs</h2>
+  {%- if latest_run %}
+  {%- for r in run_list %}
+  <p class="runline mono{{ '' if loop.first else ' dim' }}">daily · {{ r.run.run_at|day }} {{ r.run.run_at|clock }}
+    · {{ r.run.model_used or DASH }} · overall {{ m.pill(r.run.overall) }}
+    · {{ r.run.duration_s|dur_s }}{% if r.line %} · {{ r.line }}{% endif %}
+    · <a class="qlink" href="/findings#run-{{ r.run.id }}">details</a></p>
+  {%- endfor %}
+  {%- else %}
   <p class="empty">No daily run recorded yet. The first scheduled run writes the headline here.</p>
+  {%- endif %}
+</section>
+
+{#- what the agents actually do all day: tool calls grouped by the agent and
+    model that made them. The bar is a magnitude encoding scaled to the
+    busiest row; identity is the tool badge, and the calls column carries the
+    number, so the bar never has to be read precisely. -#}
+<section class="card">
+  <h2 class="eyebrow">tool usage</h2>
+  {%- if tool_usage %}
+  <table class="tbl dense tutbl">
+    <thead><tr>
+      <th scope="col">tool</th>
+      <th scope="col">agent</th>
+      <th scope="col" class="num c-calls">calls</th>
+      <th scope="col" class="c-share">share</th>
+      <th scope="col" class="num c-blocked">blocked</th>
+      <th scope="col" class="num c-avg">avg time</th>
+      <th scope="col" class="num c-tok">tokens</th>
+    </tr></thead>
+    <tbody>
+      {%- for r in tool_usage %}
+      <tr>
+        <td>{{ m.tool(r.tool) }}</td>
+        <td class="mono ink2">{{ r.agent_name or DASH }} · {{ r.model_short }}</td>
+        <td class="num mono c-calls">{{ r.calls }}</td>
+        <td class="c-share">
+          <span class="tubar" role="img"
+                title="{{ r.calls }} call{{ '' if r.calls == 1 else 's' }} · {{ r.share }}% of the busiest row"
+                aria-label="{{ r.share }} percent of the busiest row">
+            <span class="seg" style="width:{{ r.share }}%"></span></span>
+        </td>
+        <td class="num mono c-blocked{{ ' ink3' if not r.blocked }}">{% if r.blocked %}⛔ {{ r.blocked }}{% else %}0{% endif %}</td>
+        <td class="num mono c-avg">{{ r.avg_ms|dur_ms }}</td>
+        {#- an em dash means the steps predate per-step attribution (§5.6),
+            not that the calls were free -#}
+        <td class="num mono c-tok">{% if r.tokens %}{{ r.tokens|tokens }}{% else %}{{ DASH }}{% endif %}</td>
+      </tr>
+      {#- the agent's own latest note on this tool, from the optional
+          '## Tooling feedback' report section — what would have made the
+          tool more useful, said by the thing that used it -#}
+      {%- if r.feedback %}
+      <tr class="tufb"><td colspan="7" class="ink3">💡 {{ r.feedback.suggestion }}
+        · <a class="mono" href="/investigations/{{ r.feedback.investigation_id }}">#{{ r.feedback.investigation_id }}</a>
+        · {{ m.when(r.feedback.created_at) }}</td></tr>
+      {%- endif %}
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- if tool_feedback_general %}
+  {#- feedback naming something that is not one of the tools above: kept as a
+      footnote rather than dropped, because it is usually the prompt drifting -#}
+  {%- for f in tool_feedback_general %}
+  <p class="ink3 tufb-note">💡 general: {{ f.tool }}: {{ f.suggestion }}
+    · <a class="mono" href="/investigations/{{ f.investigation_id }}">#{{ f.investigation_id }}</a></p>
+  {%- endfor %}
+  {%- endif %}
+  {%- else %}
+  <p class="empty">No tool calls recorded yet — the first investigation fills this in.</p>
+  {%- endif %}
+</section>
+
+{#- the weekly rhythm (spec §11): one ember mark per day for the last 14, today
+    rightmost. Single series, so no legend — the card title names it — and the
+    labels are selective: only the busiest bar prints its number, while every
+    bar carries a title tooltip with the date and the exact count. Heights are
+    precomputed server-side (fmt.bar_chart); the viewBox is fixed and there is
+    no script. The SVG itself is the shared `daychart` macro — /costs draws the
+    same chart with money in it. -#}
+<section class="card">
+  <h2 class="eyebrow">token usage</h2>
+  {%- if token_chart.total %}
+  {{ m.daychart(token_chart, "Tokens spent per day over the last 14 days, busiest day "
+                             ~ token_chart.busiest.date) }}
+  <p class="tsum mono">14d: {{ token_chart.total|tokens }} · busiest {{ token_chart.busiest.weekday }}
+    {{ token_chart.busiest.date }} ({{ token_chart.busiest.value|tokens }})</p>
+  {%- else %}
+  <p class="empty">No token usage recorded yet.</p>
   {%- endif %}
 </section>
 

@@ -1,5 +1,8 @@
+{%- set theme = theme|default(request.state.theme, true) -%}
+{%- set next_theme = next_theme|default(request.state.next_theme, true) -%}
+{%- set theme_icon = theme_icon|default(request.state.theme_icon, true) -%}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ theme }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,6 +16,10 @@
 
 <nav class="rail" aria-label="Sections">
   <a class="mark" href="/" aria-label="HEIM"><svg class="lockup" aria-hidden="true" viewBox="60 130 1040 500"> <g fill="currentColor" stroke="currentColor" transform="translate(145 235)"> <circle cx="0" cy="0" r="29"/> <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"> <path d="M0 -58 L0 -78"/> <path d="M0 58 L0 78"/> <path d="M-58 0 L-78 0"/> <path d="M58 0 L78 0"/> <path d="M-41 -41 L-56 -56"/> <path d="M41 -41 L56 -56"/> <path d="M-41 41 L-56 56"/> <path d="M41 41 L56 56"/> </g> </g> <path fill="currentColor" d=" M930,168 C882,173 846,214 846,263 C846,315 887,357 938,357 C964,357 987,347 1004,331 C971,333 942,311 934,279 C926,246 941,211 970,193 C958,176 945,169 930,168 Z"/> <path fill="currentColor" d=" M260,330 Q260,312 278,312 L320,312 Q338,312 338,330 L338,430 L485,430 L485,330 Q485,312 503,312 L545,312 Q563,312 563,330 L563,585 Q563,603 545,603 L503,603 Q485,603 485,585 L485,500 L338,500 L338,585 Q338,603 320,603 L278,603 Q260,603 260,585 Z"/> <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24" d="M225,328 L408,166 L594,328"/> <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="9" opacity="0.95" d="M236,321 L409,180 L583,321"/> <path fill="var(--panel)" stroke="currentColor" stroke-width="10" stroke-linejoin="round" d="M500,172 L500,250 L554,250 L554,172 Z"/> <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="10" d="M493,170 L561,170"/> <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="7" d="M516,190 L538,190"/> <g fill="currentColor"> <rect x="381" y="270" width="34" height="34" rx="5"/> <rect x="423" y="270" width="34" height="34" rx="5"/> <rect x="381" y="312" width="34" height="34" rx="5"/> <rect x="423" y="312" width="34" height="34" rx="5"/> </g> <text x="590" y="600" fill="currentColor" font-size="280" font-family="Arial Rounded MT Bold, Nunito, Avenir Next, Arial, sans-serif" font-weight="800" letter-spacing="2">EIM</text> <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="8"> <path d="M215,607 C235,597 252,597 270,607"/> <path d="M326,610 C342,598 357,598 370,610"/> <path d="M468,611 C484,598 500,598 514,611"/> </g> <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="7"> <path d="M226,598 C224,565 225,531 232,500"/> <path d="M230,535 C211,522 200,504 198,488"/> <path d="M229,552 C246,539 258,524 264,507"/> <path d="M230,575 C212,565 200,552 194,539"/> </g> <g fill="currentColor"> <ellipse cx="196" cy="484" rx="9" ry="18" transform="rotate(-35 196 484)"/> <ellipse cx="265" cy="503" rx="9" ry="18" transform="rotate(35 265 503)"/> <ellipse cx="192" cy="536" rx="8" ry="16" transform="rotate(-42 192 536)"/> </g> <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="6"> <path d="M286,604 L280,580"/> <path d="M292,605 L299,579"/> <path d="M306,604 L312,586"/> <path d="M522,604 L516,581"/> <path d="M532,604 L541,579"/> </g> </svg><svg class="spark" aria-hidden="true" viewBox="0 0 64 84" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 37 32 8l24 29"/><path d="M21 21V10h7v3"/><path d="M16 36v40M48 36v40"/><path d="M6 76h52"/><circle cx="32" cy="26" r="4" stroke-width="3.5"/><rect x="20.5" y="44" width="9" height="9" stroke-width="3.5"/><rect x="34.5" y="44" width="9" height="9" stroke-width="3.5"/><path d="M26.5 76V63a5.5 5.5 0 0 1 11 0v13"/></svg><span class="word visually-hidden">HEIM</span></a>
+  {#- the wordmark is a logo, so it never spells the product out; the tagline
+      does, once, under the rail head. Hidden with the labels on the collapsed
+      icon rail. -#}
+  <p class="tagline">Homelab Event &amp; Incident Monitor</p>
   <ul class="nav">
     {%- set path = request.url.path %}
     {%- for item in nav %}
@@ -32,6 +39,15 @@
   <div class="tmeta">
     <span class="chip">{{ env_chip }}</span>
     <span class="mono clock">{{ clock }}</span>
+    {#- no-JS theme switch: a plain GET link the server turns into a cookie +
+        303 (§10). A link rather than a bare form so the rest of the query
+        string — filters, paging — survives the switch; `qs_with` merges
+        `theme` into whatever is already in the URL. The error shell renders
+        without it, hence the fallback. -#}
+    {%- set theme_qs = qs_with(theme=next_theme) if qs_with else 'theme=' ~ next_theme %}
+    <a class="btn themetoggle" href="{{ request.url.path }}?{{ theme_qs }}"
+       aria-label="theme: {{ theme }} — switch to {{ next_theme }}"
+       title="theme: {{ theme }} — click for {{ next_theme }}">{{ theme_icon }}</a>
   </div>
 </header>
 

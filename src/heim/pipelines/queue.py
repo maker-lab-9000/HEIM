@@ -29,12 +29,17 @@ __all__ = [
 ]
 
 
-def payload_for(host: str, host_role: str, fingerprint: str, findings: list[dict] | None) -> dict:
+def payload_for(host: str, host_role: str, fingerprint: str, findings: list[dict] | None,
+                model: str = "") -> dict:
     return {
         "host": str(host or ""),
         "host_role": str(host_role or "guest"),
         "fingerprint": str(fingerprint or ""),
         "findings": list(findings or []),
+        # §5.1: the model this trigger chose, "" for the configured default.
+        # Always written so a payload says what it will run on, not what it
+        # happened to omit.
+        "model": str(model or ""),
     }
 
 
@@ -47,16 +52,23 @@ def enqueue_investigation(
     findings: list[dict] | None = None,
     requested_by: str = "cli",
     retry_of: int = 0,
+    model: str = "",
 ) -> int:
-    """Queue an investigation; returns the job id."""
+    """Queue an investigation; returns the job id.
+
+    ``model`` overrides the investigator's model for this run only (§5.1); ""
+    means the configured default. The caller validates it — the queue only
+    carries what it was handed.
+    """
     job_id = store.enqueue_job(
         kind="investigate",
-        payload=payload_for(host, host_role, fingerprint, findings),
+        payload=payload_for(host, host_role, fingerprint, findings, model),
         requested_by=requested_by,
         retry_of=retry_of,
     )
-    log.info("queued investigation job #%d for %s (by %s%s)", job_id, host, requested_by,
-             f", retry of #{retry_of}" if retry_of else "")
+    log.info("queued investigation job #%d for %s (by %s%s%s)", job_id, host, requested_by,
+             f", retry of #{retry_of}" if retry_of else "",
+             f", on {model}" if model else "")
     return job_id
 
 
@@ -125,4 +137,5 @@ def request_from_payload(payload: dict, rt, retry_of: int = 0) -> InvestigationR
         fingerprint=str(payload.get("fingerprint") or ""),
         findings=list(payload.get("findings") or []),
         retry_of=int(retry_of or 0),
+        model_override=str(payload.get("model") or ""),
     )

@@ -9,13 +9,28 @@
 <span class="tool t-{{ name|tool_key }}"><span class="tdot" aria-hidden="true"></span>{{ name }}</span>
 {%- endmacro %}
 
+{#- a host badge: colored dot + the host NAME, always both. The dot color comes
+    from the five categorical host slots (assigned in config order by
+    `host_var`); an unconfigured or sixth host gets the muted ink. Color never
+    carries identity on its own — the name is the primary encoding. -#}
+{% macro hostbadge(name) -%}
+{%- if name %}<span class="hbadge"><span class="hdot" aria-hidden="true"
+  style="background: var({{ name|host_var }})"></span>{{ name }}</span>
+{%- else %}<span class="ink3">{{ DASH }}</span>{% endif %}
+{%- endmacro %}
+
 {% macro sev(value) -%}
 {%- set p = value|pill -%}
 <span class="sev {{ p.cls }}"><span class="dot" aria-hidden="true">{{ p.icon }}</span>{{ p.label }}</span>
 {%- endmacro %}
 
+{#- a timestamp. When the value is missing or unparseable `iso` gives the dash,
+    which is not a valid `datetime=` — so the attributes (and the tooltip) are
+    dropped and only the dash text remains. -#}
 {% macro when(value) -%}
-<time class="mono" datetime="{{ value|iso }}" title="{{ value|iso }}">{{ value|rel }}</time>
+{%- set ts = value|iso -%}
+{%- if ts != DASH %}<time class="mono" datetime="{{ ts }}" title="{{ ts }}">{{ value|rel }}</time>
+{%- else %}<time class="mono">{{ value|rel }}</time>{% endif %}
 {%- endmacro %}
 
 {% macro empty(text) -%}
@@ -25,7 +40,22 @@
 {#- an action button: a real form first, htmx second (design spec §5).
     `fields` is the whole payload — fingerprints travel as form fields, never
     in the URL. Import this macro `with context` so `back` resolves. -#}
-{% macro act(action, label, fields, confirm='', cls='') -%}
+{#- the model picker (spec §5.1), rendered inside an investigate form when
+    settings.investigator_models lists anything. The empty first option means
+    "whatever the investigator agent is configured with", so the plain
+    no-JS post of an untouched form behaves exactly as it did before. -#}
+{% macro modelselect() -%}
+{%- if models %}
+  <select class="mselect mono" name="model" aria-label="Model for this run">
+    <option value="">default ({{ default_model }})</option>
+    {%- for mid in models %}
+    <option value="{{ mid }}">{{ mid }}</option>
+    {%- endfor %}
+  </select>
+{%- endif %}
+{%- endmacro %}
+
+{% macro act(action, label, fields, confirm='', cls='', model=false) -%}
 <form class="act" method="post" action="{{ action }}" hx-post="{{ action }}"
       hx-target="closest .acts" hx-swap="outerHTML"
       {%- if confirm %} hx-confirm="{{ confirm }}"{% endif %}>
@@ -33,8 +63,37 @@
   <input type="hidden" name="{{ name }}" value="{{ value }}">
   {%- endfor %}
   <input type="hidden" name="back" value="{{ back|default('/', true) }}">
+  {%- if model %}{{ modelselect() }}{% endif %}
   <button class="btn{{ ' ember' if cls }}" type="submit">{{ label }}</button>
 </form>
+{%- endmacro %}
+
+{#- a daily bar chart (spec §11), server-rendered: `c` is fmt.bar_chart()'s
+    precomputed geometry, so this places already-computed numbers and nothing
+    else. Two call sites — the overview's tokens-per-day and /costs' spend-per-
+    day — share it, which is why `id` is a parameter: the clip path is
+    document-scoped. Bars are drawn CHART_RADIUS too tall and clipped at the
+    baseline, so the corner radius rounds the top only. -#}
+{% macro daychart(c, aria, id='tchart') -%}
+<svg class="tchart" width="{{ c.width }}" height="{{ c.height }}"
+     viewBox="0 0 {{ c.width }} {{ c.height }}" role="img" aria-label="{{ aria }}">
+  <defs><clipPath id="{{ id }}-clip"><rect x="0" y="0"
+    width="{{ c.width }}" height="{{ c.baseline }}"/></clipPath></defs>
+  <g clip-path="url(#{{ id }}-clip)">
+    {%- for b in c.bars %}
+    <rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.rh }}"
+          rx="{{ c.radius }}" fill="var(--ember)"><title>{{ b.title }}</title></rect>
+    {%- endfor %}
+  </g>
+  <line class="base" x1="0" y1="{{ c.baseline + 0.5 }}"
+        x2="{{ c.width }}" y2="{{ c.baseline + 0.5 }}"/>
+  {%- for b in c.bars %}
+  <text class="wd" x="{{ b.mid }}" y="{{ c.label_y }}" text-anchor="middle">{{ b.weekday }}</text>
+  {%- if b.is_max %}
+  <text class="val" x="{{ b.mid }}" y="{{ b.y - 5 }}" text-anchor="middle">{{ b.label }}</text>
+  {%- endif %}
+  {%- endfor %}
+</svg>
 {%- endmacro %}
 
 {% macro muted(sup) -%}

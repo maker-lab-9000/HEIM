@@ -52,6 +52,52 @@ audit_log: audit.jsonl        # every executed/blocked tool call, one JSON line 
 max_concurrent_investigations: 2   # agent runs in flight at once (approval waits don't count)
 suppression_days: 90          # default mute window for a false positive (0 = forever)
 
+# Dead-man's switch: a healthchecks.io-style ping URL the daemon GETs after
+# every completed poll cycle — the external watchdog that notices when the box
+# HEIM itself runs on dies. Empty (the default) disables it.
+deadman_url: "${HEIM_DEADMAN_URL:-}"
+
+# Nightly housekeeping (03:30 local): a WAL-safe SQLite snapshot into
+# <db_path dir>/backups/heim-YYYYMMDD.sqlite3, then a retention prune.
+backup_keep: 14               # daily snapshots to keep (0 = never rotate)
+retention_days: 120           # prune resolved incidents, findings, runs and finished
+                              # investigations older than this (0 = keep forever)
+
+# Cost accounting (roadmap §5.6). Model id -> price per MILLION tokens, in
+# `currency` below; the ids must match the models in config/agents/*.yaml.
+# A model with no entry here is NOT priced: its cost is stored as 0 and the
+# dashboard renders an em dash instead of inventing a number.
+# EXAMPLE VALUES ONLY — check your provider's current pricing before trusting
+# any line you copy from here.
+# Model prices for cost accounting, USD per million tokens. Sourced from
+# Anthropic's public pricing (verified 2026-06-24) — re-check when providers
+# change rates; a model absent here renders as "—", never a guessed number.
+model_prices:
+  claude-fable-5:      { input: 10.00, output: 50.00 }
+  claude-opus-5:       { input:  5.00, output: 25.00 }
+  claude-opus-4-8:     { input:  5.00, output: 25.00 }
+  claude-opus-4-7:     { input:  5.00, output: 25.00 }
+  claude-opus-4-6:     { input:  5.00, output: 25.00 }
+  claude-sonnet-5:     { input:  3.00, output: 15.00 }
+  claude-sonnet-4-6:   { input:  3.00, output: 15.00 }
+  claude-haiku-4-5:    { input:  1.00, output:  5.00 }
+  # OpenRouter models: put the provider's rate here; free tiers are 0.
+  google/gemma-4-31b-it:free: { input: 0, output: 0 }
+currency: USD                 # "$" for USD, otherwise the bare code ("EUR 0.42")
+
+# Keep the agent's full message history with each investigation — for
+# post-morteming wrong RCAs; large (capped at 512 KB per investigation).
+# Also the prerequisite for `heim replay <id>`: the stored transcript is the
+# cassette an offline replay serves back to another model.
+store_transcripts: false
+
+# Exact model ids offered in the dashboard's investigate dropdown; empty =
+# default only (no select is rendered, every run uses the investigator agent's
+# model). List only ids that appear in `model_prices` above, so a run on the
+# chosen model is still priced. Example:
+#   investigator_models: [claude-opus-4-6, claude-haiku-4-5]
+investigator_models: []
+
 # Maps Prometheus `instance` label address prefixes to host names — used by the
 # alert poller and the daily aggregation to attribute metrics/alerts to hosts.
 # Matched in order: put longer / more specific prefixes FIRST. Extend when you

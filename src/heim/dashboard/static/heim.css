@@ -8,6 +8,16 @@
   --ok: #0ca30c; --warn: #fab219; --serious: #ec835a; --crit: #d03b3b;
   --tool-ssh: #C97A35; --tool-prometheus: #4A8AC2; --tool-ha: #C2609A;
   --tool-discover: #4F9E5A; --tool-proxmox: #8A6FD1; --tool-other: #A89E8C;
+  /* host slots alias the SAME validated categorical palette as the tools above
+     — one palette, two semantics; slots are handed out in config order and a
+     badge always prints the host name next to its dot. */
+  --host-1: #C97A35; --host-2: #4A8AC2; --host-3: #C2609A;
+  --host-4: #4F9E5A; --host-5: #8A6FD1;
+  /* the terminal islands (§10): command lines, result previews, code blocks.
+     They alias the dark surface here and are pinned to literal charcoal in
+     light mode — a terminal has no light mode. */
+  --term-bg: var(--raised); --term-ink: var(--ink);
+  --term-ink-2: var(--ink-2); --term-ember: var(--ember);
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --r: 6px; --pad: 8px;
@@ -48,6 +58,10 @@ a:hover { text-decoration: underline; }
 .spark { color: var(--ember); width: 17px; height: 22px; flex: none; display: none; }
 .lockup { color: var(--ember); width: 128px; height: auto; flex: none; }
 .visually-hidden { position: absolute; left: -9999px; }
+.tagline {
+  margin: -8px 0 14px; padding: 0 16px; color: var(--ink-3);
+  font: 0.6875rem/1.35 var(--mono); letter-spacing: .04em;
+}
 .nav { list-style: none; margin: 0; padding: 0; flex: 1; }
 .nav a {
   display: flex; gap: 10px; align-items: center; padding: 7px 16px;
@@ -107,7 +121,31 @@ main { margin-left: 200px; max-width: 1280px; padding: 16px; }
 .stat.is-running { border-color: var(--ember-dim); }
 .stat.is-running .hero { color: var(--ember); }
 
+/* tool usage: the burn line's bar, reused per row as a magnitude encoding */
+.tutbl .c-calls, .tutbl .c-blocked, .tutbl .c-tok { width: 5.5em; }
+.tutbl .c-avg { width: 6em; }
+.tutbl .c-share { width: 22%; }
+.tubar {
+  display: block; height: 3px; background: var(--ember-dim); border-radius: 2px;
+  overflow: hidden; margin: 6px 0 0;
+}
+.tubar .seg { display: block; height: 100%; background: var(--ember); min-width: 1px; }
+/* the agent's own note about a tool: quiet, full width, under its row */
+.tufb td { border-top: 0; padding-top: 0; font-size: 0.8125rem; }
+.tufb-note { margin: 8px 0 0; font-size: 0.8125rem; }
+
+/* health card: the analyst's words, one step louder than the run lines */
+.health .htext { color: var(--ink); font-size: 0.9375rem; }
+.health .prose { margin: 6px 0 8px; }
+.health > .eyebrow { margin: 0; }
+.hstrip { list-style: none; display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 10px 0 0; padding: 0; }
+.hstrip li { border: 1px solid var(--line); border-radius: var(--r); padding: 4px 10px; }
+.hstrip a { display: flex; gap: 8px; align-items: baseline; color: inherit; }
+.hstrip a:hover { text-decoration: none; border-color: var(--ember); }
+.health .headline + .hstrip, .health .eyebrow + .hstrip { margin-top: 12px; }
+
 .empty { margin: 4px 0; color: var(--ink-3); font-size: 0.8125rem; }
+.ok-empty::first-letter { color: var(--ok); }
 .errmsg { color: var(--serious); margin: 4px 0; }
 
 /* tables */
@@ -156,6 +194,15 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .t-discover .tdot { background: var(--tool-discover); }
 .t-proxmox .tdot { background: var(--tool-proxmox); }
 
+.hbadge {
+  display: inline-flex; gap: 6px; align-items: baseline; white-space: nowrap;
+  font-family: var(--mono); font-size: 0.8125rem; color: var(--ink);
+}
+.hbadge .hdot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  transform: translateY(-1px); background: var(--ink-3);
+}
+
 /* investigation */
 
 .imeta {
@@ -187,17 +234,27 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .ehdr { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; margin: 0 0 4px; }
 .smeta { font-size: 0.6875rem; color: var(--ink-2); white-space: nowrap; }
 .cmd {
-  margin: 0 0 4px; padding: 4px 8px; background: var(--raised); border-radius: 4px;
-  font-size: 0.8125rem; color: var(--ink); white-space: pre-wrap; word-break: break-word;
+  margin: 0 0 4px; padding: 4px 8px; background: var(--term-bg); border-radius: 4px;
+  font-size: 0.8125rem; color: var(--term-ink); white-space: pre-wrap; word-break: break-word;
 }
-.cmd .prompt { color: var(--ember); }
+.cmd .prompt { color: var(--term-ember); }
 .rline { font-size: 0.8125rem; color: var(--ink-2); }
 .rfull {
-  margin: 6px 0 0; padding: 8px; background: var(--raised); border-radius: 4px;
-  font-size: 0.8125rem; color: var(--ink-2); white-space: pre-wrap; word-break: break-word;
+  margin: 6px 0 0; padding: 8px; background: var(--term-bg); border-radius: 4px;
+  font-size: 0.8125rem; color: var(--term-ink-2); white-space: pre-wrap; word-break: break-word;
   max-height: 22em; overflow: auto;
 }
 .entry-empty { padding: 8px 0; }
+
+/* full transcript (§5.6): quiet, mono, folded away — a post-mortem tool */
+.fulltx .turn { padding: 8px 0; border-top: 1px solid var(--line); }
+.fulltx .turn:first-of-type { border-top: 0; }
+.fulltx .turn > .eyebrow { margin: 0 0 4px; }
+.wrap {
+  margin: 0 0 6px; padding: 6px 8px; background: var(--term-bg); border-radius: 4px;
+  font-size: 0.8125rem; color: var(--term-ink-2); white-space: pre-wrap; word-break: break-word;
+  max-height: 20em; overflow: auto;
+}
 
 .outcome {
   display: flex; gap: 8px; align-items: baseline; margin: 0 0 16px; padding: 10px 12px;
@@ -207,9 +264,29 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 
 /* findings & hosts */
 
+/* the findings table: fixed column widths so the summary column absorbs all
+   the slack and nothing shifts between runs */
+.ftbl .c-sev { width: 8em; }
+.ftbl .c-host { width: 12em; }
+.ftbl .c-metric { width: 12em; }
+.ftbl .c-verdict { width: 15em; }
+.ftbl .fsum { color: var(--ink); }
+.ftbl td .acts { margin: 0; flex-direction: column; align-items: flex-start; gap: 4px; }
+.ftbl details { margin-top: 2px; }
+
+/* the recommendations table (§9): the advice absorbs the slack, the two
+   actions stay on one line at the end of the row */
+.rtbl .c-host { width: 12em; }
+.rtbl .c-src { width: 14em; }
+.rtbl .c-when { width: 7em; }
+.rtbl .c-acts { width: 15em; }
+.rtbl .rectext { color: var(--ink); }
+.rtbl td .acts { margin: 0; }
+
 .flist { list-style: none; margin: 0; padding: 0; }
 .flist > li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 0.8125rem; }
 .flist > li:last-child { border-bottom: 0; }
+.flist .acts { margin: 0; display: inline-flex; }
 .fhead, .headline { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin: 0; }
 .headline { margin: 8px 0; font-size: 0.875rem; }
 .fsum { color: var(--ink); }
@@ -225,7 +302,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .prose { color: var(--ink-2); font-size: 0.875rem; margin: 6px 0; }
 .prose h1, .prose h2, .prose h3 { color: var(--ink); font: 1.0625rem/1.3 var(--sans); margin: 16px 0 6px; }
 .prose h2:first-child { margin-top: 4px; }
-.prose code, .prose pre { background: var(--raised); border-radius: 4px; font-family: var(--mono); font-size: 0.8125rem; }
+.prose code, .prose pre { background: var(--term-bg); color: var(--term-ink-2); border-radius: 4px; font-family: var(--mono); font-size: 0.8125rem; }
 .prose code { padding: 1px 4px; }
 .prose pre { padding: 8px; overflow: auto; }
 .prose table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
@@ -269,14 +346,44 @@ form.act { display: inline-block; margin: 0; }
   padding: 2px 8px; color: var(--ink-2); cursor: pointer;
   font: 0.6875rem/1.6 var(--mono); letter-spacing: .08em; text-transform: uppercase;
 }
+a.btn { display: inline-block; text-decoration: none; }
 .btn:hover { border-color: var(--ember); color: var(--ember); }
+a.btn:hover { text-decoration: none; }
 .btn.ember { border-color: var(--ember-dim); color: var(--ember); }
 .btn[disabled] { color: var(--ink-3); cursor: not-allowed; }
 .btn[disabled]:hover { border-color: var(--line); color: var(--ink-3); }
+/* the trigger-time model picker (§5.1) — quiet, sits inside the act form */
+.mselect {
+  background: var(--raised); color: var(--ink-2); border: 1px solid var(--line);
+  border-radius: 4px; padding: 1px 4px; margin-right: 6px;
+  font: 0.6875rem/1.6 var(--mono);
+}
 .flash { flex-basis: 100%; margin: 2px 0 0; font-size: 0.6875rem; color: var(--ink-2); }
 .flash.err { color: var(--serious); }
+.loadmore, .loadmore td { text-align: center; margin: 8px 0; }
+.loadmore:hover { background: none; }
 .ghost td { color: var(--ink-3); }
 .ghost:hover { background: none; }
+
+/* metrics (spec §6) */
+
+.mline { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0; font-size: 0.8125rem; }
+.mline .mref { margin-left: auto; }
+.mhost { margin: 0 0 4px; display: flex; gap: 10px; align-items: center; font-size: 1.0625rem; }
+.mcat { margin: 12px 0 2px; }
+.tbl .trend { color: var(--ink-2); white-space: nowrap; }
+/* A host card stacks one table per category. Auto layout sizes each of them
+   independently, so the columns stagger down the card; fixed layout with
+   percentage widths gives every category table the same geometry and the
+   card reads as one grid. Percentages (not ems) so it survives the rail
+   collapsing at 900px without a horizontal scrollbar. */
+.mtbl { table-layout: fixed; }
+.mtbl .c-flag { width: 11%; }
+.mtbl .c-cur, .mtbl .c-avg { width: 12%; }
+.mtbl .c-trend { width: 20%; }
+.mtbl .c-delta { width: 10%; }
+.mtbl .c-mname { overflow-wrap: anywhere; }
+.mtbl .c-trend, .mtbl .c-cur, .mtbl .c-avg { overflow: hidden; text-overflow: ellipsis; }
 
 /* responsive */
 
@@ -284,6 +391,7 @@ form.act { display: inline-block; margin: 0; }
   .rail { width: 56px; }
   .mark { justify-content: center; padding: 4px 0 16px; }
   .mark .word, .nav .lbl, .daemon .lbl { position: absolute; left: -9999px; }
+  .tagline { display: none; }
   .lockup { display: none; }
   .spark { display: block; }
   .nav a { justify-content: center; padding: 10px 0; }
@@ -294,3 +402,49 @@ form.act { display: inline-block; margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+.runline.dim { color: var(--ink-2); }
+.qlink { color: var(--ember); text-decoration: none; }
+.qlink:hover { text-decoration: underline; }
+
+/* topbar theme toggle (§10): a plain GET link, so it works with no JS and
+   carries the current query string (filters, paging) through the switch */
+.themetoggle { font-size: 0.8125rem; letter-spacing: 0; padding: 0 6px; }
+
+/* ------------------------------------------------------------- light mode
+   §10 "morning ash": an override set, not a redesign. Cool-neutral ash
+   surfaces + neutral ink, ember the only warmth left glowing. The tool/host
+   identity slots and the fixed status colors are MODE-INVARIANT (validated on
+   both surfaces, always paired with a text label) — do not re-theme them.
+   The term-* slots pin the terminal islands to their native charcoal, and
+   --term-bg is §10's literal #1B1917 on purpose: an island reads a shade
+   deeper than in true dark mode, where the slot aliases --raised. Keep it. */
+[data-theme="light"] {
+  --bg: #ECEEED; --panel: #FAFBFA; --raised: #E4E6E4; --line: #D6D9D6;
+  --ink: #22252B; --ink-2: #5B6169; --ink-3: #8B9199;
+  --ember: #B05E1A; --ember-dim: #E8D0B4;
+  --term-bg: #1B1917; --term-ink: #E9E2D4;
+  --term-ink-2: #A89E8C; --term-ember: #E88C3A;
+}
+/* auto mode: same override set when the OS asks for light and no explicit
+   theme cookie has pinned dark. Duplicated because a media query cannot join
+   a selector list. The two MUST stay token-identical: this selector is
+   (0,2,0) — :not()'s argument counts — so it outweighs the (0,1,0) block
+   above and wins wherever both match. test_light_mode.py diffs them. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #ECEEED; --panel: #FAFBFA; --raised: #E4E6E4; --line: #D6D9D6;
+    --ink: #22252B; --ink-2: #5B6169; --ink-3: #8B9199;
+    --ember: #B05E1A; --ember-dim: #E8D0B4;
+    --term-bg: #1B1917; --term-ink: #E9E2D4;
+    --term-ink-2: #A89E8C; --term-ember: #E88C3A;
+  }
+}
+
+/* token usage by weekday (spec §11): server-rendered SVG, single series, so
+   the only color is the ember accent and the card title is the legend. */
+.tchart { display: block; max-width: 100%; height: auto; margin: 2px 0 6px; }
+.tchart text { font-family: var(--mono); font-size: 11px; fill: var(--ink-3); }
+.tchart .val { fill: var(--ink-2); }
+.tchart .base { stroke: var(--line); stroke-width: 1; }
+.tsum { color: var(--ink-3); font-size: 0.8125rem; }

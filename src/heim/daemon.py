@@ -9,16 +9,22 @@ A third task drains the ``jobs`` queue (roadmap §5.2): the dashboard and the
 CLI only *insert* rows, the daemon stays the sole executor. On startup any job
 or investigation left mid-flight by a crash is swept to
 interrupted/failed, so the tables never lie about what is running.
+
+Ops hardening (roadmap §5.7) hangs off the same scheduler: every completed
+poll pings the dead-man's switch, and a nightly job snapshots the SQLite store
+into ``<data-dir>/backups/`` before pruning history past the retention window.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from heim.channels import deadman
 from heim.pipelines.daily import run_daily
 from heim.pipelines.investigate import run_investigation
 from heim.pipelines.poller import run_poll
@@ -29,6 +35,15 @@ log = logging.getLogger(__name__)
 
 #: How often an idle queue worker re-checks for work.
 QUEUE_POLL_SECONDS = 4.0
+
+#: When the nightly backup + retention job runs (configured timezone). Deep in
+#: the quiet hours, far from both daily report slots.
+BACKUP_HOUR = 3
+BACKUP_MINUTE = 30
+
+#: Backup filename pattern — one snapshot per day, so a re-run overwrites
+#: rather than piling up, and plain name sort == chronological order.
+BACKUP_STEM = "heim-%Y%m%d"
 
 
 async def _daily_job(rt: Runtime) -> None:
@@ -45,6 +60,72 @@ async def _poll_job(rt: Runtime) -> None:
         await run_poll(rt, dispatch_concurrently=True)
     except Exception:
         log.exception("alert poll failed")  # next poll retries in a few minutes
+        return
+    # Every *completed* cycle pings, including the no-op ones: the switch
+    # asserts "the scheduler is alive", not "an incident happened". A poll
+    # that raised deliberately stays silent — that is the outage to report.
+    await deadman.ping(rt.config.settings.deadman_url)
+
+
+# ------------------------------------------------ nightly backup + retention
+
+
+def backups_dir(db_path: str | Path) -> Path:
+    """``<db file>/../backups`` — the store is the only state worth keeping."""
+    return Path(db_path).expanduser().resolve().parent / "backups"
+
+
+def prune_backups(directory: Path, keep: int) -> list[Path]:
+    """Keep the newest ``keep`` snapshots; returns what was removed.
+
+    Ordering is by filename (``heim-YYYYMMDD.sqlite3`` sorts chronologically),
+    which survives mtime rewrites from a restore or an rsync. ``keep <= 0``
+    disables pruning — never interpret it as "delete everything".
+    """
+    if keep <= 0:
+        return []
+    snapshots = sorted(Path(directory).glob("heim-*.sqlite3"), reverse=True)
+    removed = []
+    for path in snapshots[keep:]:
+        try:
+            path.unlink()
+            removed.append(path)
+        except OSError:
+            log.exception("could not remove old backup %s", path)
+    return removed
+
+
+def run_backup(rt: Runtime) -> Path:
+    """Write today's snapshot and rotate the backups dir. May raise."""
+    settings = rt.config.settings
+    dest = backups_dir(settings.db_path) / f"{rt.now().strftime(BACKUP_STEM)}.sqlite3"
+    rt.store.backup_to(dest)
+    removed = prune_backups(dest.parent, int(settings.backup_keep))
+    log.info("backup written: %s (%d KiB)%s", dest, dest.stat().st_size // 1024,
+             f", {len(removed)} old snapshot(s) removed" if removed else "")
+    return dest
+
+
+async def _backup_job(rt: Runtime) -> None:
+    """Nightly housekeeping: snapshot first, prune second, never crash.
+
+    Order matters — the backup is taken *before* the prune, so the snapshot
+    still contains everything retention is about to delete. If the backup
+    fails the prune is skipped entirely: deleting history we just failed to
+    copy is the one way this job could do real damage.
+    """
+    try:
+        run_backup(rt)
+    except Exception:
+        log.exception("nightly backup failed — skipping the retention prune")
+        return
+
+    try:
+        counts = rt.store.prune(rt.now_iso(), int(rt.config.settings.retention_days))
+        if counts:
+            log.info("retention prune deleted %s", counts)
+    except Exception:
+        log.exception("retention prune failed")
 
 
 async def run_job(rt: Runtime, job: dict) -> None:
@@ -115,6 +196,9 @@ async def run_daemon() -> None:
                           args=[rt], name=f"daily-{hhmm}", misfire_grace_time=3600)
     scheduler.add_job(_poll_job, IntervalTrigger(minutes=rt.config.settings.schedules.poll_minutes),
                       args=[rt], name="alert-poller", misfire_grace_time=120)
+    scheduler.add_job(_backup_job,
+                      CronTrigger(hour=BACKUP_HOUR, minute=BACKUP_MINUTE, timezone=tz),
+                      args=[rt], name="nightly-backup", misfire_grace_time=3600)
 
     try:
         swept = rt.store.sweep_interrupted()
@@ -126,11 +210,12 @@ async def run_daemon() -> None:
     scheduler.start()
     worker = asyncio.create_task(_queue_worker(rt), name="queue-worker")
     log.info(
-        "HEIM daemon up — daily at %s (%s), poller every %d min, %d hosts, telegram %s, "
-        "%d job(s) queued",
+        "HEIM daemon up — daily at %s (%s), poller every %d min, backup %02d:%02d, "
+        "%d hosts, telegram %s, dead-man %s, %d job(s) queued",
         ", ".join(rt.config.settings.schedules.daily), tz,
-        rt.config.settings.schedules.poll_minutes, len(rt.config.hosts),
-        "on" if rt.telegram else "off", rt.store.queued_count(),
+        rt.config.settings.schedules.poll_minutes, BACKUP_HOUR, BACKUP_MINUTE,
+        len(rt.config.hosts), "on" if rt.telegram else "off",
+        "on" if rt.config.settings.deadman_url else "off", rt.store.queued_count(),
     )
     await rt.notify("🟢 HEIM daemon started")
     try:

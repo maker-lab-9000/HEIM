@@ -3,13 +3,13 @@
 
   {%- if burn %}
   <div class="burn" role="img"
-       aria-label="Tool-output share per step — {{ burn|length }} steps">
+       aria-label="Share of {{ burn[0].basis }} per step — {{ burn|length }} steps">
     {%- for s in burn %}
     <span class="seg t-{{ s.tool_key }}{{ ' blocked' if s.blocked }}"
           style="width:{{ s.pct }}%" title="{{ s.title }}"></span>
     {%- endfor %}
   </div>
-  <p class="burn-note eyebrow">tool-output share per step</p>
+  <p class="burn-note eyebrow">share of {{ burn[0].basis }} per step</p>
   {%- endif %}
 
   <ol class="transcript">
@@ -17,8 +17,12 @@
     <li class="entry{{ ' blocked' if s.blocked }}">
       <span class="seq mono">{{ '%02d'|format(s.seq) }}</span>
       <div class="ebody">
+        {#- ~Nk tok is the turn's usage credited to this step (§5.6): the first
+            call of a multi-tool turn carries the turn's whole delta, hence the
+            tilde — a per-step number is a lower bound, not a measurement. -#}
         <p class="ehdr">{{ m.tool(s.tool) }}<span class="smeta mono">{% if s.blocked %}<span
-          class="st-crit">⛔ blocked</span> · {% endif %}{{ s.duration_ms|dur_ms }} · {{ s.result_bytes|size }}</span></p>
+          class="st-crit">⛔ blocked</span> · {% endif %}{{ s.duration_ms|dur_ms }} · {{ s.result_bytes|size }}{%
+          if s.input_tokens %} · ~{{ s.input_tokens|tokens }} tok{% endif %}</span></p>
         <pre class="cmd mono"><span class="prompt" aria-hidden="true">$ </span>{{ s|command }}</pre>
         {%- if s.result_preview %}
         {%- set head = (s.result_preview.strip().splitlines()|first)|default('', true) %}

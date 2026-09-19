@@ -10,7 +10,13 @@ the approval is asked — carrying its provenance (the triggering ``findings``
 and the rendered brief) from the start, so a pending or declined run still
 shows what it was about — and carries its status through the flow, while the
 runner's ``on_step`` callback streams the agent's tool timeline into
-``investigation_steps`` as it happens. The agent phase runs under a
+``investigation_steps`` as it happens, now with the per-turn token
+attribution and (optionally, ``settings.store_transcripts``) the agent's full
+message history, capped at 512 KB; the finished row also carries the run's
+cost in ``settings.currency`` (roadmap §5.6). The report's optional
+``## Tooling feedback`` section — the agent's own notes on what would have
+made a tool more useful — is indexed into ``tool_feedback`` on the way past
+(``record_tool_feedback``, shared with the replay pipeline). The agent phase runs under a
 process-wide semaphore (``settings.max_concurrent_investigations``) acquired
 *after* approval, so a six-hour approval wait never occupies a slot.
 
@@ -27,13 +33,20 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
 from heim.agent.runner import run_agent
-from heim.config import expand_env
+from heim.config import AgentCfg, expand_env
+from heim.costing import cost_of
 from heim.channels.telegram import chunk_text
-from heim.reports.render import extract_sections, investigation_email, salvage
+from heim.reports.render import (
+    extract_sections,
+    extract_tool_feedback,
+    investigation_email,
+    salvage,
+)
 from heim.runtime import Runtime
 from heim.tools.base import ToolContext, load_tools
 
@@ -50,11 +63,24 @@ class InvestigationRequest:
     fingerprint: str = ""
     findings: list[dict] = field(default_factory=list)
     retry_of: int = 0                 # investigation id this one re-runs (§5.5)
+    model_override: str = ""          # this run only; "" = the configured model (§5.1)
 
     @property
     def tag(self) -> str:
         qid = self.fingerprint.split("|")[1] if "|" in self.fingerprint else ""
         return f"{self.host}|{qid}" if qid else self.host
+
+
+def with_model(agent: AgentCfg, model: str | None) -> AgentCfg:
+    """The agent config to run with, given an optional per-run model override.
+
+    A *copy* — never a mutation of ``cfg.agents["investigator"]``, which is
+    shared by every concurrent run and by the next one. Introduced by the
+    replay harness (§5.6) and reused verbatim by the trigger-time choice
+    (§5.1), so there is exactly one place that decides what "override the
+    model" means; both then price and record the model the copy carries.
+    """
+    return agent.model_copy(update={"model": model}) if model else agent
 
 
 def findings_text(findings: list[dict]) -> str:
@@ -87,29 +113,52 @@ def _approval_text(req: InvestigationRequest, ftext: str) -> str:
         else "SSH in (read-only)" if req.host_role == "guest"
         else "query Prometheus and the HA API (read-only)"
     )
+    # §5.1: name the model only when the trigger chose one — on the default
+    # path there is nothing to disclose, and the line would be noise.
+    chosen = f" · model: {req.model_override}" if req.model_override else ""
     return (
-        f"🔍 Investigation approval needed for host \"{req.host}\".{note}\n\n"
+        f"🔍 Investigation approval needed for host \"{req.host}\".{chosen}{note}\n\n"
         f"Findings that triggered it:\n{ftext}\n\n"
         f"Approve to let the monitoring agent {how} and find the root cause. If you decline or "
         f"don't respond, no investigation runs and it will be re-proposed on the next monitoring run."
     )
 
 
-def _build_system_prompt(rt: Runtime, jenv: Environment, req: InvestigationRequest) -> str:
+def build_system_prompt(rt: Runtime, jenv: Environment, host: str, *,
+                        prompt_file: str | Path | None = None) -> str:
+    """Render the investigator's system prompt for ``host``.
+
+    Factored out of the pipeline so the replay harness (§5.6) can rebuild a
+    *byte-identical* prompt for a stored investigation instead of an
+    approximation of one — and, with ``prompt_file``, swap in a candidate
+    prompt that still goes through the same jinja render + ``${VAR}``
+    expansion, so a prompt experiment differs from the baseline in exactly the
+    text being tested.
+    """
     cfg = rt.config
     agent = cfg.agents["investigator"]
-    ordered = sorted(cfg.hosts.values(), key=lambda h: (h.name != req.host, h.name))
+    ordered = sorted(cfg.hosts.values(), key=lambda h: (h.name != host, h.name))
     facts = "\n".join(h.facts.strip() for h in ordered if h.facts.strip())
     privileges = "\n".join(h.privileges.strip() for h in cfg.hosts.values() if h.privileges.strip())
+    if prompt_file:
+        source = str(prompt_file)
+        template = jenv.from_string(Path(prompt_file).read_text())
+    else:
+        source = agent.prompt
+        template = jenv.get_template(agent.prompt)
     return expand_env(
-        jenv.get_template(agent.prompt).render(
+        template.render(
             now=rt.now_iso(),
             facts=facts,
             privileges=privileges or "(no SSH privileges configured)",
             soft_step_budget=agent.soft_step_budget,
         ),
-        source=agent.prompt,
+        source=source,
     )
+
+
+def _build_system_prompt(rt: Runtime, jenv: Environment, req: InvestigationRequest) -> str:
+    return build_system_prompt(rt, jenv, req.host)
 
 
 def _action(host: str, phase: str, fingerprint: str, message: str, ts: str) -> dict:
@@ -127,8 +176,15 @@ def _is_blocked(result_str: str) -> bool:
 
 
 def _step_recorder(rt: Runtime, investigation_id: int):
-    """Build the runner's ``on_step`` callback: persist each executed step."""
-    def on_step(seq: int, tool: str, args: dict, result: str, duration_ms: float) -> None:
+    """Build the runner's ``on_step`` callback: persist each executed step.
+
+    ``turn_in``/``turn_out`` are the usage of the assistant turn that asked for
+    this call, attributed to the turn's first executed step (see
+    ``agent.runner.OnStep``) — so the column sums to the run total even though
+    an individual sibling step reads 0.
+    """
+    def on_step(seq: int, tool: str, args: dict, result: str, duration_ms: float,
+                turn_in: int = 0, turn_out: int = 0) -> None:
         text = result if isinstance(result, str) else str(result)
         rt.store.add_step(
             investigation_id,
@@ -139,8 +195,63 @@ def _step_recorder(rt: Runtime, investigation_id: int):
             result_bytes=len(text),
             blocked=_is_blocked(text),
             duration_ms=int(round(duration_ms)),
+            input_tokens=int(turn_in or 0),
+            output_tokens=int(turn_out or 0),
         )
     return on_step
+
+
+def record_tool_feedback(rt: Runtime, investigation_id: int, report_md: str) -> int:
+    """Persist the report's optional ``## Tooling feedback`` lines.
+
+    Called for complete *and* incomplete runs — an investigation that ran out
+    of evidence is exactly the one with something to say about its tools — and
+    from the replay pipeline through the same path, so a replayed model's
+    opinion lands next to the original's. Never raises: a suggestion is a nice
+    extra, not part of the report contract.
+    """
+    written = 0
+    try:
+        for tool, suggestion in extract_tool_feedback(report_md or ""):
+            written += 1 if rt.store.add_tool_feedback(
+                investigation_id, tool, suggestion, created_at=rt.now_iso()) else 0
+    except Exception:
+        log.exception("recording tool feedback for investigation #%s failed", investigation_id)
+    return written
+
+
+#: Hard ceiling on a stored transcript (roadmap §5.6). Transcripts exist for
+#: post-morteming a wrong root cause, and the newest turns are the ones that
+#: produced the conclusion — so the cap drops turns from the FRONT and leaves a
+#: marker entry saying how many went, rather than truncating mid-JSON or
+#: silently storing a prefix that stops before the reasoning.
+TRANSCRIPT_MAX_BYTES = 512 * 1024
+
+
+def _transcript_json(entries: list[dict] | None) -> str:
+    """Serialize a transcript, capped at ``TRANSCRIPT_MAX_BYTES``.
+
+    Returns '' for an empty transcript (the "not collected" value the column
+    defaults to). A single oversized turn degenerates to the marker alone —
+    honest about having kept nothing, rather than writing half a JSON array.
+    """
+    kept = list(entries or [])
+    if not kept:
+        return ""
+    dropped = 0
+    while True:
+        marker = [{
+            "role": "system",
+            "truncated": dropped,
+            "content": [{"type": "text", "text": (
+                f"… {dropped} earlier turn(s) dropped — transcript capped at "
+                f"{TRANSCRIPT_MAX_BYTES // 1024} KB, newest kept.")}],
+        }] if dropped else []
+        text = json.dumps(marker + kept, ensure_ascii=False, default=str)
+        if len(text.encode("utf-8")) <= TRANSCRIPT_MAX_BYTES or not kept:
+            return text
+        kept.pop(0)
+        dropped += 1
 
 
 #: How often the approval wait re-reads ``investigations.approval_decision``.
@@ -227,7 +338,9 @@ async def run_investigation(
     (the queue worker) can capture it.
     """
     cfg = rt.config
-    agent_cfg = cfg.agents["investigator"]
+    # §5.1: the trigger may pick the model for this run only — same copy the
+    # replay harness makes, so the row, the cost and the API call all agree.
+    agent_cfg = with_model(cfg.agents["investigator"], req.model_override)
     jenv = Environment(loader=FileSystemLoader(cfg.prompts_dir))
     ftext = findings_text(req.findings)
     generated_at = rt.now_iso()
@@ -304,11 +417,21 @@ async def run_investigation(
             system = _build_system_prompt(rt, jenv, req)
             ctx = ToolContext(config=cfg, tag=req.tag, feed=rt.feed, audit=rt.audit)
             tools = load_tools(agent_cfg.tools, cfg, ctx)
-            result = await run_agent(agent_cfg, system=system, user_prompt=brief, tools=tools,
-                                     on_step=_step_recorder(rt, inv_id))
+            result = await run_agent(
+                agent_cfg, system=system, user_prompt=brief, tools=tools,
+                on_step=_step_recorder(rt, inv_id),
+                collect_transcript=cfg.settings.store_transcripts,
+            )
 
             # --------------------------------------------------------- rendering
             report = salvage(result.output_text, ftext)
+            # the agent's own notes on its toolbox (optional section) — kept in
+            # the report AND indexed per tool for the dashboard's usage card
+            record_tool_feedback(rt, inv_id, report.report_md)
+            # §5.6: price the run. An unpriced model stores 0 — the dashboard
+            # renders that as an em dash, never as "$0.00".
+            cost = cost_of(agent_cfg.model, result.input_tokens, result.output_tokens,
+                           cfg.settings.model_prices)
             rt.store.update_investigation(
                 inv_id,
                 status="incomplete" if report.incomplete else "complete",
@@ -317,6 +440,8 @@ async def run_investigation(
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
                 n_steps=len(result.steps),
+                cost=float(cost or 0.0),
+                transcript_json=_transcript_json(getattr(result, "transcript", None)),
                 finished_at=rt.now_iso(),
             )
             subject, html = investigation_email(
@@ -417,6 +542,7 @@ async def run_investigation(
         "steps": len(result.steps),
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
+        "cost": float(cost or 0.0),
         "subject": subject,
         "report_md": report.report_md,
     }

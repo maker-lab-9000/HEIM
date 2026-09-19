@@ -18,13 +18,57 @@ drains) and ``suppressions`` (muted fingerprints) — plus the
 ``investigations.approval_decision`` column used for approvals that arrive
 from outside Telegram. These are the one place where a second process writes,
 so the connection also sets ``busy_timeout``.
+
+Roadmap §5.6 adds the observability columns — per-step token attribution
+(``investigation_steps.input_tokens/output_tokens``), money
+(``investigations.cost``, ``runs.input_tokens/output_tokens/cost``) and the
+optional full agent transcript (``investigations.transcript_json``) — all
+through the same ``_ADDED_COLUMNS`` migration map, plus ``usage_totals()`` for
+the ``/telemetry`` exposition. Its eval/replay harness adds
+``investigations.replay_of`` (the run this one replays offline) and the
+``tool_feedback`` table — the agent's own "this tool would be more useful if…"
+lines, latest-per-tool on the dashboard's tool-usage card.
+
+Roadmap §5.7 adds the two housekeeping operations the daemon runs nightly:
+``backup_to`` (SQLite's online backup API — WAL-safe, unlike copying the file)
+and ``prune`` (retention: finished history out, everything still live in).
 """
 from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+#: weekday initials for the token chart's x labels (spec §11), Monday first —
+#: ``date.weekday()`` order, so the list is indexed by it directly.
+_WEEKDAYS = ["mo", "tu", "we", "th", "fr", "sa", "su"]
+
+#: the two tables HEIM spends tokens (and money) in, with the column that dates
+#: a row — the daily charts and the cost aggregations all read exactly these
+_SPEND_TABLES = (("investigations", "started_at"), ("runs", "run_at"))
+
+#: Closed jobs are receipts for the queue UI, not history — they are pruned on
+#: the shorter of the retention window and this many days.
+JOB_RETENTION_MAX_DAYS = 30
+
+#: Reclaiming space costs a full file rewrite, so only do it when a prune
+#: actually freed something worth rewriting for.
+VACUUM_AFTER_DELETIONS = 500
+
+
+def _shift_iso(now_iso: str, days: int) -> str:
+    """``now_iso`` minus ``days``, rendered for lexical comparison.
+
+    Keeps the offset of the input (an unparseable value falls back to UTC now,
+    so a retention job can never crash on a malformed clock string).
+    """
+    try:
+        base = datetime.fromisoformat(str(now_iso))
+    except (TypeError, ValueError):
+        base = datetime.now(timezone.utc)
+    return (base - timedelta(days=int(days))).isoformat(timespec="milliseconds")
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS incidents (
@@ -115,6 +159,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at      TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS tool_feedback (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    investigation_id INTEGER,
+    tool             TEXT NOT NULL DEFAULT '',
+    suggestion       TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS suppressions (
     fingerprint TEXT PRIMARY KEY,
     until       TEXT NOT NULL DEFAULT '',   -- '' = forever
@@ -122,7 +174,18 @@ CREATE TABLE IF NOT EXISTS suppressions (
     created_at  TEXT NOT NULL DEFAULT ''
 );
 
+-- §9: what the user has already done about a recommendation. Keyed by the
+-- content hash of the advice (see dashboard.recommendations.rec_key), not by a
+-- row id, so ticking an item off survives the finding or report being
+-- regenerated with the same text.
+CREATE TABLE IF NOT EXISTS recommendation_states (
+    key        TEXT PRIMARY KEY,
+    state      TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_steps_investigation ON investigation_steps (investigation_id, seq);
+CREATE INDEX IF NOT EXISTS idx_tool_feedback_tool ON tool_feedback (tool, id);
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings (run_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status, id);
 """
@@ -138,6 +201,35 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # the findings that triggered the run, as the pipeline received them —
         # the provenance the dashboard's "triggered by" card reads
         ("findings_json", "TEXT NOT NULL DEFAULT ''"),
+        # §5.6: money spent, in settings.currency. 0 means "not priced" (the
+        # model has no entry in settings.model_prices), never "free".
+        ("cost", "REAL NOT NULL DEFAULT 0"),
+        # §5.6: the agent's full message history, JSON, capped — only written
+        # when settings.store_transcripts is on. '' = not collected.
+        ("transcript_json", "TEXT NOT NULL DEFAULT ''"),
+        # §5.6 eval harness: the investigation this row REPLAYS offline
+        # (same brief, same recorded tool results, different model/prompt).
+        # 0 = not a replay. Distinct from retry_of, which re-runs for real.
+        ("replay_of", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "investigation_steps": [
+        # §5.6: usage of the assistant turn that requested this call. When one
+        # turn issued several calls the first carries the whole delta and its
+        # siblings carry 0, so the column SUMs to the run's real usage.
+        ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "runs": [
+        # §5.6: the analyst completion's usage and cost, same semantics as
+        # the investigations columns above.
+        ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("cost", "REAL NOT NULL DEFAULT 0"),
+        # The analyst's verdict in words. `overall` alone is a status word;
+        # these two are what the run actually said, and until now they lived
+        # only in the email. The dashboard's health card reads them.
+        ("headline", "TEXT NOT NULL DEFAULT ''"),
+        ("summary", "TEXT NOT NULL DEFAULT ''"),
     ],
 }
 
@@ -152,10 +244,11 @@ _INVESTIGATION_COLS = [
     "fingerprint", "host", "host_role", "agent_name", "model", "trigger", "status",
     "started_at", "finished_at", "input_tokens", "output_tokens", "n_steps",
     "brief_md", "report_md", "incomplete_reason", "outcome", "retry_of",
-    "approval_decision", "findings_json",
+    "approval_decision", "findings_json", "cost", "transcript_json", "replay_of",
 ]
 
-_RUN_COLS = ["run_at", "kind", "overall", "model_used", "duration_s", "counts_json"]
+_RUN_COLS = ["run_at", "kind", "overall", "model_used", "duration_s", "counts_json",
+             "input_tokens", "output_tokens", "cost", "headline", "summary"]
 
 _FINDING_FIELDS = ["host", "metric", "severity", "trend", "summary", "detail", "recommendation"]
 
@@ -196,8 +289,15 @@ class IncidentStore:
         cur = self._db.execute("SELECT * FROM incidents WHERE status = 'open' ORDER BY firstSeen")
         return [self._to_dict(r) for r in cur.fetchall()]
 
-    def all_rows(self, limit: int = 200) -> list[dict]:
-        cur = self._db.execute("SELECT * FROM incidents ORDER BY lastSeen DESC LIMIT ?", (limit,))
+    def all_rows(self, limit: int = 200, offset: int = 0) -> list[dict]:
+        # fingerprint is the primary key, so it is the tiebreak that makes this
+        # order total: a poll batch upserts many incidents with one identical
+        # lastSeen, and LIMIT/OFFSET over a tie can repeat or skip a row
+        # between windows when the sort has nothing left to decide with.
+        cur = self._db.execute(
+            "SELECT * FROM incidents ORDER BY lastSeen DESC, fingerprint DESC "
+            "LIMIT ? OFFSET ?",
+            (limit, offset))
         return [self._to_dict(r) for r in cur.fetchall()]
 
     def upsert(self, rows: list[dict]) -> None:
@@ -276,26 +376,58 @@ class IncidentStore:
         result_bytes: int = 0,
         blocked: bool = False,
         duration_ms: int = 0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
     ) -> int:
         cur = self._db.execute(
             """INSERT INTO investigation_steps
-               (investigation_id, seq, tool, args_json, result_preview, result_bytes, blocked, duration_ms)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (investigation_id, seq, tool, args_json, result_preview, result_bytes,
+                blocked, duration_ms, input_tokens, output_tokens)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (investigation_id, int(seq), str(tool), str(args_json), str(result_preview),
-             int(result_bytes or 0), 1 if blocked else 0, int(duration_ms or 0)),
+             int(result_bytes or 0), 1 if blocked else 0, int(duration_ms or 0),
+             int(input_tokens or 0), int(output_tokens or 0)),
         )
         self._db.commit()
         return int(cur.lastrowid or 0)
 
-    def investigations(self, limit: int = 50, status: str | None = None) -> list[dict]:
+    def investigations(self, limit: int = 50, status: str | None = None,
+                       offset: int = 0) -> list[dict]:
         sql = "SELECT * FROM investigations"
         params: list = []
         if status:
             sql += " WHERE status = ?"
             params.append(status)
-        sql += " ORDER BY id DESC LIMIT ?"
-        params.append(limit)
+        sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params += [limit, offset]
         return [dict(r) for r in self._db.execute(sql, params).fetchall()]
+
+    #: The statuses that mean "this run did not finish cleanly" — the
+    #: operator's triage queue on the overview (dashboard spec §12).
+    ATTENTION_STATUSES = ("incomplete", "failed", "needs_human")
+
+    def needs_attention(self, limit: int = 6) -> list[dict]:
+        """Investigations that ended badly, newest first.
+
+        ``id`` breaks the tie because a batch of retries can share one
+        ``started_at``, and a LIMIT over a tie can repeat or skip a row.
+        """
+        holes = ", ".join("?" * len(self.ATTENTION_STATUSES))
+        cur = self._db.execute(
+            f"SELECT * FROM investigations WHERE status IN ({holes}) "
+            "ORDER BY started_at DESC, id DESC LIMIT ?",
+            (*self.ATTENTION_STATUSES, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def needs_attention_count(self) -> int:
+        """How many there are in total — the number behind the "all" link."""
+        holes = ", ".join("?" * len(self.ATTENTION_STATUSES))
+        row = self._db.execute(
+            f"SELECT COUNT(*) AS n FROM investigations WHERE status IN ({holes})",
+            self.ATTENTION_STATUSES,
+        ).fetchone()
+        return int(row["n"] or 0)
 
     def investigation(self, investigation_id: int) -> dict | None:
         row = self._db.execute(
@@ -317,6 +449,216 @@ class IncidentStore:
             r["blocked"] = bool(r["blocked"])
         return rows
 
+    def daily_token_totals(self, days: int = 14,
+                           now_iso: str | None = None) -> list[dict]:
+        """Tokens spent per calendar day over the last ``days`` (spec §11).
+
+        Both places HEIM spends tokens count: investigations by ``started_at``
+        and runs by ``run_at``, input + output. The window is zero-filled, so
+        the caller always gets exactly ``days`` entries oldest→newest and a
+        quiet Sunday is a visible gap rather than a missing bar.
+
+        Days are the stored timestamps' own calendar days (``substr(ts,1,10)``),
+        which is how they are written and read everywhere else in the store, and
+        ``now_iso`` makes the window a fact about the argument rather than about
+        this machine's clock.
+        """
+        window, totals = self._daily_sums(days, now_iso, "input_tokens + output_tokens")
+        return [{"date": d.isoformat(), "weekday": _WEEKDAYS[d.weekday()],
+                 "tokens": int(totals[d.isoformat()])} for d in window]
+
+    def cost_by_day(self, days: int = 14, now_iso: str | None = None) -> list[dict]:
+        """Money spent per calendar day over the last ``days`` (spec §13).
+
+        The by-day chart is the §11 chart with a second series, so the window
+        is built exactly the same way — zero-filled, oldest→newest, keyed on
+        ``now_iso`` rather than on this machine's clock.
+
+        The amount is the ``cost`` each row recorded when it ran, which is what
+        was actually spent that day; the by-model table re-prices its aggregates
+        from ``settings.model_prices`` instead, because a *model* can be unpriced
+        (an em dash) while a *day* can only be a sum of what was booked.
+        """
+        window, totals = self._daily_sums(days, now_iso, "cost")
+        return [{"date": d.isoformat(), "weekday": _WEEKDAYS[d.weekday()],
+                 "cost": float(totals[d.isoformat()])} for d in window]
+
+    def _daily_sums(self, days: int, now_iso: str | None,
+                    expr: str) -> tuple[list[date], dict[str, float]]:
+        """``expr`` summed per calendar day across both spending tables.
+
+        Days are the stored timestamps' own calendar days (``substr(ts,1,10)``),
+        which is how they are written and read everywhere else in the store.
+        Returns the zero-filled window (oldest→newest) and its totals, so a
+        caller only has to name its series.
+        """
+        days = max(int(days), 1)
+        try:
+            today = date.fromisoformat(str(now_iso or "")[:10])
+        except ValueError:
+            today = datetime.now(timezone.utc).date()
+        window = [today - timedelta(days=n) for n in range(days - 1, -1, -1)]
+        first, last = window[0].isoformat(), window[-1].isoformat()
+
+        totals: dict[str, float] = {d.isoformat(): 0.0 for d in window}
+        for table, column in _SPEND_TABLES:
+            cur = self._db.execute(
+                f"SELECT substr({column}, 1, 10) AS d, "
+                f"COALESCE(SUM({expr}), 0) AS n "
+                f"FROM {table} WHERE substr({column}, 1, 10) BETWEEN ? AND ? "
+                f"GROUP BY d",
+                (first, last),
+            )
+            for row in cur.fetchall():
+                key = str(row["d"] or "")
+                if key in totals:
+                    totals[key] += float(row["n"] or 0)
+        return window, totals
+
+    def cost_by_model(self, since_iso: str | None = None) -> list[dict]:
+        """Spend grouped by (model, role) since ``since_iso`` (spec §13).
+
+        Two grouped queries merged: investigations are the *investigator* role,
+        runs the *analyst* one — the same model id can appear under both, and
+        collapsing them would hide which agent the money went to. A row with no
+        model recorded groups as ``unknown`` rather than disappearing.
+
+        ``cost`` is the sum of what those rows booked at the time; the page
+        re-prices the token columns from settings, so a model whose price was
+        added (or removed) later is shown under today's price table.
+        ``since_iso`` is compared lexically against the stored stamps — pass one
+        written the same way (same offset) as the rows.
+        """
+        out: list[dict] = []
+        for table, column, model_col, role in (
+            ("investigations", "started_at", "model", "investigator"),
+            ("runs", "run_at", "model_used", "analyst"),
+        ):
+            sql = (f"SELECT COALESCE(NULLIF({model_col}, ''), 'unknown') AS m, "
+                   f"COUNT(*) AS calls, "
+                   f"COALESCE(SUM(input_tokens), 0) AS i, "
+                   f"COALESCE(SUM(output_tokens), 0) AS o, "
+                   f"COALESCE(SUM(cost), 0) AS c FROM {table}")
+            params: list = []
+            if since_iso:
+                sql += f" WHERE {column} >= ?"
+                params.append(str(since_iso))
+            sql += " GROUP BY m ORDER BY m"
+            for r in self._db.execute(sql, params).fetchall():
+                out.append({"model": str(r["m"]), "role": role,
+                            "calls": int(r["calls"] or 0),
+                            "tokens_in": int(r["i"] or 0),
+                            "tokens_out": int(r["o"] or 0),
+                            "cost": float(r["c"] or 0.0)})
+        return out
+
+    def usage_totals(self) -> dict:
+        """Lifetime tokens and cost across investigations *and* runs (§5.6).
+
+        The two tables are the only places HEIM spends money: the agent loop
+        and the daily analyst completion. Summed here rather than in the
+        caller so ``/telemetry`` stays one read. Retention pruning means these
+        are "what the store still remembers", which is the honest scope for a
+        gauge — the docstring of the exposition says so too.
+        """
+        totals = {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
+        for table in ("investigations", "runs"):
+            row = self._db.execute(
+                f"SELECT COALESCE(SUM(input_tokens), 0) AS i, "
+                f"COALESCE(SUM(output_tokens), 0) AS o, "
+                f"COALESCE(SUM(cost), 0) AS c FROM {table}"
+            ).fetchone()
+            totals["input_tokens"] += int(row["i"] or 0)
+            totals["output_tokens"] += int(row["o"] or 0)
+            totals["cost"] += float(row["c"] or 0.0)
+        return totals
+
+    def tool_usage(self, limit: int = 12) -> list[dict]:
+        """Which tools get used, by which agent — one grouped query.
+
+        Grouped by (tool, agent_name, model) rather than by tool alone: the
+        same tool behaves differently under a different model, and once there
+        is more than one agent (or a model upgrade) "ssh_diagnostic: 412 calls"
+        stops being a fact about anything. Busiest first.
+
+        ``tokens`` is the summed per-step attribution (§5.6), so it is 0 for
+        rows written before that — the card renders those as an em dash rather
+        than as "no tokens used".
+        """
+        cur = self._db.execute(
+            """SELECT s.tool AS tool,
+                      i.agent_name AS agent_name,
+                      i.model AS model,
+                      COUNT(*) AS calls,
+                      COALESCE(SUM(s.blocked), 0) AS blocked,
+                      COALESCE(AVG(s.duration_ms), 0) AS avg_ms,
+                      COALESCE(SUM(s.input_tokens + s.output_tokens), 0) AS tokens
+               FROM investigation_steps s
+               JOIN investigations i ON i.id = s.investigation_id
+               GROUP BY s.tool, i.agent_name, i.model
+               ORDER BY calls DESC, s.tool
+               LIMIT ?""",
+            (int(limit),),
+        )
+        return [{"tool": str(r["tool"] or ""),
+                 "agent_name": str(r["agent_name"] or ""),
+                 "model": str(r["model"] or ""),
+                 "calls": int(r["calls"] or 0),
+                 "blocked": int(r["blocked"] or 0),
+                 "avg_ms": float(r["avg_ms"] or 0.0),
+                 "tokens": int(r["tokens"] or 0)}
+                for r in cur.fetchall()]
+
+    # ------------------------------------------------------- tool feedback
+
+    def add_tool_feedback(self, investigation_id: int, tool: str, suggestion: str,
+                          created_at: str = "") -> int:
+        """Record one ``tool: suggestion`` line the agent wrote about its toolbox.
+
+        Append-only: the point is the agent's *latest* opinion per tool, and
+        keeping the history means a suggestion can be traced to the run that
+        produced it. Empty tool or suggestion is a no-op (returns 0).
+        """
+        tool = str(tool or "").strip()
+        suggestion = str(suggestion or "").strip()
+        if not tool or not suggestion:
+            return 0
+        cur = self._db.execute(
+            """INSERT INTO tool_feedback (investigation_id, tool, suggestion, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (int(investigation_id or 0), tool, suggestion, created_at or self._now()),
+        )
+        self._db.commit()
+        return int(cur.lastrowid or 0)
+
+    def latest_tool_feedback(self) -> dict[str, dict]:
+        """The newest suggestion per tool, as ``{tool: row}`` — one query.
+
+        Newest by row id (the insert order is the run order), so a tool whose
+        feedback the agent stopped repeating keeps showing its last opinion
+        until something newer is written.
+        """
+        cur = self._db.execute(
+            """SELECT f.tool AS tool, f.suggestion AS suggestion,
+                      f.investigation_id AS investigation_id, f.created_at AS created_at
+               FROM tool_feedback f
+               JOIN (SELECT tool, MAX(id) AS id FROM tool_feedback GROUP BY tool) last
+                 ON last.id = f.id
+               ORDER BY f.tool"""
+        )
+        return {str(r["tool"]): {"tool": str(r["tool"]),
+                                 "suggestion": str(r["suggestion"] or ""),
+                                 "investigation_id": int(r["investigation_id"] or 0),
+                                 "created_at": str(r["created_at"] or "")}
+                for r in cur.fetchall()}
+
+    def tool_feedback(self, investigation_id: int) -> list[dict]:
+        cur = self._db.execute(
+            "SELECT * FROM tool_feedback WHERE investigation_id = ? ORDER BY id",
+            (int(investigation_id),),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
     def counts_by_status(self) -> dict:
         cur = self._db.execute(
             "SELECT status, COUNT(*) AS n FROM investigations GROUP BY status"
@@ -336,14 +678,15 @@ class IncidentStore:
         self._db.commit()
         return int(cur.lastrowid or 0)
 
-    def runs(self, limit: int = 50, kind: str | None = None) -> list[dict]:
+    def runs(self, limit: int = 50, kind: str | None = None,
+             offset: int = 0) -> list[dict]:
         sql = "SELECT * FROM runs"
         params: list = []
         if kind:
             sql += " WHERE kind = ?"
             params.append(kind)
-        sql += " ORDER BY id DESC LIMIT ?"
-        params.append(limit)
+        sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params += [limit, offset]
         return [dict(r) for r in self._db.execute(sql, params).fetchall()]
 
     def insert_findings(
@@ -378,8 +721,24 @@ class IncidentStore:
         self._db.commit()
         return len(rows)
 
-    def recent_findings(self, limit: int = 100) -> list[dict]:
-        cur = self._db.execute("SELECT * FROM findings ORDER BY id DESC LIMIT ?", (limit,))
+    def finding_severity_counts(self, run_ids: list[int]) -> dict[int, dict[str, int]]:
+        """Per-run finding counts by severity, one grouped query (overview run list)."""
+        if not run_ids:
+            return {}
+        marks = ",".join("?" for _ in run_ids)
+        cur = self._db.execute(
+            f"SELECT run_id, severity, COUNT(*) AS n FROM findings "
+            f"WHERE run_id IN ({marks}) GROUP BY run_id, severity",
+            [int(r) for r in run_ids],
+        )
+        out: dict[int, dict[str, int]] = {}
+        for row in cur.fetchall():
+            out.setdefault(row["run_id"], {})[str(row["severity"] or "")] = row["n"]
+        return out
+
+    def recent_findings(self, limit: int = 100, offset: int = 0) -> list[dict]:
+        cur = self._db.execute(
+            "SELECT * FROM findings ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
         return [dict(r) for r in cur.fetchall()]
 
     def finding(self, finding_id: int) -> dict | None:
@@ -544,6 +903,93 @@ class IncidentStore:
         )
         return {str(r["fingerprint"]) for r in cur.fetchall()}
 
+    # -------------------------------------------- backup & retention (§5.7)
+
+    def backup_to(self, dest_path: str | Path) -> Path:
+        """Snapshot the live database to ``dest_path`` (returns the path).
+
+        Uses SQLite's online backup API rather than copying the file: with WAL
+        enabled the ``.sqlite3`` file alone is *not* a consistent database
+        (committed pages may still live in the ``-wal`` sidecar), so a plain
+        ``cp`` of a running store can restore to a stale or torn state.
+        ``Connection.backup`` reads through the same connection, so the daemon
+        may keep writing while it runs.
+        """
+        dest = Path(dest_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if self._db.in_transaction:      # never snapshot a half-written cycle
+            self._db.commit()
+        target = sqlite3.connect(str(dest))
+        try:
+            self._db.backup(target)
+        finally:
+            target.close()
+        return dest
+
+    def prune(self, now_iso: str, retention_days: int) -> dict:
+        """Delete history older than ``retention_days``; per-table counts back.
+
+        Deletes **only** what is provably finished:
+
+        - ``incidents`` with ``status='resolved'`` whose ``lastSeen`` is older
+        - ``findings`` / ``runs`` by ``run_at``
+        - ``investigations`` that actually finished (``finished_at`` non-empty)
+          and their ``investigation_steps``
+        - ``jobs`` in a terminal state (done/failed/interrupted), on the
+          shorter of the retention window and ``JOB_RETENTION_MAX_DAYS`` —
+          a closed job is a receipt, not history worth months of disk
+
+        Never touched: suppressions, open/clearing/suppressed incidents,
+        unfinished investigations, queued/running jobs. ``retention_days <= 0``
+        means "keep forever" and is a no-op. Only non-zero counts are returned,
+        so an idle night logs nothing.
+
+        Timestamps are compared lexically (the store's convention, cf.
+        ``active_suppressions``): the cutoff is rendered with the same UTC
+        offset as ``now_iso``, so mixed-offset rows can be off by the offset
+        difference — hours at the edge of a 120-day window, which is fine.
+        """
+        days = int(retention_days or 0)
+        if days <= 0:
+            return {}
+        cutoff = _shift_iso(now_iso, days)
+        job_cutoff = _shift_iso(now_iso, min(days, JOB_RETENTION_MAX_DAYS))
+
+        counts: dict[str, int] = {}
+
+        def _delete(table: str, where: str, params: tuple) -> None:
+            n = self._db.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount
+            if n > 0:
+                counts[table] = counts.get(table, 0) + int(n)
+
+        # children first, while their parents are still selectable
+        _delete("investigation_steps",
+                "investigation_id IN (SELECT id FROM investigations "
+                "WHERE finished_at != '' AND finished_at < ?)", (cutoff,))
+        # tool feedback follows its investigation: the card links back to the
+        # run that produced the suggestion, and a link into deleted history is
+        # worse than an empty line.
+        _delete("tool_feedback",
+                "investigation_id IN (SELECT id FROM investigations "
+                "WHERE finished_at != '' AND finished_at < ?)", (cutoff,))
+        _delete("investigations", "finished_at != '' AND finished_at < ?", (cutoff,))
+        _delete("incidents", "status = 'resolved' AND lastSeen != '' AND lastSeen < ?", (cutoff,))
+        _delete("findings", "run_at != '' AND run_at < ?", (cutoff,))
+        _delete("runs", "run_at != '' AND run_at < ?", (cutoff,))
+        _delete("jobs",
+                "status IN ('done', 'failed', 'interrupted') "
+                "AND COALESCE(NULLIF(finished_at, ''), created_at) != '' "
+                "AND COALESCE(NULLIF(finished_at, ''), created_at) < ?", (job_cutoff,))
+        self._db.commit()
+
+        if sum(counts.values()) > VACUUM_AFTER_DELETIONS:
+            # VACUUM cannot run inside a transaction (hence the commit above,
+            # and no implicit one after it — sqlite3 only auto-opens for DML).
+            # It rebuilds the file, which also checkpoints and truncates the
+            # WAL, so the freed pages actually leave the disk.
+            self._db.execute("VACUUM")
+        return counts
+
     # ------------------------------------------- approvals from outside TG
 
     def set_approval_decision(self, investigation_id: int, decision: str) -> None:
@@ -558,6 +1004,37 @@ class IncidentStore:
             "SELECT approval_decision FROM investigations WHERE id = ?", (int(investigation_id),)
         ).fetchone()
         return str(row["approval_decision"] or "") if row is not None else ""
+
+    # ------------------------------------------------- §9 recommendations
+
+    #: The only states a recommendation can be in. "open" is the absence of a
+    #: row, not a value — storing it would make the table grow with every item
+    #: the page has ever rendered.
+    RECOMMENDATION_STATES = ("done", "dismissed")
+
+    def set_recommendation_state(self, key: str, state: str) -> None:
+        """Mark ``key`` done/dismissed, replacing any previous mark."""
+        if state not in self.RECOMMENDATION_STATES:
+            raise ValueError(
+                f"unknown recommendation state: {state!r} "
+                f"(expected one of {', '.join(self.RECOMMENDATION_STATES)})"
+            )
+        self._db.execute(
+            "INSERT OR REPLACE INTO recommendation_states (key, state, created_at) "
+            "VALUES (?, ?, ?)",
+            (str(key), state, self._now()),
+        )
+        self._db.commit()
+
+    def recommendation_states(self) -> dict[str, dict]:
+        """``key → {"state": …, "created_at": …}`` for every marked item."""
+        rows = self._db.execute(
+            "SELECT key, state, created_at FROM recommendation_states"
+        ).fetchall()
+        return {
+            str(r["key"]): {"state": str(r["state"]), "created_at": str(r["created_at"])}
+            for r in rows
+        }
 
     # ------------------------------------------------------------- internals
 

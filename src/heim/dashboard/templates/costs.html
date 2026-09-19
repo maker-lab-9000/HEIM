@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m with context %}
+{% block content %}
+
+{#- the window switcher (spec §13): three plain GET links, so it works with no
+    JS and every window is a bookmarkable URL. The current one is the ember
+    button and says so to a screen reader rather than by color alone. -#}
+<nav class="acts" aria-label="Spend window">
+  {%- for key in windows %}
+  <a class="btn{{ ' ember' if key == window }}" href="/costs?window={{ key }}"
+     {% if key == window %}aria-current="page"{% endif %}>{{ key }}</a>
+  {%- endfor %}
+</nav>
+
+<section class="kpis" aria-label="Window totals">
+  <div class="stat">
+    <p class="eyebrow">spend · {{ window }}</p>
+    <p class="hero mono">{{ total_text }}</p>
+    <p class="meta">{{ prices_note }}</p>
+  </div>
+  <div class="stat">
+    <p class="eyebrow">calls</p>
+    <p class="hero mono">{{ calls }}</p>
+    <p class="meta">investigations + daily runs</p>
+  </div>
+  <div class="stat">
+    <p class="eyebrow">tokens</p>
+    <p class="hero mono">{{ (tokens_in + tokens_out)|tokens }}</p>
+    <p class="meta">{{ tokens_in|tokens }} in → {{ tokens_out|tokens }} out</p>
+  </div>
+</section>
+
+<section class="card">
+  <h2 class="eyebrow">by model</h2>
+  {%- if rows %}
+  <table class="tbl dense">
+    <thead><tr>
+      <th scope="col">model</th>
+      <th scope="col">role</th>
+      <th scope="col" class="num">calls</th>
+      <th scope="col" class="num">tokens in</th>
+      <th scope="col" class="num">tokens out</th>
+      <th scope="col" class="num">cost</th>
+      <th scope="col">share</th>
+    </tr></thead>
+    <tbody>
+      {%- for r in rows %}
+      <tr>
+        <td class="mono" title="{{ r.model }}">{{ r.model_short }}</td>
+        {#- role is where the money went (the agent loop or the daily analyst),
+            derived from which table the rows came from -#}
+        <td><span class="chip">{{ r.role }}</span>
+          {%- if r.cost_value is none %} <span class="chip ink3">no price</span>{% endif %}</td>
+        <td class="num mono">{{ r.calls }}</td>
+        <td class="num mono">{{ r.tokens_in|tokens }}</td>
+        <td class="num mono">{{ r.tokens_out|tokens }}</td>
+        <td class="num mono">{{ r.cost_text }}</td>
+        {#- single-hue magnitude encoding, identity stays with the model name
+            in the first column; the cost cell carries the number, so the bar
+            never has to be read precisely -#}
+        <td>
+          <span class="tubar" role="img" title="{{ r.share }}% of the window's priced spend"
+                aria-label="{{ r.share }} percent of the window's priced spend">
+            <span class="seg" style="width:{{ r.share }}%"></span></span>
+        </td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- if unpriced_note %}
+  <p class="empty">{{ unpriced_note }}</p>
+  {%- endif %}
+  {%- else %}
+  <p class="empty">No spend recorded in this window. Investigations and daily
+    runs record what they cost as they finish.</p>
+  {%- endif %}
+</section>
+
+{#- the same 14-day chart as the overview's tokens card (spec §11), with money
+    as its series — one macro, two call sites. Always the last 14 days, whatever
+    the window above is: it is the shape of recent spending, not a second view
+    of the table. -#}
+<section class="card">
+  <h2 class="eyebrow">spend by day</h2>
+  {%- if cost_chart.total %}
+  {{ m.daychart(cost_chart, "Money spent per day over the last 14 days, most "
+                            "expensive day " ~ cost_chart.busiest.date, "cchart") }}
+  <p class="tsum mono">14d: {{ cost_chart.total|money }} · busiest
+    {{ cost_chart.busiest.weekday }} {{ cost_chart.busiest.date }}
+    ({{ cost_chart.busiest.value|money }})</p>
+  {#- the table above re-prices from settings; this chart does not, so say which
+      number is which rather than letting the two totals disagree in silence -#}
+  <p class="tsum">Amounts as booked when each run happened.</p>
+  {%- else %}
+  <p class="empty">No spend recorded yet.</p>
+  {%- endif %}
+</section>
+
+{% endblock %}

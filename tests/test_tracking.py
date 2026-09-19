@@ -291,8 +291,8 @@ async def test_on_step_fires_with_seq_args_and_duration(monkeypatch):
     tool = StubTool("stub", result="x" * 900, delay=0.02)
     seen: list[tuple] = []
 
-    def on_step(seq, name, args, result, duration_ms):
-        seen.append((seq, name, args, result, duration_ms))
+    def on_step(seq, name, args, result, duration_ms, turn_in, turn_out):
+        seen.append((seq, name, args, result, duration_ms, turn_in, turn_out))
 
     res = await run_agent(_agent_cfg(), system="s", user_prompt="u", tools=[tool], on_step=on_step)
 
@@ -303,6 +303,9 @@ async def test_on_step_fires_with_seq_args_and_duration(monkeypatch):
     assert [s[2]["command"] for s in seen] == ["uptime", "df -h", "free -m"]
     assert all(s[3] == "x" * 900 for s in seen)                    # full result, not the preview
     assert all(s[4] >= 15 for s in seen), seen                     # ~20ms per call, measured
+    # per-turn usage (§5.6): turn 1 had one call, turn 2 had two — the first of
+    # the pair carries the whole delta, its sibling 0 (see test_observability)
+    assert [(s[5], s[6]) for s in seen] == [(10, 5), (20, 7), (0, 0)]
     assert tool.closed is True
 
 
@@ -386,10 +389,11 @@ def test_step_recorder_persists_preview_bytes_and_blocked(rt):
 
 async def test_on_step_wired_into_the_pipeline(rt, monkeypatch):
     """End to end: a tool call made by the agent lands in investigation_steps."""
-    async def fake_run_agent(cfg, *, system, user_prompt, tools, on_step=None):
-        on_step(1, "ssh_diagnostic", {"command": "df -h"}, "Filesystem  Size", 11.0)
+    async def fake_run_agent(cfg, *, system, user_prompt, tools, on_step=None,
+                             collect_transcript=False):
+        on_step(1, "ssh_diagnostic", {"command": "df -h"}, "Filesystem  Size", 11.0, 900, 40)
         on_step(2, "ssh_diagnostic", {"command": "cat /etc/shadow"},
-                json.dumps({"ok": True, "blocked": True}), 2.0)
+                json.dumps({"ok": True, "blocked": True}), 2.0, 0, 0)
         return AgentResult(SUMMARY_OUTPUT, [], 100, 20)
 
     monkeypatch.setattr("heim.pipelines.investigate.run_agent", fake_run_agent)
@@ -399,6 +403,7 @@ async def test_on_step_wired_into_the_pipeline(rt, monkeypatch):
     row = rt.store.investigation(res["id"])
     assert [s["tool"] for s in row["steps"]] == ["ssh_diagnostic"] * 2
     assert [s["blocked"] for s in row["steps"]] == [False, True]
+    assert [s["input_tokens"] for s in row["steps"]] == [900, 0]
 
 
 # ==================================================== pipeline status flow
@@ -408,7 +413,8 @@ def _stub_agent(monkeypatch, *, output: str = SUMMARY_OUTPUT, steps: int = 2,
                 delay: float = 0.0, raises: Exception | None = None, events: list | None = None):
     from heim.agent.runner import AgentStep
 
-    async def fake_run_agent(cfg, *, system, user_prompt, tools, on_step=None):
+    async def fake_run_agent(cfg, *, system, user_prompt, tools, on_step=None,
+                             collect_transcript=False):
         if events is not None:
             events.append(("enter", time.monotonic()))
         if delay:
@@ -579,7 +585,8 @@ async def test_approval_wait_does_not_hold_a_slot(rt, monkeypatch):
     in_agent = asyncio.Event()
     release_agent = asyncio.Event()
 
-    async def fake_run_agent(cfg, *, system, user_prompt, tools, on_step=None):
+    async def fake_run_agent(cfg, *, system, user_prompt, tools, on_step=None,
+                             collect_transcript=False):
         in_agent.set()
         await release_agent.wait()
         return AgentResult(SUMMARY_OUTPUT, [], 1, 1)
@@ -677,7 +684,7 @@ async def test_daily_records_the_run_and_its_findings(rt, monkeypatch):
         return []
 
     async def fake_analyst(cfg, system, user):
-        return json.dumps(analysis), "model-x"
+        return json.dumps(analysis), "model-x", {"input": 900, "output": 120}
 
     dispatched: list = []
 

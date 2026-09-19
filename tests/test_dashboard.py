@@ -225,7 +225,11 @@ def test_investigations_list_rows(client):
 def test_running_row_shows_elapsed_not_a_dash(client, ids):
     # a running investigation has no finished_at; the honest duration is "so far"
     rows = client.get("/investigations?status=running").text
-    assert ">—<" not in rows
+    # the duration cell is the one before "started"; an em dash there would be
+    # the bug this test guards. (The cost cell legitimately dashes when the
+    # model is unpriced — §5.6 — so the check is scoped to duration.)
+    duration_cell = rows.split('class="num mono">')[-1]
+    assert not duration_cell.startswith("—")
     detail = client.get(f"/investigations/{ids['running']}").text
     assert "so far" in detail
     # a finished one shows the closed interval instead
@@ -402,6 +406,9 @@ def test_findings_grouped_by_run(client):
     assert "sdb peaked at 48C." in html
     assert "Cap the PhotoPrism container." in html
     assert html.count("detail &amp; recommendation") == 2   # one per finding
+    # the findings of a run are a real table (structure: test_findings_table.py)
+    assert '<table class="tbl dense ftbl">' in html
+    assert '<th scope="col" class="c-host">host</th>' in html
     # worst severity first inside a run
     assert html.index("Memory climbing on ubuntu-server") < html.index("Drive temperature high")
 
@@ -425,12 +432,18 @@ def test_weight_budget_and_no_cdn():
     no runtime CDN reference anywhere in the templates.
 
     The budget was ~12 KB through v1; the actions slice (spec §5: button
-    language, feedback lines, ghost rows) deliberately grew it to 14 KB. It is
-    still one hand-written file with no build step, and still the only
-    stylesheet the pages load.
+    language, feedback lines, ghost rows) deliberately grew it to 14 KB, and
+    the findings table (column widths, host badges, the host color slots)
+    grows it to 15.5 KB. §5.6 adds the full-transcript block, the metrics
+    fixed-column geometry, the rail tagline, the health card and the
+    tool-usage card, landing at ~17 KB. It is still one hand-written file with no build step, and still
+    the only stylesheet the pages load.
     """
     static = Path(__file__).resolve().parent.parent / "src/heim/dashboard/static"
-    assert (static / "heim.css").stat().st_size <= 14_336
+    # §11's token chart adds ~0.4 KB of SVG styling (7 rules), so 17.5 -> 20 KB
+    # §9's recommendations table adds 6 column rules, so 20 -> 20.25 KB
+    # §5.1's model picker adds one rule (5 declarations), so 20.25 -> 20.5 KB
+    assert (static / "heim.css").stat().st_size <= 20_992
     assert (static / "htmx.min.js").stat().st_size > 10_000
     templates = (Path(__file__).resolve().parent.parent
                  / "src/heim/dashboard/templates")

@@ -7,6 +7,12 @@ Salvage rules:
 - otherwise the run is INCOMPLETE with a per-cause reason (empty output /
   leaked tool-call text / malformed) and the raw output is preserved in a
   '## Raw agent output (untrusted)' block.
+
+Also here: ``extract_sections`` (the Loki/dashboard section parser) and
+``extract_tool_feedback``, which reads the optional '## Tooling feedback'
+section — the agent's own notes on what would have made a tool more useful.
+That section stays IN the report (email and Telegram show it too); the
+pipelines merely also persist it.
 """
 from __future__ import annotations
 
@@ -105,6 +111,47 @@ def extract_sections(report_md: str) -> dict:
         "remediation": actions[:8],
         "confidence": _confidence(report_md),
     }
+
+
+#: A feedback line is ``tool_name: suggestion``. The name is matched loosely
+#: (an identifier, optionally in backticks/bold) and validated by the caller,
+#: not here — an unknown name is data about the prompt drifting, and silently
+#: dropping it would hide that.
+_FEEDBACK_RE = re.compile(r"^[`*_\s]*([A-Za-z][A-Za-z0-9_.-]*)[`*_\s]*:\s*(.+)$")
+
+#: Cap on what one run may say. The prompt asks for 0–3 lines; a model that
+#: ignores that must not be able to fill the card with essays.
+MAX_TOOL_FEEDBACK = 3
+MAX_SUGGESTION_CHARS = 300
+
+
+def extract_tool_feedback(report_md: str) -> list[tuple[str, str]]:
+    """``## Tooling feedback`` → ``[(tool, suggestion), …]`` (possibly empty).
+
+    The section is optional (the agent adds it only when it has something
+    concrete), so an absent section, an empty one, or prose that is not
+    ``name: text`` all yield nothing rather than an error. Bullets and
+    numbering are stripped the way ``extract_sections`` strips them, and the
+    tool name is returned **as written** — resolving it against the configured
+    toolbox is the caller's job.
+    """
+    body = _section(report_md or "", "Tooling feedback")
+    out: list[tuple[str, str]] = []
+    for line in body.split("\n"):
+        t = line.strip()
+        while t and t[0] in "-*•().0123456789. ":
+            t = t[1:]
+        m = _FEEDBACK_RE.match(t.strip())
+        if not m:
+            continue
+        tool = m.group(1).strip()
+        suggestion = m.group(2).strip().strip("`*_ ")
+        if not tool or not suggestion:
+            continue
+        out.append((tool, suggestion[:MAX_SUGGESTION_CHARS]))
+        if len(out) >= MAX_TOOL_FEEDBACK:
+            break
+    return out
 
 
 # ---------------------------------------------------------------- html emails

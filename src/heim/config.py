@@ -83,6 +83,33 @@ class Settings(BaseModel):
     # Default mute window applied when a finding is marked a false positive
     # (roadmap §5.4) — 0 means forever. Overridable per call (`--days`).
     suppression_days: int = 90
+    # Dead-man's switch (roadmap §5.7): a healthchecks.io-style URL the daemon
+    # GETs after every completed poll cycle. Empty disables it.
+    deadman_url: str = ""
+    # Nightly SQLite backups: how many daily snapshots to keep in
+    # <db_path dir>/backups (0 disables pruning, the backup itself always runs).
+    backup_keep: int = 14
+    # Retention: how long resolved/finished history is kept before the nightly
+    # prune deletes it. 0 = keep forever.
+    retention_days: int = 120
+    # Cost accounting (roadmap §5.6): model id -> {input, output} price per
+    # MILLION tokens, in `currency`. Keys must match the model ids used in
+    # config/agents/*.yaml. A model with no entry here is simply not priced —
+    # its cost is stored as 0 and rendered as an em dash, never guessed.
+    model_prices: dict[str, dict] = {}
+    # The currency `model_prices` is quoted in. Rendered as "$" for USD and as
+    # the bare code otherwise ("EUR 0.42") — no conversion ever happens.
+    currency: str = "USD"
+    # Store the agent's full message transcript with each investigation
+    # (roadmap §5.6). Off by default: it is large, and only needed when
+    # post-morteming a wrong root cause. Capped at 512 KB per investigation.
+    store_transcripts: bool = False
+    # Exact model ids offered in the dashboard's investigate dropdown and to
+    # `heim investigate --model` (design spec §5.1). Empty = default only: no
+    # select is rendered and every run uses the investigator agent's own model.
+    # Anything listed here should also have a `model_prices` entry, or its runs
+    # render an em dash instead of a cost.
+    investigator_models: list[str] = []
     # instance-label address prefix -> host name (used by the alert poller to
     # attribute a firing alert's `instance` label to a configured host)
     instance_host_map: dict[str, str] = {}
