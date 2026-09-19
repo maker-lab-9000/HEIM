@@ -26,7 +26,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from heim.channels import deadman
 from heim.pipelines.daily import run_daily
-from heim.pipelines.investigate import run_investigation
+from heim.pipelines.investigate import rearm_pending_approvals, run_investigation
 from heim.pipelines.poller import run_poll
 from heim.pipelines.queue import request_from_payload
 from heim.runtime import Runtime, build_runtime
@@ -207,19 +207,31 @@ async def run_daemon() -> None:
     except Exception:
         log.exception("sweeping interrupted jobs failed")
 
+    # The sweep deliberately leaves parked approvals alone; this picks them
+    # back up. Order matters — re-arming before the sweep would race it.
+    if rt.telegram is not None:
+        rt.telegram.start_consumer()   # taps must land even with no ask outstanding
+    try:
+        rearmed = rearm_pending_approvals(rt)
+    except Exception:
+        log.exception("re-arming parked approvals failed")
+        rearmed = 0
+
     scheduler.start()
     worker = asyncio.create_task(_queue_worker(rt), name="queue-worker")
     log.info(
         "HEIM daemon up — daily at %s (%s), poller every %d min, backup %02d:%02d, "
-        "%d hosts, telegram %s, dead-man %s, %d job(s) queued",
+        "%d hosts, telegram %s, dead-man %s, %d job(s) queued, %d approval(s) re-armed",
         ", ".join(rt.config.settings.schedules.daily), tz,
         rt.config.settings.schedules.poll_minutes, BACKUP_HOUR, BACKUP_MINUTE,
         len(rt.config.hosts), "on" if rt.telegram else "off",
-        "on" if rt.config.settings.deadman_url else "off", rt.store.queued_count(),
+        "on" if rt.config.settings.deadman_url else "off", rt.store.queued_count(), rearmed,
     )
     await rt.notify("🟢 HEIM daemon started")
     try:
         await asyncio.Event().wait()
     finally:
         worker.cancel()
+        if rt.telegram is not None:
+            rt.telegram.stop_consumer()
         scheduler.shutdown(wait=False)

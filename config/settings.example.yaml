@@ -43,8 +43,8 @@ schedules:
 
 approvals:
   require: true               # human Telegram approval before any investigation
-  approve_timeout_hours: 6    # no answer -> declined (re-proposed next run)
-  outcome_timeout_hours: 8    # no outcome answer -> incident stays flagged
+  approve_timeout_hours: 0    # 0 = wait until you react; >0 = hours, then declined
+  outcome_timeout_hours: 8    # no outcome answer -> incident stays flagged (0 = wait)
 
 timezone: Europe/Berlin
 db_path: heim.sqlite3         # incident store (SQLite; relative to the working dir)

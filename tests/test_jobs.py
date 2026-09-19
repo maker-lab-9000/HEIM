@@ -273,6 +273,7 @@ async def test_claim_next_job_is_safe_from_concurrent_workers(tmp_path):
 
 
 def test_sweep_interrupted(store):
+    """Crash recovery fails what was *running* and leaves what was *parked*."""
     done = store.enqueue_job(payload={"host": "done"})
     running = store.enqueue_job(payload={"host": "running"})
     queued = store.enqueue_job(payload={"host": "queued"})
@@ -284,7 +285,7 @@ def test_sweep_interrupted(store):
     inv_pending = store.create_investigation(host="b", status="pending_approval")
     inv_complete = store.create_investigation(host="c", status="complete")
 
-    assert store.sweep_interrupted() == 3                    # 1 job + 2 investigations
+    assert store.sweep_interrupted() == 2                    # 1 job + 1 running investigation
 
     assert store.job(running)["status"] == "interrupted"
     assert store.job(running)["error"] == "interrupted by daemon restart"
@@ -295,7 +296,10 @@ def test_sweep_interrupted(store):
     by_id = {r["id"]: r for r in store.investigations()}
     assert by_id[inv_running]["status"] == "failed"
     assert by_id[inv_running]["incomplete_reason"] == "interrupted by daemon restart"
-    assert by_id[inv_pending]["status"] == "failed"
+    # mid-flight dies, parked survives: a pending approval was never running,
+    # and the daemon re-arms it — failing it here discarded it on every deploy
+    assert by_id[inv_pending]["status"] == "pending_approval"
+    assert not by_id[inv_pending]["finished_at"]
     assert by_id[inv_complete]["status"] == "complete"
     assert store.sweep_interrupted() == 0                    # idempotent
 

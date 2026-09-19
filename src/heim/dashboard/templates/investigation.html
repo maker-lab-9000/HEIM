@@ -33,7 +33,10 @@
         {#- an em dash means the model has no entry in settings.model_prices, not
             that the run was free (§5.6) -#}
         <td class="c-cost mono">{{ inv.cost|money }}</td>
-        <td class="c-dur mono">{% if inv.status == 'running' %}{{ elapsed(inv.started_at) }} so far{% else %}{{ duration(inv.started_at, inv.finished_at) }}{% endif %}</td>
+        {#- an approval waits until the operator reacts, so its age is the only
+            thing that makes a forgotten one visible — say "waiting", not a
+            duration, because nothing is running yet. -#}
+        <td class="c-dur mono">{% if inv.status == 'pending_approval' %}waiting {{ elapsed(inv.started_at) }}{% elif inv.status == 'running' %}{{ elapsed(inv.started_at) }} so far{% else %}{{ duration(inv.started_at, inv.finished_at) }}{% endif %}</td>
         <td class="c-when">{{ m.when(inv.started_at) }}</td>
         <td class="c-fp mono ink2" title="{{ inv.fingerprint }}">{{ inv.fingerprint|fp }}</td>
       </tr>

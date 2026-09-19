@@ -237,6 +237,30 @@ def test_running_row_shows_elapsed_not_a_dash(client, ids):
     assert "so far" not in client.get(f"/investigations/{ids['done']}").text
 
 
+def test_pending_approval_shows_how_long_it_has_been_waiting(tmp_path, monkeypatch):
+    """§5.8: approvals wait indefinitely, so a forgotten one must show its age.
+
+    "waiting 2h", not a duration — nothing is running yet — and a decided row
+    keeps its closed interval.
+    """
+    cfg = _config(tmp_path, monkeypatch)
+    db = tmp_path / "heim.sqlite3"
+    cfg.settings.db_path = str(db)
+    _seed(db)
+    store = IncidentStore(db)
+    parked = store.create_investigation(host="ubuntu-server", status="pending_approval",
+                                        started_at=_iso(7200))          # 2h ago
+    decided = store.create_investigation(host="ubuntu-server", status="complete",
+                                         started_at=_iso(7200), finished_at=_iso(7100))
+    store.close()
+
+    with TestClient(create_app(cfg)) as client:
+        detail = client.get(f"/investigations/{parked}").text
+        assert "waiting" in detail
+        assert "so far" not in detail          # that wording belongs to running
+        assert "waiting" not in client.get(f"/investigations/{decided}").text
+
+
 def test_investigations_filters(client, ids):
     only_running = client.get("/investigations?status=running").text
     assert f'/investigations/{ids["running"]}"' in only_running
