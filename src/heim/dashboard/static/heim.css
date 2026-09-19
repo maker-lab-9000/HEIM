@@ -205,14 +205,12 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 
 /* investigation */
 
-.imeta {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 6px 16px; margin: 10px 0 0;
-}
-/* the grid places whole pairs: label and value can never split across columns */
-.imeta .kv { min-width: 0; }
-.imeta dt { margin: 0; }
-.imeta dd { margin: 0 0 4px; font-size: 0.8125rem; overflow-wrap: anywhere; }
+/* header meta table: fixed layout + percentage widths, so the long values
+   (model, fingerprint) wrap in their column instead of widening the table */
+.imeta { table-layout: fixed; }
+.imeta td { overflow-wrap: anywhere; }
+.imeta .c-tok, .imeta .c-cost, .imeta .c-dur { width: 11%; }
+.imeta .c-agent, .imeta .c-fp { width: 19%; }
 .brief { margin-top: 8px; }
 .ihost { margin: 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 

@@ -9,30 +9,46 @@
 
 <section class="card head">
   <h2 class="ihost">{{ inv.host }} {{ m.pill(inv.status) }}</h2>
-  {#- one <div class="kv"> per pair: the grid places whole pairs, so a label can
-      never end up in a different column than its value (long values wrap
-      inside their own cell instead). -#}
-  <dl class="imeta">
-    <div class="kv"><dt class="eyebrow">trigger</dt><dd class="eyebrow">{{ inv.trigger or DASH }}</dd></div>
-    <div class="kv"><dt class="eyebrow">agent</dt><dd class="mono">{{ inv.agent_name or 'investigator' }} · {{ inv.model or DASH }}</dd></div>
-    <div class="kv"><dt class="eyebrow">tokens</dt><dd class="mono">{{ inv.input_tokens|tokens }} in → {{ inv.output_tokens|tokens }} out</dd></div>
-    {#- an em dash means the model has no entry in settings.model_prices, not
-        that the run was free (§5.6) -#}
-    <div class="kv"><dt class="eyebrow">cost</dt><dd class="mono">{{ inv.cost|money }}</dd></div>
-    <div class="kv"><dt class="eyebrow">duration</dt><dd class="mono">{% if inv.status == 'running' %}{{ elapsed(inv.started_at) }} so far{% else %}{{ duration(inv.started_at, inv.finished_at) }}{% endif %}</dd></div>
-    <div class="kv"><dt class="eyebrow">started</dt><dd>{{ m.when(inv.started_at) }}</dd></div>
-    <div class="kv"><dt class="eyebrow">fingerprint</dt><dd class="mono ink2">{{ inv.fingerprint or DASH }}</dd></div>
-    {%- if inv.retry_of %}
-    <div class="kv"><dt class="eyebrow">lineage</dt>
-      <dd class="mono"><a href="/investigations/{{ inv.retry_of }}">re-run of #{{ inv.retry_of }}</a></dd></div>
-    {%- endif %}
-    {#- a replay ran offline against #N's recorded tool results (§5.6): same
-        brief, same evidence, possibly another model or prompt -#}
-    {%- if inv.replay_of %}
-    <div class="kv"><dt class="eyebrow">lineage</dt>
-      <dd class="mono"><a href="/investigations/{{ inv.replay_of }}">replay of #{{ inv.replay_of }}</a></dd></div>
-    {%- endif %}
-  </dl>
+  {#- the run's facts as a real table, like every other dense table in the app:
+      one header row of labels, one row of values. `.imeta` fixes the layout so
+      a long model name or fingerprint wraps inside its own column instead of
+      widening the table off the side of the viewport. -#}
+  <table class="tbl dense imeta">
+    <thead>
+      <tr>
+        <th scope="col" class="c-trig">trigger</th>
+        <th scope="col" class="c-agent">agent</th>
+        <th scope="col" class="c-tok">tokens</th>
+        <th scope="col" class="c-cost">cost</th>
+        <th scope="col" class="c-dur">duration</th>
+        <th scope="col" class="c-when">started</th>
+        <th scope="col" class="c-fp">fingerprint</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="c-trig eyebrow">{{ inv.trigger or DASH }}</td>
+        <td class="c-agent mono">{{ inv.agent_name or 'investigator' }} · {{ inv.model or DASH }}</td>
+        <td class="c-tok mono">{{ inv.input_tokens|tokens }} in → {{ inv.output_tokens|tokens }} out</td>
+        {#- an em dash means the model has no entry in settings.model_prices, not
+            that the run was free (§5.6) -#}
+        <td class="c-cost mono">{{ inv.cost|money }}</td>
+        <td class="c-dur mono">{% if inv.status == 'running' %}{{ elapsed(inv.started_at) }} so far{% else %}{{ duration(inv.started_at, inv.finished_at) }}{% endif %}</td>
+        <td class="c-when">{{ m.when(inv.started_at) }}</td>
+        <td class="c-fp mono ink2" title="{{ inv.fingerprint }}">{{ inv.fingerprint|fp }}</td>
+      </tr>
+    </tbody>
+  </table>
+  {%- if inv.retry_of %}
+  <p class="headline"><span class="eyebrow">lineage</span>
+    <a class="mono" href="/investigations/{{ inv.retry_of }}">re-run of #{{ inv.retry_of }}</a></p>
+  {%- endif %}
+  {#- a replay ran offline against #N's recorded tool results (§5.6): same
+      brief, same evidence, possibly another model or prompt -#}
+  {%- if inv.replay_of %}
+  <p class="headline"><span class="eyebrow">lineage</span>
+    <a class="mono" href="/investigations/{{ inv.replay_of }}">replay of #{{ inv.replay_of }}</a></p>
+  {%- endif %}
   {% include "partials/_inv_acts.html" %}
 </section>
 

@@ -3,6 +3,7 @@ fragments, auth gates everything but /healthz — driven through a seeded tmp
 store and the example config (same fixture pattern as test_integration)."""
 import json
 import os
+import re
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -341,19 +342,41 @@ def test_declined_investigation_still_shows_its_brief(client, ids):
     assert "<strong>not</strong>" in html          # markdown-rendered, like the report
 
 
-def test_header_meta_pairs_are_atomic_cells(client, ids):
-    """Fix for the wrapping header: each label/value pair is one grid cell, so
-    a value can never slide under the neighbouring column."""
+def _meta_table(html):
+    """The header's meta table, sliced out of a detail page."""
+    start = html.index('class="tbl dense imeta"')
+    return html[start:html.index("</table>", start)]
+
+
+def test_header_meta_is_a_table_with_one_row_of_values(client, ids):
+    """The header metadata is a real dense table: a row of column labels and
+    exactly one row of values, in the documented order."""
     html = client.get(f"/investigations/{ids['running']}").text
-    meta = html[html.index('<dl class="imeta">'):html.index("</dl>")]
-    # every dt/dd lives inside its own .kv wrapper
-    assert meta.count('<div class="kv">') == meta.count("<dt") == meta.count("<dd")
-    assert meta.count('<div class="kv">') >= 6
-    assert "<dt" not in meta.split('<div class="kv">')[0]
-    for cell in meta.split('<div class="kv">')[1:]:
-        assert cell.index("<dt") < cell.index("<dd") < cell.index("</div>")
+    meta = _meta_table(html)
+    labels = re.findall(r'<th scope="col"[^>]*>([^<]+)</th>', meta)
+    assert labels == ["trigger", "agent", "tokens", "cost",
+                      "duration", "started", "fingerprint"]
+    # one <tr> in the body, one <td> per column, values in header order
+    body = meta[meta.index("<tbody"):]
+    assert body.count("<tr") == 1
+    assert body.count("<td") == len(labels)
+    values = re.findall(r"<td[^>]*>(.*?)</td>", body, re.S)
+    assert "poller" in values[0]
+    assert "investigator · claude-sonnet-4-6" in values[1]
+    assert "128k in → 4.2k out" in values[2]
+    assert fmt.DASH in values[3]                 # unpriced model: a dash, not $0.00
+    assert "so far" in values[4]                 # still running: an open interval
+    assert "<time" in values[5] and "datetime=" in values[5]   # m.when(), not |rel
+    # fingerprint: middle-truncated in the cell, in full on the title
+    assert values[6].startswith("ubuntu-server|mem") and "…" in values[6]
+    assert 'title="ubuntu-server|mem_used|Memory climbing"' in body
+    # the host title and the actions stay outside the table
+    assert html.index('class="ihost"') < html.index('class="tbl dense imeta"')
+    assert html.index('class="tbl dense imeta"') < html.index('class="acts"')
+    # fixed layout keeps a long model/fingerprint inside its column
     css = client.get("/static/heim.css").text
-    assert ".imeta .kv" in css and "auto-fit" in css
+    assert ".imeta { table-layout: fixed; }" in css
+    assert ".imeta td { overflow-wrap: anywhere; }" in css
 
 
 def test_transcript_partial_is_a_fragment(client, ids):

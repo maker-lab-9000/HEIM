@@ -554,6 +554,12 @@ def test_step_meta_shows_attributed_tokens(client, ids):
 # ---------------------------------------------------------------- cost
 
 
+def _meta_table(html):
+    """The header's meta table, sliced out of a detail page."""
+    start = html.index('class="tbl dense imeta"')
+    return html[start:html.index("</table>", start)]
+
+
 def test_investigation_detail_shows_cost(client, ids):
     html = client.get(f"/investigations/{ids['priced']}").text
     assert "cost" in html and "$0.45" in html
@@ -561,7 +567,7 @@ def test_investigation_detail_shows_cost(client, ids):
 
 def test_unpriced_investigation_shows_a_dash_not_zero(client, ids):
     html = client.get(f"/investigations/{ids['legacy']}").text
-    meta = html[html.index('<dl class="imeta">'):html.index("</dl>")]
+    meta = _meta_table(html)
     assert "cost" in meta and "$0.00" not in meta
     assert fmt.DASH in meta
 
@@ -595,7 +601,7 @@ def test_currency_other_than_usd_uses_the_code(tmp_path, monkeypatch):
     ids = _seed(Path(cfg.settings.db_path))
     with TestClient(create_app(cfg)) as client:
         html = client.get(f"/investigations/{ids['priced']}").text
-        meta = html[html.index('<dl class="imeta">'):html.index("</dl>")]
+        meta = _meta_table(html)
         assert "EUR 0.45" in meta and "$" not in meta
 
 
