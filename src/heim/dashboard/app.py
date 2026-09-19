@@ -1434,13 +1434,34 @@ def _cached_for(fetched_at: datetime | None, now: datetime) -> str:
     return f"cached {mins}m" if mins else "just fetched"
 
 
+#: How many offenders the header table names before it defers to the tables
+#: below. Eight is roughly a screenful of header before the page's real content
+#: starts; past that the per-host tables are the better place to look.
+_OFFENDER_ROWS = 8
+
+
+def _offenders(payload: dict) -> dict:
+    """The crit/warn series the header names, worst first (spec Part B).
+
+    ``topAlerts`` is already the payload's crit-before-warn, biggest-mover-first
+    list (``aggregate`` sorts it), so this only caps it and counts the
+    remainder — the header must never disagree with the numbers beside it.
+    """
+    alerts = list(payload.get("topAlerts") or [])
+    counts = payload.get("counts") or {}
+    total = int(counts.get("crit") or 0) + int(counts.get("warn") or 0)
+    return {"rows": alerts[:_OFFENDER_ROWS],
+            "more": max(total - len(alerts[:_OFFENDER_ROWS]), 0)}
+
+
 def _metrics_view(payload: dict | None, cfg: Config, host: str, category: str,
                   fetched_at: datetime | None, now: datetime) -> dict:
     """The header numbers plus per-host, per-category row tables."""
     if not payload:
         return {"hosts": [], "rows": 0, "has_data": False, "as_of": "",
                 "cached": "", "overall": "",
-                "counts": {"crit": 0, "warn": 0, "na": 0}}
+                "counts": {"crit": 0, "warn": 0, "na": 0},
+                "offenders": {"rows": [], "more": 0}}
     cats: dict[str, list] = payload.get("categories") or {}
     order = list(cats)  # catalog order — the order the email prints them in
     by_host: dict[str, dict[str, list]] = {}
@@ -1477,6 +1498,9 @@ def _metrics_view(payload: dict | None, cfg: Config, host: str, category: str,
         "counts": {"crit": int(counts.get("crit") or 0),
                    "warn": int(counts.get("warn") or 0),
                    "na": int(counts.get("naQueries") or 0)},
+        # the header says how many are crit/warn; this says WHICH — like the
+        # counts it describes the whole payload, not the filtered view
+        "offenders": _offenders(payload),
         "as_of": fetched_at.strftime("%H:%M") if fetched_at else "",
         "cached": _cached_for(fetched_at, now),
     }

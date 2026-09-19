@@ -106,3 +106,9 @@ instance_host_map:
   "${HEIM_SERVER_IP}": ubuntu-server
   "${HEIM_PROXMOX_IP}": homelab
   "${HEIM_HA_IP}": home-assistant
+
+# Open incidents from metric thresholds (config/queries/daily.yaml warn/crit),
+# not just from prometheus/alerts.yml rules. Evaluated on the poller's cadence.
+threshold_detection: true
+threshold_severity: crit        # crit | warn  (warn also includes crit)
+threshold_consecutive: 2        # consecutive polls above threshold before opening

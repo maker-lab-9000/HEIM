@@ -2,7 +2,8 @@
 
     heim check                         validate config + connectivity
     heim daily [--dry-run]             run the daily analysis pipeline once
-    heim poll [--dry-run]              run one alert-poller cycle
+    heim poll [--dry-run]              run one poll cycle (alerts + thresholds)
+    heim thresholds [--all]            current value, flag and streak per query
     heim investigate --host H ...      run one investigation
     heim investigate --fingerprint FP  ... rebuilt from the stored incident
     heim incidents [--all]             show the incident store
@@ -129,6 +130,49 @@ async def _cmd_poll(args) -> int:
     rt = build_runtime(dry_run=args.dry_run)
     result = await run_poll(rt, dispatch_concurrently=False)
     print(json.dumps(result, indent=2))
+    return 0
+
+
+async def _cmd_thresholds(args) -> int:
+    """What threshold detection sees right now: value, flag and streak.
+
+    The operator's way to see what is *about* to open an incident — a series
+    at ``crit`` with a streak one short of ``threshold_consecutive`` is one
+    poll away from a dispatch.
+    """
+    from heim.metrics.queries import load_queries
+    from heim.pipelines import thresholds
+    from heim.runtime import build_runtime
+
+    rt = build_runtime()
+    settings = rt.config.settings
+    qdefs = load_queries(rt.config.queries_path)
+    results = await thresholds.fetch_instants(settings.prometheus.url, qdefs)
+    samples = thresholds.build_samples(results, settings.instance_host_map)
+    streaks = rt.store.threshold_streaks()
+    tcfg = thresholds.ThresholdConfig.from_settings(settings)
+
+    if not samples:
+        print("no samples — is Prometheus reachable?")
+        return 1
+    rank = {"crit": 0, "warn": 1, "ok": 2, "na": 3}
+    rows = sorted(samples, key=lambda s: (rank.get(str(s.get("flag")), 3),
+                                          str(s.get("host")), str(s.get("qid"))))
+    if not args.all:
+        rows = [s for s in rows if s.get("flag") in ("crit", "warn")]
+    print(f"threshold_detection={'on' if settings.threshold_detection else 'OFF'} "
+          f"severity={tcfg.severity} consecutive={tcfg.consecutive}")
+    print(f"{'flag':<5} {'host':<18} {'metric':<28} {'current':>10}  streak")
+    for s in rows:
+        streak = int((streaks.get(str(s['fingerprint'])) or {}).get("count") or 0)
+        cur = s.get("current")
+        value = "—" if cur is None else f"{cur:g}{s.get('unit') or ''}"
+        armed = " ← opens next poll" if (
+            s.get("flag") in tcfg.over_flags and streak + 1 >= tcfg.consecutive) else ""
+        print(f"{str(s['flag']):<5} {str(s['host'])[:18]:<18} "
+              f"{str(s['metric'])[:28]:<28} {value:>10}  {streak}{armed}")
+    if not rows:
+        print("(everything under threshold)")
     return 0
 
 
@@ -453,6 +497,11 @@ def _build_parser() -> argparse.ArgumentParser:
     pl = sub.add_parser("poll", help="run one alert-poller cycle")
     pl.add_argument("--dry-run", action="store_true")
 
+    th = sub.add_parser("thresholds",
+                        help="show each catalog entry's value, flag and streak")
+    th.add_argument("--all", action="store_true",
+                    help="include ok/na series (default: only warn and crit)")
+
     inv = sub.add_parser("investigate", help="run one investigation")
     inv.add_argument("--host", help="host to investigate (or use --fingerprint alone)")
     inv.add_argument("--role", choices=["guest", "hypervisor", "ha-guest"])
@@ -504,6 +553,7 @@ def main() -> None:
     _setup_logging(args.verbose)
     handler = {
         "check": _cmd_check, "daily": _cmd_daily, "poll": _cmd_poll,
+        "thresholds": _cmd_thresholds,
         "investigate": _cmd_investigate, "incidents": _cmd_incidents,
         "investigations": _cmd_investigations, "jobs": _cmd_jobs, "replay": _cmd_replay,
         "dashboard": _cmd_dashboard, "daemon": _cmd_daemon,

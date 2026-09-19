@@ -21,7 +21,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 from heim.incidents.store import IncidentStore
-from heim.incidents.types import PollerDecision, ReconcileResult
+from heim.incidents.types import PollerDecision, ReconcileResult, ThresholdDecision
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ __all__ = [
     "filter_incident_events",
     "filter_reconcile",
     "filter_decision",
+    "filter_threshold",
     "suppression_prompt_block",
     "suppress_fingerprint",
     "mark_false_positive",
@@ -100,6 +101,38 @@ def filter_decision(dec: PollerDecision, suppressed: set[str]) -> tuple[PollerDe
                 loki_events=events,
                 # poller_logic derives state_changed from the rows it wrote; if
                 # every one of them was muted, nothing changed after all.
+                state_changed=bool(dec.state_changed and rows)),
+        {k: v for k, v in dropped.items() if v},
+    )
+
+
+def filter_threshold(dec: ThresholdDecision,
+                     suppressed: set[str]) -> tuple[ThresholdDecision, dict]:
+    """Filtered copy of a threshold decision + what was dropped.
+
+    ``decide()`` already skips muted fingerprints (it needs to, so a muted
+    series does not silently accumulate a streak). This is the same
+    belt-and-braces gate the other two paths get: whatever reaches the store,
+    Telegram, Loki or the investigator has passed the suppression list, no
+    matter which caller built the decision.
+    """
+    if not suppressed:
+        return dec, {}
+    rows = filter_rows(dec.rows_to_upsert, suppressed)
+    disp = filter_rows(dec.dispatches, suppressed)
+    notes = filter_rows(dec.notifications, suppressed)
+    events = filter_incident_events(dec.loki_events, suppressed)
+    streaks = filter_rows(dec.streak_writes, suppressed)
+    dropped = {
+        "upserts": len(dec.rows_to_upsert) - len(rows),
+        "dispatches": len(dec.dispatches) - len(disp),
+        "notifications": len(dec.notifications) - len(notes),
+        "loki_events": len(dec.loki_events) - len(events),
+        "streaks": len(dec.streak_writes) - len(streaks),
+    }
+    return (
+        replace(dec, rows_to_upsert=rows, dispatches=disp, notifications=notes,
+                loki_events=events, streak_writes=streaks,
                 state_changed=bool(dec.state_changed and rows)),
         {k: v for k, v in dropped.items() if v},
     )

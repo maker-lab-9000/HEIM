@@ -18,8 +18,9 @@ extending the system means adding a file — not editing a Code node inside an e
 │   daemon   │                      │ LLM trend analysis → reconcile incidents│──► HA sensor
 │ (or cron / │   every 5 min        └───────────────┬─────────────────────────┘──► Loki
 │  CLI runs) ├─────────────────────►┌───────────────┴─────────────────────────┐
-│            │                      │ poller: /api/v1/alerts → diff → upsert  │──► Telegram
-└────────────┘                      └───────────────┬─────────────────────────┘
+│            │                      │ poll: /api/v1/alerts → diff → upsert,   │──► Telegram
+└────────────┘                      │ + metric thresholds → hysteresis → open │
+                                    └───────────────┬─────────────────────────┘
                                          new / escalated incidents
                                                     ▼
                                     ┌─────────────────────────────────────────┐
@@ -76,7 +77,7 @@ heim/
 │   │   ├── command_guard.py        #   segment-aware read-only shell-command gate
 │   │   ├── ha_guard.py · proxmox_guard.py   # GET path allowlists
 │   ├── incidents/
-│   │   ├── types.py                #   HostRouting, ReconcileResult, PollerDecision
+│   │   ├── types.py                #   HostRouting, ReconcileResult, Poller/ThresholdDecision
 │   │   ├── store.py                #   SQLite incident store (was the n8n Data Table)
 │   │   ├── reconcile.py            #   pure incident reconciler (fingerprints, hysteresis, locks)
 │   │   ├── poller_logic.py         #   pure alert-poller diff
@@ -98,7 +99,8 @@ heim/
 │   │   └── templates/              #   investigation.html.j2 · daily.html.j2
 │   └── pipelines/
 │       ├── daily.py                #   the daily run (was n8n PAM 10)
-│       ├── poller.py               #   the fast-path poller (was PAM 11)
+│       ├── poller.py               #   the fast-path poll cycle (was PAM 11) + thresholds
+│       ├── thresholds.py           #   incidents from the catalog's own warn/crit bounds
 │       ├── investigate.py          #   the approval-gated investigation (was PAM 20)
 │       └── replay.py               #   offline replay of a stored investigation (eval harness)
 ├── Dockerfile · docker-compose.yml # container deployment (recommended) — see below
@@ -132,7 +134,8 @@ Telegram/Loki/HA sends become log lines, approvals auto-granted):
 
 ```bash
 heim daily --dry-run                # full daily run: metrics → LLM → report in out/*.html
-heim poll --dry-run                 # one alert-poller cycle
+heim poll --dry-run                 # one poll cycle: firing alerts + metric thresholds
+heim thresholds                     # what is over threshold right now, and its streak
 heim investigate --host ubuntu-server --dry-run \
     --finding "memory used climbed 31% → 43% over 3 days, swap growing"
 heim incidents                      # show the incident store
@@ -325,12 +328,13 @@ Endpoints, schedules, recipients, timeouts — see the commented
 that channel; the pipelines degrade gracefully (e.g. no email config → reports are
 written to `out/`).
 
-Three knobs are worth setting deliberately:
+Four knobs are worth setting deliberately:
 
 | Setting | Effect |
 |---|---|
 | `model_prices` + `currency` | model id → `{input, output}` price **per million tokens**. Ships commented out with placeholder numbers — fill in your provider's current pricing and investigations, runs and the 24h tile start showing money. A model with no entry stays *unpriced*: the UI shows an em dash, never a made-up `$0.00`. |
 | `investigator_models` | exact model ids offered when *triggering* an investigation — a compact select next to every `INVESTIGATE` button and `heim investigate --model X`. Empty (the default) renders no select and every run uses the investigator agent's own model. The chosen model overrides that agent for **that run only** and is recorded on the investigation row, so costs and tool usage segment by it. List only ids you also priced in `model_prices`. |
+| `threshold_detection` + `threshold_severity` + `threshold_consecutive` | open incidents from the **metric catalog's own** `warn`/`crit` bounds, not just from `prometheus/alerts.yml` rules and the daily LLM's findings. Evaluated inside the existing poll cycle, so the approval gate, the concurrency cap and false-positive mutes all apply unchanged. `threshold_consecutive` is the hysteresis: a series must be over its bound on that many **consecutive** polls before an incident opens (streaks survive a daemon restart), which is what keeps a single-scrape spike from burning an agent run. These incidents are marked `[metric] ` and this path resolves only its own. |
 | `store_transcripts` | keep each agent's full message history with its investigation (capped at 512 KB, oldest turns dropped) for post-morteming a wrong root cause, and the prerequisite for `heim replay` (the transcript is the cassette). Off by default — it is large. |
 
 ### `config/hosts/*.yaml` — add a host, add a file

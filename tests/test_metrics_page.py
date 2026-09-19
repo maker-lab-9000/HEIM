@@ -76,6 +76,8 @@ class FakeProm:
     def __init__(self):
         self.calls = 0
         self.down = False
+        #: serve only the one ok series — the "nothing is wrong" page
+        self.ok_only = False
 
     async def __call__(self, base_url, qdefs, window):
         self.calls += 1
@@ -87,6 +89,8 @@ class FakeProm:
                 item["error"] = "ConnectError: All connection attempts failed"
             elif q.qid == BROKEN:
                 item["error"] = "ReadTimeout: timed out"
+            elif self.ok_only:
+                item["data"] = CANNED["swap_used"] if q.qid == "swap_used" else EMPTY
             else:
                 item["data"] = CANNED.get(q.qid, EMPTY)
             out.append(item)
@@ -165,15 +169,73 @@ def test_header_counts_and_overall_pill(client):
     assert 'class="btn" type="submit">refresh<' in t
 
 
+# ------------------------------------------------- the header names offenders
+
+
+def _header(text: str) -> str:
+    """Just the header card — everything above the filters form."""
+    return text.split('id="mall"', 1)[0]
+
+
+def test_header_names_the_offending_host_and_resource(client):
+    """The counts say how many; this says which (spec Part B)."""
+    h = _header(client.get("/metrics").text)
+    # the crit row: ubuntu-server's sdb drive temperature, worst first
+    assert '<span class="hbadge"><span class="hdot"' in h
+    assert ">ubuntu-server</span>" in h
+    assert 'class="c-mname">Drive temp <span class="mono ink2">sdb</span>' in h
+    assert '<td class="num mono c-cur">68.0°C</td>' in h
+    assert '<td class="num mono c-delta st-crit">▲ 13.3%</td>' in h
+    # ...and the warn row below it
+    assert 'class="c-mname">Memory used' in h
+    assert h.index("Drive temp") < h.index("Memory used")
+
+
+def test_header_table_is_absent_when_nothing_is_flagged(client, prom):
+    prom.ok_only = True
+    t = client.get("/metrics?refresh=1").text
+    assert "0 crit · 0 warn" in t
+    assert "Swap used" in t                        # the ok row still renders
+    assert "c-mname" in _tables(t)                 # ...in the tables below
+    assert "c-mname" not in _header(t)             # but the header names nobody
+
+
+def test_header_table_caps_and_links_to_the_rest(client, monkeypatch):
+    """Past the cap the header defers to the full tables below."""
+    monkeypatch.setattr("heim.dashboard.app._OFFENDER_ROWS", 1)
+    h = _header(client.get("/metrics").text)
+    assert "Drive temp" in h and "Memory used" not in h   # only the worst
+    assert '<a class="mono" href="#mall">+1 more</a>' in h
+
+
+def test_offenders_never_disagree_with_the_counts():
+    """``+N more`` counts the whole payload, not just what topAlerts kept."""
+    from heim.dashboard.app import _offenders
+
+    payload = {"counts": {"crit": 9, "warn": 12},
+               "topAlerts": [{"host": f"h{i}"} for i in range(15)]}
+    out = _offenders(payload)
+    assert len(out["rows"]) == 8 and out["more"] == 13    # 21 flagged - 8 shown
+
+
+def _tables(text: str) -> str:
+    """Everything below the header card — the part a filter narrows.
+
+    The header (counts *and* the offenders table under them) describes the
+    whole payload by design, so a filter assertion has to say where it looks.
+    """
+    return text.split('id="mall"', 1)[-1]
+
+
 def test_host_filter_narrows(client):
-    t = client.get("/metrics?host=homelab").text
+    t = _tables(client.get("/metrics?host=homelab").text)
     assert '<h2 class="mhost mono">homelab ' in t
     assert '<h2 class="mhost mono">ubuntu-server ' not in t
     assert "Memory used" not in t
 
 
 def test_category_filter_narrows(client):
-    t = client.get("/metrics?category=Temperature").text
+    t = _tables(client.get("/metrics?category=Temperature").text)
     assert "Drive temp" in t
     assert "Memory used" not in t
     assert 'class="eyebrow mcat">Memory<' not in t
