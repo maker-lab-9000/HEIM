@@ -106,6 +106,15 @@ instance_host_map:
   "${HEIM_SERVER_IP}": ubuntu-server
   "${HEIM_PROXMOX_IP}": homelab
   "${HEIM_HA_IP}": home-assistant
+  # The VM HEIM runs on. The name must match the Proxmox guest name for its
+  # vmid, or its node_* and pve_* series land on two different hosts.
+  "${HEIM_OBSERVABILITY_IP}": heim
+
+# Host badge colors on the dashboard are handed out by position in this list,
+# so APPEND a new host rather than inserting it — otherwise every host after
+# the insertion point changes color. This is append-only history, not a
+# meaningful ordering. Hosts omitted here follow in config order.
+host_color_order: [home-assistant, homelab, ubuntu-server, heim]
 
 # Open incidents from metric thresholds (config/queries/daily.yaml warn/crit),
 # not just from prometheus/alerts.yml rules. Evaluated on the poller's cadence.

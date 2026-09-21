@@ -113,8 +113,13 @@ Conventions:
   subclass + a guard (or hard-scoped client) + list it in `config/agents/investigator.yaml`.
 - **New delivery channel** (ntfy, Matrix, Discord, webhook…): `channels/<x>.py` with
   fire-and-forget semantics, exposed on `Runtime`, called from pipelines.
-- **New host**: `config/hosts/<name>.yaml` (+ OS-side permission set, + entry in
-  `instance_host_map`). The host `role` drives brief selection and reconcile gating.
+- **New host**: `config/hosts/<name>.yaml` (+ OS-side permission set if it has a
+  shell, + entry in `instance_host_map`, + APPEND to `host_color_order`). The host
+  `role` drives brief selection and reconcile gating; omitting the `ssh:` block makes
+  it a Prometheus/API-only guest, and the brief and approval prompt adapt. For a
+  Proxmox guest the host name MUST equal the PVE guest name, or its `node_*` and
+  `pve_*` series resolve to two different hosts (`config/hosts/heim.yaml` is the
+  worked example).
 
 ---
 

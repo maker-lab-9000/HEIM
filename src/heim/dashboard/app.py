@@ -358,9 +358,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     )
     templates.env.filters.update(mval=fmt.value, mtrend=fmt.trend,
                                  mdelta=fmt.delta)
-    # host badge colors are handed out in config order, so the filter is bound
-    # to this app's config rather than being a free function on fmt
-    host_order = tuple(cfg.hosts)
+    # host badge colors are handed out by position, so the filter is bound to
+    # this app's config rather than being a free function on fmt. The pinned
+    # order keeps a host's color stable when another host is added.
+    host_order = fmt.color_order(tuple(cfg.hosts), cfg.settings.host_color_order)
     templates.env.filters["host_var"] = lambda h: fmt.host_color(h, host_order)
     # money needs the deployment's currency, so it is bound here too (§5.6)
     currency = cfg.settings.currency

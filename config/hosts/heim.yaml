@@ -1,0 +1,18 @@
+name: heim
+role: guest
+investigable: all
+
+# No ssh: block — this host has no shell for the agent. The name matches the
+# Proxmox guest name for qemu/103 on purpose: HEIM derives a host's identity
+# from instance_host_map for node_* series and from the PVE guest name for
+# pve_* series, so the two must agree or one machine appears as two hosts.
+
+# Injected into the investigator prompt's [FACTS] block.
+facts: |
+  'heim' = Proxmox VM 103 (2 vCPU, 2 GiB RAM, 2 GiB swap) on bare-metal 'homelab', Debian 13. NOT SSH-reachable — there is NO shell on this host. Investigate it only via Prometheus (node_* with instance="${HEIM_OBSERVABILITY_IP}:9100", job heim-vm-node-exporter = in-guest view; pve_* with id="qemu/103" = hypervisor view) and the proxmox_api tool (/nodes/homelab/qemu/103/config and /status).
+  Storage: ONE filesystem — / on /dev/sda1, ext4, 61 GiB. There are no data mounts, so any filesystem finding here IS the root filesystem, and a root filesystem filling up is what takes this host down. Physical hardware (SMART, drive temps) lives on 'homelab' and is NOT visible from inside the VM.
+  This is the host HEIM itself runs on, in Docker. Two consequences: (1) its 2 GiB of RAM is small, so judge memory findings against that absolute size rather than the percentage alone — a percentage that would be routine on a 16 GiB guest is not the same event here; (2) if this host is hard down, HEIM is down with it and cannot report on itself, so its own outage is covered by the dead-man's switch, not by an investigation. Do not conclude that 'heim' was healthy merely because monitoring kept running.
+  No cAdvisor scrapes this host, so there are NO per-container metrics for it. Docker's own state is visible only as systemd units via Prometheus: node_systemd_unit_state{instance="${HEIM_OBSERVABILITY_IP}:9100", name=~"docker.service|docker.socket"}.
+
+# No privileges: block — [PRIVILEGES] covers ssh hosts only, and this host has
+# no shell. The facts above tell the agent which vantages it actually has.

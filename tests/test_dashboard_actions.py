@@ -523,9 +523,12 @@ def test_findings_page_offers_the_verdict_pair_then_shows_the_pill(client, ids):
     assert after.count("✓ CONFIRM") == 1
 
 
-def test_host_cards_offer_investigate(client):
+def test_host_cards_offer_investigate(app_store):
+    """One investigate form per configured host — derived, not hardcoded, so
+    adding a host does not fail a test about buttons."""
+    client, _ids, _store, cfg = app_store
     html = client.get("/hosts").text
-    assert html.count('action="/actions/investigate"') == 3
+    assert html.count('action="/actions/investigate"') == len(cfg.hosts)
     assert "INVESTIGATE" in html
 
 
