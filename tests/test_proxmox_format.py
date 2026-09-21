@@ -166,3 +166,39 @@ def test_clip_applies_after_compaction() -> None:
     assert out.endswith(" ...[truncated]")
     assert len(out) == 50 + len(" ...[truncated]")
     assert out.startswith('{"total":57,"tasks":')
+
+
+# ======================================================== dead-end hints
+
+def test_syslog_timeout_hint_names_journal_and_forbids_a_retry():
+    """/syslog cannot work on a journald-only host; a 30s retry is pure waste.
+
+    It used to fail fast with 403 (the auditor token had no permissions at
+    all); once that was fixed it started holding the request for pveproxy's
+    full 30s timeout instead, which is worse for an agent that retries.
+    """
+    from heim.tools.proxmox_api import _hint
+
+    for status in (0, 596):                       # our timeout, pveproxy's
+        hint = _hint("/api2/json/nodes/homelab/syslog?limit=200", status)
+        assert "journald only" in hint
+        assert "/journal" in hint
+        assert "lastentries" in hint and "since" in hint
+        assert "Do not retry" in hint
+
+
+def test_403_hint_tells_the_agent_to_stop_and_report():
+    from heim.tools.proxmox_api import _hint
+
+    hint = _hint("/api2/json/nodes/homelab/status", 403)
+    assert "privilege" in hint and "Do not retry" in hint
+    assert "report" in hint
+
+
+def test_no_hint_for_a_working_call_or_a_healthy_syslog():
+    from heim.tools.proxmox_api import _hint
+
+    assert _hint("/api2/json/nodes/homelab/journal?lastentries=5", 200) == ""
+    assert _hint("/api2/json/nodes/homelab/status", 200) == ""
+    # a syslog that actually answers needs no hint
+    assert _hint("/api2/json/nodes/homelab/syslog?limit=5", 200) == ""
