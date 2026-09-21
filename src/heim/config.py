@@ -62,10 +62,32 @@ class SchedulesCfg(BaseModel):
     poll_minutes: int = 5
 
 
+def _timeout_s(hours: float) -> float | None:
+    """Hours -> seconds, with ``<= 0`` meaning *wait indefinitely* (None).
+
+    One definition of "no timeout", shared by the Telegram wait and the store
+    poll, so the two halves of an approval cannot disagree about when it dies.
+    """
+    return None if not hours or float(hours) <= 0 else float(hours) * 3600
+
+
 class ApprovalsCfg(BaseModel):
     require: bool = True
-    approve_timeout_hours: float = 6.0
+    #: 0 = wait until the operator reacts. The default, deliberately: an
+    #: approval that expires silently discards the investigation and
+    #: re-proposes the incident later, which is worse than a prompt that waits.
+    approve_timeout_hours: float = 0.0
+    #: An unanswered *outcome* prompt is benign — the investigation is already
+    #: delivered — so this one keeps a real default. 0 waits indefinitely too.
     outcome_timeout_hours: float = 8.0
+
+    @property
+    def approve_timeout_s(self) -> float | None:
+        return _timeout_s(self.approve_timeout_hours)
+
+    @property
+    def outcome_timeout_s(self) -> float | None:
+        return _timeout_s(self.outcome_timeout_hours)
 
 
 class Settings(BaseModel):

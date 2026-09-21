@@ -18,13 +18,20 @@ cost in ``settings.currency`` (roadmap §5.6). The report's optional
 made a tool more useful — is indexed into ``tool_feedback`` on the way past
 (``record_tool_feedback``, shared with the replay pipeline). The agent phase runs under a
 process-wide semaphore (``settings.max_concurrent_investigations``) acquired
-*after* approval, so a six-hour approval wait never occupies a slot.
+*after* approval, so an approval waiting on a person never occupies a slot.
 
 The approval itself is *not* Telegram-only (roadmap §5.7 "web approvals"): the
 Telegram button races a poll of ``investigations.approval_decision``, which any
 other process (the dashboard) can write. With no Telegram configured the store
 poll becomes the whole gate, so a dashboard-only deployment still gets a human
 in the loop instead of silently skipping the approval.
+
+It is also *durable* (roadmap §5.8). By default the wait has no deadline — an
+approval nobody answers stays parked rather than expiring into a decline — and
+the buttons carry ``inv:<id>``, so a tap resolves through the store even after
+a restart. ``rearm_pending_approvals`` picks parked rows back up at daemon
+start via ``resume_id``, replaying the *stored* brief without re-sending the
+prompt.
 """
 from __future__ import annotations
 
@@ -281,7 +288,7 @@ _APPROVE = {"approve", "approved", "yes", "true"}
 _DECLINE = {"decline", "declined", "no", "false"}
 
 
-async def _store_decision(rt: Runtime, investigation_id: int, timeout_s: float,
+async def _store_decision(rt: Runtime, investigation_id: int, timeout_s: float | None,
                           poll_s: float | None = None) -> bool | None:
     """Poll the investigation row for a decision written by another process.
 
@@ -292,7 +299,10 @@ async def _store_decision(rt: Runtime, investigation_id: int, timeout_s: float,
     # read at call time so the interval stays tunable (and testable)
     poll_s = APPROVAL_POLL_SECONDS if poll_s is None else poll_s
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + max(0.0, float(timeout_s))
+    # A non-positive timeout means "wait until a human reacts". The poll
+    # interval is unchanged either way — an indefinite wait must not become a
+    # spin, and it costs one cheap indexed read per interval.
+    deadline = None if not timeout_s or timeout_s <= 0 else loop.time() + float(timeout_s)
     while True:
         try:
             decision = str(rt.store.approval_decision(investigation_id) or "").strip().lower()
@@ -303,6 +313,9 @@ async def _store_decision(rt: Runtime, investigation_id: int, timeout_s: float,
             return True
         if decision in _DECLINE:
             return False
+        if deadline is None:
+            await asyncio.sleep(poll_s)
+            continue
         remaining = deadline - loop.time()
         if remaining <= 0:
             return None
@@ -310,21 +323,32 @@ async def _store_decision(rt: Runtime, investigation_id: int, timeout_s: float,
 
 
 async def _await_approval(rt: Runtime, investigation_id: int, text: str,
-                          timeout_s: float) -> tuple[bool | None, str]:
+                          timeout_s: float | None, *, send_prompt: bool = True) -> tuple[bool | None, str]:
     """Race the Telegram button against the store decision (dashboard/CLI).
 
     Whichever answers first wins; the loser is cancelled, so a Telegram reply
     that arrives after the dashboard already decided is ignored. Returns
     ``(answer, source)`` with answer None meaning "timed out".
+
+    ``send_prompt=False`` is the re-armed case: the prompt was sent before the
+    restart and its buttons still carry this investigation's id, so asking
+    again would only duplicate the message. The store poll alone picks up the
+    tap, because the update consumer writes the decision column.
     """
     tasks: dict[asyncio.Task, str] = {
         asyncio.create_task(_store_decision(rt, investigation_id, timeout_s)): "store",
     }
-    if rt.telegram is not None:
-        tasks[asyncio.create_task(rt.telegram.ask(text, timeout_s=timeout_s))] = "telegram"
+    if rt.telegram is not None and send_prompt:
+        tasks[asyncio.create_task(
+            rt.telegram.ask(text, timeout_s=timeout_s, key=f"inv:{investigation_id}")
+        )] = "telegram"
+    elif rt.telegram is not None:
+        log.info("investigation #%s re-armed — waiting on the original prompt's buttons",
+                 investigation_id)
     else:
         log.info("no Telegram configured — investigation #%s waits on a store decision "
-                 "(dashboard) for up to %.1fh", investigation_id, timeout_s / 3600)
+                 "(dashboard) %s", investigation_id,
+                 "indefinitely" if timeout_s is None else f"for up to {timeout_s / 3600:.1f}h")
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     for t in pending:
         t.cancel()
@@ -343,6 +367,51 @@ async def _await_approval(rt: Runtime, investigation_id: int, text: str,
     return None, (results[0][0] if results else "")
 
 
+def request_from_investigation(row: dict) -> InvestigationRequest:
+    """Rebuild the request a stored investigation was created from.
+
+    ``model`` is replayed as an override so a re-armed run uses the model the
+    operator was told about, even if the configured default changed meanwhile.
+    """
+    try:
+        findings = json.loads(row.get("findings_json") or "[]")
+    except (ValueError, TypeError):
+        log.warning("investigation #%s has unreadable findings_json", row.get("id"))
+        findings = []
+    return InvestigationRequest(
+        host=str(row.get("host") or ""),
+        host_role=str(row.get("host_role") or "guest"),
+        fingerprint=str(row.get("fingerprint") or ""),
+        findings=findings if isinstance(findings, list) else [],
+        retry_of=int(row.get("retry_of") or 0),
+        model_override=str(row.get("model") or ""),
+    )
+
+
+def rearm_pending_approvals(rt: Runtime) -> int:
+    """Resume waiting on every parked approval; returns how many.
+
+    Called once at daemon startup, after the crash sweep. The prompts are NOT
+    re-sent — their buttons carry ``inv:<id>``, so the originals still resolve
+    — and each waiter holds nothing until it is approved, exactly as on the
+    first run. Detached, because these wait on a person and the daemon must
+    finish starting.
+    """
+    try:
+        rows = rt.store.investigations(limit=500, status="pending_approval")
+    except Exception:
+        log.exception("could not list parked approvals")
+        return 0
+    for row in rows:
+        req = request_from_investigation(row)
+        _detach(run_investigation(rt, req, resume_id=int(row["id"]),
+                                  trigger=str(row.get("trigger") or "manual")))
+    if rows:
+        log.info("re-armed %d parked approval(s): %s", len(rows),
+                 ", ".join(f"#{r['id']} {r.get('host')}" for r in rows))
+    return len(rows)
+
+
 async def run_investigation(
     rt: Runtime,
     req: InvestigationRequest,
@@ -350,12 +419,19 @@ async def run_investigation(
     require_approval: bool | None = None,
     trigger: str = "manual",
     on_start=None,
+    resume_id: int | None = None,
 ) -> dict | None:
     """Returns a result summary dict, or None if declined/timed out/failed.
 
     ``on_start(investigation_id)`` is called as soon as the tracking row
     exists, so a caller that needs the id even on the declined/failed paths
     (the queue worker) can capture it.
+
+    ``resume_id`` re-arms an existing ``pending_approval`` row after a restart
+    instead of creating a new one: same id, same brief, same buttons — only
+    the waiter is new. Everything downstream of the gate is shared with a
+    first run, which is the point; a resumed investigation must not be able to
+    behave differently from the one the operator was asked about.
     """
     cfg = rt.config
     # §5.1: the trigger may pick the model for this run only — same copy the
@@ -385,19 +461,29 @@ async def run_investigation(
     # other. With neither channel the wait simply times out into "declined",
     # which is the safe direction.
     will_ask = bool(require and not rt.dry_run)
-    inv_id = rt.store.create_investigation(
-        fingerprint=req.fingerprint,
-        host=req.host,
-        host_role=req.host_role,
-        agent_name="investigator",
-        model=agent_cfg.model,
-        trigger=trigger,
-        status="pending_approval" if will_ask else "running",
-        started_at=generated_at,
-        retry_of=req.retry_of,
-        brief_md=brief,
-        findings_json=json.dumps(req.findings, ensure_ascii=False, default=str),
-    )
+    if resume_id is not None:
+        # The operator was asked about the *stored* brief, so replay that one
+        # rather than a freshly rendered near-copy: the prompt templates or
+        # host facts may have changed across the restart.
+        inv_id = int(resume_id)
+        row = rt.store.investigation(inv_id) or {}
+        brief = str(row.get("brief_md") or brief)
+        generated_at = str(row.get("started_at") or generated_at)
+        will_ask = True
+    else:
+        inv_id = rt.store.create_investigation(
+            fingerprint=req.fingerprint,
+            host=req.host,
+            host_role=req.host_role,
+            agent_name="investigator",
+            model=agent_cfg.model,
+            trigger=trigger,
+            status="pending_approval" if will_ask else "running",
+            started_at=generated_at,
+            retry_of=req.retry_of,
+            brief_md=brief,
+            findings_json=json.dumps(req.findings, ensure_ascii=False, default=str),
+        )
     if on_start is not None:
         try:
             on_start(inv_id)
@@ -406,11 +492,13 @@ async def run_investigation(
 
     # ------------------------------------------------------------- approval
     if will_ask:
-        await rt.emit_loki([_action(req.host, "approval_requested", req.fingerprint,
-                                    f"Approval requested for {req.host}", generated_at)])
+        if resume_id is None:
+            await rt.emit_loki([_action(req.host, "approval_requested", req.fingerprint,
+                                        f"Approval requested for {req.host}", generated_at)])
         answer, source = await _await_approval(
             rt, inv_id, _approval_text(req, ftext),
-            cfg.settings.approvals.approve_timeout_hours * 3600,
+            cfg.settings.approvals.approve_timeout_s,
+            send_prompt=resume_id is None,
         )
         if answer is not True:
             log.info("investigation of %s declined/timed out (%s)", req.host, source or "no answer")
@@ -568,7 +656,8 @@ async def _confirm_outcome(rt: Runtime, req: InvestigationRequest, inv_id: int) 
             f"✅ Resolved = handled; ⚠️ Needs human = requires manual intervention (the incident "
             f"stays flagged and is re-proposed next run).",
             yes="✅ Resolved", no="⚠️ Needs human",
-            timeout_s=cfg.settings.approvals.outcome_timeout_hours * 3600,
+            timeout_s=cfg.settings.approvals.outcome_timeout_s,
+            key=f"out:{inv_id}",
         )
         if outcome is True:
             rt.store.update_investigation(inv_id, status="resolved", outcome="resolved",

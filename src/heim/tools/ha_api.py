@@ -36,4 +36,37 @@ class HaApiTool(Tool):
 
         await self.ctx.emit(f"🏠 HA GET {g.normalized}\n→ HTTP {r.status_code}\n{body[:600]}")
         self.ctx.record({"tool": self.name, "path": g.normalized, "blocked": False, "status": r.status_code})
-        return json.dumps({"ok": r.status_code < 400, "status": r.status_code, "path": g.normalized, "body": body})
+        out = {"ok": r.status_code < 400, "status": r.status_code, "path": g.normalized, "body": body}
+        hint = _hint(g.normalized, r.status_code)
+        if hint:
+            out["hint"] = hint
+        return json.dumps(out)
+
+
+def _hint(path: str, status: int) -> str:
+    """What to do next when HA answers with a dead end.
+
+    HA's 404 body is the 14-byte string ``404: Not Found``, which tells an
+    agent nothing — one real investigation stalled on exactly that. The agent
+    cannot fix HA, but it CAN pick a different vantage or state plainly that
+    the log was unavailable, which beats guessing.
+    """
+    if status != 404:
+        return ""
+    if path == "/api/error_log":
+        return (
+            "HA has no log file, so core log text is NOT available over this API. "
+            "Check /api/config -> logging.log_file_disabled_reason for the cause; null "
+            "there means HA did not disable the log, the file is simply absent. HA's "
+            "richer error surface (system_log) is websocket-only and unreachable from "
+            "this tool, so do not keep hunting for a log endpoint. Use instead: "
+            "/api/states (entities in 'unavailable' or 'unknown' are the REST-visible "
+            "health signal) and /api/logbook/<ISO ts> for what changed and when. Say in "
+            "your report that HA core logs were unavailable."
+        )
+    if path.startswith("/api/states/"):
+        return (
+            "No such entity. List the real entity ids with /api/states (no suffix) and "
+            "match on the one you meant rather than guessing another spelling."
+        )
+    return ""

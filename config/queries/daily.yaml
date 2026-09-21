@@ -315,6 +315,25 @@ queries:
   warn: 1
   crit: 1
   promql: pve_up{id="node/homelab"}
+# Guest RAM committed against the hypervisor's physical RAM, as one number.
+# Asked for by the investigator agent: it had been cross-joining the per-guest
+# and node memory series by hand on every hypervisor memory investigation.
+# `scalar()` on the sum keeps the node series' labels, so the row is attributed
+# to homelab rather than to "unknown".
+#
+# `dir: info` on purpose — informational, never flags. Overcommit above 100% is
+# a deliberate, healthy configuration when ballooning is on, so we do not yet
+# know where the line is on this hardware. warn/crit below are unused while
+# dir is `info`; they record where concern would start if it is ever switched
+# to `high`.
+- qid: pve_mem_overcommit
+  category: Proxmox
+  label: Guest RAM committed vs host
+  unit: '%'
+  dir: info
+  warn: 100
+  crit: 125
+  promql: 100 * scalar(sum(pve_memory_size_bytes{id=~"qemu/.*"})) / pve_memory_size_bytes{id="node/homelab"}
 - qid: pve_vm_up
   category: Proxmox
   label: VM status

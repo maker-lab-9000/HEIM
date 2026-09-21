@@ -11,13 +11,48 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CATALOG = REPO_ROOT / "config" / "queries" / "daily.yaml"
 
 
+#: build-queries.js defines exactly 49 query objects. The catalog may grow
+#: past that with HEIM-native queries, but it may never *shrink*: the port
+#: fidelity these tests exist to hold is about the 49 still being there
+#: unchanged, not about the file's total length.
+PORTED_COUNT = 49
+
+#: Queries added after the port. Each needs a comment in the catalog saying
+#: why it is not in the n8n original — listing it here is the reminder.
+HEIM_NATIVE = {"pve_mem_overcommit"}
+
+
 def test_yaml_loads_and_count_matches_js():
     queries = load_queries(CATALOG)
-    # build-queries.js defines exactly 49 query objects.
-    assert len(queries) == 49
+    assert len(queries) == PORTED_COUNT + len(HEIM_NATIVE)
     assert all(isinstance(q, QueryDef) for q in queries)
-    # qids are unique.
-    assert len({q.qid for q in queries}) == 49
+    qids = {q.qid for q in queries}
+    assert len(qids) == len(queries)                     # qids are unique
+    # nothing was dropped from the port to make room for an addition
+    assert HEIM_NATIVE <= qids
+    assert len(qids - HEIM_NATIVE) == PORTED_COUNT
+
+
+def test_heim_native_queries_are_informational_only():
+    """A query added for an agent's convenience must not start dispatching.
+
+    `pve_mem_overcommit` reads >100% on any healthy ballooning setup, so it
+    flags nothing until someone establishes the real line on this hardware.
+    """
+    by_qid = {q.qid: q for q in load_queries(CATALOG)}
+    for qid in HEIM_NATIVE:
+        assert by_qid[qid].dir == "info", qid
+
+
+def test_overcommit_query_keeps_the_node_labels():
+    """`scalar()` must wrap the *sum*, not the node series.
+
+    Wrapped the other way the result carries no labels, `host_from_metric`
+    returns "unknown", and the row lands on a host that does not exist.
+    """
+    promql = {q.qid: q.promql for q in load_queries(CATALOG)}["pve_mem_overcommit"]
+    assert promql.startswith("100 * scalar(sum(")
+    assert promql.endswith('pve_memory_size_bytes{id="node/homelab"}')
 
 
 def test_query_fields_are_well_formed():

@@ -3,12 +3,17 @@ module: heim.tools.ha_api:HaApiTool
 description: >-
   Perform a READ-ONLY GET request against the Home Assistant REST API. ONLY for
   investigating the 'home-assistant' host. Allowed endpoints: /api/error_log (HA core
-  log - check FIRST), /api/logbook/<ISO ts>?entity=<id> (what changed and when),
-  /api/states or /api/states/<entity_id> (current state + attributes),
+  log - check FIRST, but see below), /api/logbook/<ISO ts>?entity=<id> (what changed and
+  when), /api/states or /api/states/<entity_id> (current state + attributes),
   /api/history/period/<ISO ts>?filter_entity_id=<id> (one entity timeline), /api/config
-  (version + loaded components). Any other path is rejected by a safety guard - if
-  blocked, use an allowed endpoint instead. Pass the endpoint path including any query
-  string as 'path'.
+  (version, loaded components, and logging.log_file_disabled_reason). Any other path is
+  rejected by a safety guard - if blocked, use an allowed endpoint instead. Pass the
+  endpoint path including any query string as 'path'.
+  NOTE: /api/error_log returns 404 when this HA instance has no log file - core log text
+  is then unavailable over REST entirely (HA's system_log is websocket-only), so do not
+  hunt for another log endpoint. Fall back to /api/states, where entities reading
+  'unavailable' or 'unknown' are the health signal, plus /api/logbook for what changed.
+  A 404 response carries a 'hint' field spelling this out.
 args:
   path:
     type: string

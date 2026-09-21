@@ -858,11 +858,17 @@ class IncidentStore:
         return int(row["n"]) if row else 0
 
     def sweep_interrupted(self, now: str = "") -> int:
-        """Crash recovery: nothing can still be running right after a restart.
+        """Crash recovery: nothing can still be *running* right after a restart.
 
-        Marks ``running`` jobs as ``interrupted`` and the investigations that
-        were mid-flight (running / pending_approval) as failed. Returns the
-        number of rows touched across both tables.
+        The sweep distinguishes mid-flight from parked. A ``running``
+        investigation genuinely cannot resume — its agent loop died with the
+        process — so it is failed, as is its job. A ``pending_approval`` one
+        was never running: it is a question waiting on a person, its buttons
+        carry an investigation id that still resolves, and the daemon re-arms
+        it on startup. Failing those silently threw away every parked approval
+        on each deploy, which is exactly what durable approvals are for.
+
+        Returns the number of rows touched across both tables.
         """
         stamp = now or self._now()
         touched = self._db.execute(
@@ -873,7 +879,7 @@ class IncidentStore:
         touched += self._db.execute(
             "UPDATE investigations SET status = 'failed', finished_at = ?, "
             "incomplete_reason = 'interrupted by daemon restart' "
-            "WHERE status IN ('running', 'pending_approval')",
+            "WHERE status = 'running'",
             (stamp,),
         ).rowcount
         self._db.commit()

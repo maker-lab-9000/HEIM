@@ -368,21 +368,60 @@ incident row, and threads `retry_of` through `InvestigationRequest` into the new
   suggestion per tool under its row (and unmatched names as a `💡 general:` footnote,
   because a name that matches no tool is the prompt drifting, not noise to drop).
 
-### 5.8 Durable approvals (deferred 2026-09-19 — plan written, not built)
+### 5.8 Durable approvals — ✅ implemented
 
-An investigation awaiting approval currently expires after
-`approvals.approve_timeout_hours` (6h), is marked declined, and the incident is
-re-proposed next run. The operator wants approvals to queue indefinitely until
-answered. Full design in
-[`docs/superpowers/plans/2026-09-19-durable-approvals.md`](docs/superpowers/plans/2026-09-19-durable-approvals.md).
+An investigation awaiting approval **waits until the operator reacts**. No
+deadline, no silent expiry, no approval lost to a deploy.
 
-The load-bearing finding from that plan, for whoever picks it up: removing the
-timeout alone makes things WORSE. Three mechanisms end a pending approval, and
-only one is the timeout — `sweep_interrupted()` fails every `pending_approval`
-row on daemon start, and Telegram `callback_data` keys an in-memory future, so
-after any restart the operator taps Approve and gets silence. Durability means
-buttons that carry the investigation id and resolve through the store, plus a
-restart that re-arms parked approvals instead of failing them.
+The load-bearing finding from the design work: removing the timeout alone makes
+things WORSE — it produces an approval that survives until the next restart,
+then dies behind a Telegram message whose buttons no longer do anything. Three
+mechanisms ended a pending approval, so all three had to change:
+
+- **The timeout** — `approvals.approve_timeout_hours: 0` means wait
+  indefinitely, and 0 is now the shipped default; any positive value keeps the
+  old expire-into-declined behaviour. `outcome_timeout_hours` gained the same
+  `0` semantics but keeps its 8h default: an unanswered *outcome* prompt is
+  benign (the report is already delivered), whereas an unanswered *approval*
+  used to discard the whole investigation. One helper — `ApprovalsCfg.
+  approve_timeout_s` / `outcome_timeout_s` — defines "no timeout" for both the
+  Telegram wait and the store poll, so the two halves cannot disagree. The
+  indefinite wait keeps the same poll interval; it never becomes a spin.
+- **The restart** — `sweep_interrupted()` now distinguishes *mid-flight* from
+  *parked*. A `running` investigation is failed (its agent loop died with the
+  process); a `pending_approval` one is left alone, and the daemon calls
+  `rearm_pending_approvals()` right after the sweep to resume waiting on each.
+  Re-arming reuses the row via `run_investigation(..., resume_id=...)` — same
+  id, same *stored* brief, no duplicate Telegram message — and still takes the
+  concurrency slot only after approval, so parked approvals never hold one.
+- **The buttons** — `callback_data` is `heim:inv:<investigation_id>:<y|n>`
+  (`out:<id>` for outcome confirms), not a random uid keyed to an in-memory
+  future. The update consumer resolves a tap by **writing the store**
+  (`runtime.approval_sink`), which is what a waiter in a later process polls;
+  the in-memory future is still completed when present, so the same-process
+  case answers instantly rather than after a poll interval. Both write the same
+  verdict, so their order does not matter. The consumer is started with the
+  daemon (`Telegram.start_consumer`), not lazily per `ask`, or a tap arriving
+  during a restart window would be dropped. A tap on a prompt that is no longer
+  pending is acknowledged with "No longer pending — nothing changed" rather
+  than failing silently.
+
+Only approvals are durable. An outcome confirm lost to a restart leaves the
+investigation `complete`, which is benign — it is deliberately not re-armed.
+
+Known seam: if a parked approval came from a queued *job*, the sweep still
+marks that job `interrupted` (as it does every running job) while the
+investigation it points at goes on to complete. The investigation row is the
+one that tells the truth about the work; the job row records the queue attempt
+that the restart cut short. Worth reconciling if job status ever drives
+anything beyond display.
+
+Visibility: the investigation detail page shows a `pending_approval` row's age
+(`waiting 3h 12m`) in place of a duration, because an approval that waits
+forever needs its age visible or a forgotten one is invisible.
+
+Design doc: [`docs/superpowers/plans/2026-09-19-durable-approvals.md`](docs/superpowers/plans/2026-09-19-durable-approvals.md).
+Tests: `tests/test_durable_approvals.py`.
 
 ### 5.7 Smaller, high-value items
 

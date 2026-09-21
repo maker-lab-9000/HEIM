@@ -113,6 +113,32 @@ class Runtime:
         await post_sensor(ha.url, token, entity_suffix, state, attributes)
 
 
+def approval_sink(store: IncidentStore):
+    """Turn a Telegram button tap into a decision the store remembers.
+
+    This is what lets an approval outlive the process that asked for it: the
+    waiter polls ``approval_decision``, so writing the column resolves a
+    prompt regardless of which process sent the buttons.
+
+    Keys are the ones ``ask`` was given — ``inv:<id>`` for an approval,
+    ``out:<id>`` for an outcome confirm. Only approvals are made durable. An
+    outcome prompt lost to a restart leaves the investigation ``complete``,
+    which is benign; a lost *approval* threw away the whole investigation,
+    which is not. Returns False for anything it did not record, so the caller
+    can tell the operator their tap no longer applies.
+    """
+    def sink(key: str, approved: bool) -> bool:
+        kind, _, raw = key.partition(":")
+        if kind != "inv" or not raw.isdigit():
+            return False
+        row = store.investigation(int(raw))
+        if row is None or row.get("status") != "pending_approval":
+            return False   # already decided, or gone
+        store.set_approval_decision(int(raw), "approve" if approved else "decline")
+        return True
+    return sink
+
+
 def build_runtime(config: Config | None = None, *, dry_run: bool = False) -> Runtime:
     cfg = config or load_config()
     store = IncidentStore(cfg.settings.db_path)
@@ -120,4 +146,5 @@ def build_runtime(config: Config | None = None, *, dry_run: bool = False) -> Run
     token = env("TELEGRAM_BOT_TOKEN")
     if cfg.settings.telegram is not None and token:
         telegram = Telegram(token, cfg.settings.telegram.chat_id)
+        telegram.on_decision = approval_sink(store)
     return Runtime(config=cfg, store=store, telegram=telegram, dry_run=dry_run)
