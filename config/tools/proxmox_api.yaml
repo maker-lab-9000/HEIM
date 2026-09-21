@@ -6,8 +6,10 @@ description: >-
   /nodes/homelab/tasks?typefilter=vzdump&limit=20 (recent backup/scrub tasks with
   start/end times - correlate with an onset), /nodes/homelab/tasks/<upid>/log (a task's
   log), /nodes/homelab/qemu/<vmid>/config (VM disk placement), /nodes/homelab/qemu (list
-  VMs), /nodes/homelab/status (host CPU/mem/load/uptime), /nodes/homelab/syslog?limit=200
-  or /nodes/homelab/journal?lastentries=200 (host logs), /nodes/homelab/disks/list and
+  VMs), /nodes/homelab/status (host CPU/mem/load/uptime),
+  /nodes/homelab/journal?lastentries=200 or ?since=<epoch> (host logs - use this, NOT
+  /syslog, which has no log file to read on this journald-only host and will simply time
+  out after 30s), /nodes/homelab/disks/list and
   /nodes/homelab/disks/smart?disk=/dev/sda (full SMART attributes),
   /nodes/homelab/storage/<name>/status, /cluster/resources. Anything else is
   guard-blocked. NO physical temperature sensors and NO process list are available. Pass
