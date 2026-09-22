@@ -181,7 +181,11 @@ the rail — focused on tracking the agent's investigations: every investigation
 what triggered it (findings + the exact brief sent to the agent), its trigger source,
 agent + model, real token usage and cost, and a terminal-style transcript of each tool
 call ($ command, result preview, duration, blocked markers) with a "burn line" showing
-where the token budget went. The pages:
+where the token budget went.
+
+<img src="docs/screenshots/dashboard-overview.png" alt="HEIM dashboard overview: KPI tiles (open incidents, running investigations, pending approval, 24h tokens, queue), the latest analysis with a per-host health strip, the needs-attention card, latest runs, and tool usage with the agent's own tooling suggestions" width="900">
+
+The pages:
 
 - **Overview** — KPI tiles (incidents, running/pending/queued, tokens + cost 24h), a
   **health card** (the latest analysis in words + a live per-host strip), the last 10
