@@ -42,12 +42,12 @@ groups:
           description: "Storage pool {{ $labels.id }} has been offline for 5m."
 
       - alert: KeyVMDown
-        expr: pve_up{id=~"qemu/(100|101)"} == 0
+        expr: pve_up{id=~"qemu/(100|101|103)"} == 0
         for: 10m
         labels: { severity: critical, qid: pve_vm_up }
         annotations:
           summary: "Key VM stopped: {{ $labels.id }}"
-          description: "Guest {{ $labels.id }} (ubuntu-server=100 / home-assistant=101) has been stopped for 10m. (ubuntu-sandbox is intentionally excluded.)"
+          description: "Guest {{ $labels.id }} (ubuntu-server=100 / home-assistant=101 / heim=103) has been stopped for 10m. (monitor-box=102 is intentionally excluded.) NOTE for 103: HEIM runs on that guest, so it cannot report its own outage — this alert is for Prometheus/Grafana and for HEIM to find after it comes back. Live coverage of a dead HEIM is the dead-man's switch, not this rule."
 
       # ── Capacity ────────────────────────────────────────────────────────
       - alert: FilesystemCritical

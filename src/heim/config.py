@@ -138,6 +138,10 @@ class Settings(BaseModel):
     # instance-label address prefix -> host name (used by the alert poller to
     # attribute a firing alert's `instance` label to a configured host)
     instance_host_map: dict[str, str] = {}
+    #: Display order for host badge colors, which are handed out by position.
+    #: APPEND new hosts; inserting one repaints every host after it. Hosts left
+    #: out follow in config order (alphabetical by filename).
+    host_color_order: list[str] = []
     # Open incidents from metric thresholds (config/queries/daily.yaml
     # warn/crit), not just from prometheus/alerts.yml rules. Evaluated on the
     # poller's cadence, inside the same cycle.

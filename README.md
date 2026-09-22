@@ -340,9 +340,9 @@ Four knobs are worth setting deliberately:
 ### `config/hosts/*.yaml` — add a host, add a file
 | Field | Meaning |
 |---|---|
-| `role` | `guest` (SSH-reachable, fully investigable) · `hypervisor` (investigated from the guest side + its own API) · `ha-guest` (API only) |
+| `role` | `guest` (fully investigable; SSH-reachable if it has an `ssh:` block) · `hypervisor` (investigated from the guest side + its own API) · `ha-guest` (API only) |
 | `investigable` | `all`, or a category list (`[cpu, memory, temperature, disk, diskHealth]`) — gates which findings trigger investigations |
-| `ssh` | host/port/user/key for `role: guest` (key path overridable via `HEIM_SSH_KEY`) |
+| `ssh` | host/port/user/key for a `role: guest` with a shell (key path overridable via `HEIM_SSH_KEY`). Omit it and the guest is monitored via Prometheus + `proxmox_api` only — the brief and the approval prompt both drop their SSH wording, so the agent does not plan around a shell it has not got. |
 | `api` | base URL (+ `verify_ssl`) for hypervisor / ha-guest hosts |
 | `facts` | injected verbatim into the investigator's `[FACTS]` prompt block — topology truths the agent must know |
 | `privileges` | injected into `[PRIVILEGES]` — keep in sync with the host's actual sudoers/groups |
@@ -350,6 +350,16 @@ Four knobs are worth setting deliberately:
 To add a second SSH host: create the YAML (`role: guest` + `ssh:`), grant the same
 read-only permission set on the host (see *Security*), and add its address to
 `instance_host_map` in settings. The reconciler and poller pick it up automatically.
+
+Two things to get right when the host is a Proxmox guest:
+
+- **Name it exactly as the PVE guest is named.** A host's identity comes from
+  `instance_host_map` for `node_*` series and from the PVE guest name for `pve_*`
+  series. If those disagree, one machine shows up as two hosts with two sets of
+  fingerprints. `config/hosts/heim.yaml` is the worked example (guest `qemu/103`).
+- **Append it to `host_color_order`.** Badge colours are handed out by position, and
+  config order is alphabetical by filename, so an unpinned new host repaints every
+  host that now sorts after it.
 
 ### `config/tools/*.yaml` — add a tool, add a file + a class
 `name`, LLM-facing `description`, JSON-schema `args`/`required`, `options` (host binding,

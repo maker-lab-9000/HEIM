@@ -126,7 +126,13 @@ def findings_text(findings: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _approval_text(req: InvestigationRequest, ftext: str) -> str:
+def _has_ssh(cfg, host: str) -> bool:
+    """True if ``host`` has an ssh block the agent could use."""
+    entry = cfg.hosts.get(host)
+    return entry is not None and entry.ssh is not None
+
+
+def _approval_text(req: InvestigationRequest, ftext: str, *, has_ssh: bool = True) -> str:
     """Port of the n8n 'Ask Approval (Telegram)' message."""
     note = ""
     if req.host_role == "hypervisor":
@@ -137,7 +143,10 @@ def _approval_text(req: InvestigationRequest, ftext: str) -> str:
     how = (
         "query Prometheus and SSH into ubuntu-server (read-only)"
         if req.host_role == "hypervisor"
-        else "SSH in (read-only)" if req.host_role == "guest"
+        # a guest with no shell gets the honest description, so the approval
+        # prompt does not promise access the agent does not have
+        else ("SSH in (read-only)" if has_ssh else "query Prometheus and the Proxmox API (read-only)")
+        if req.host_role == "guest"
         else "query Prometheus and the HA API (read-only)"
     )
     # §5.1: name the model only when the trigger chose one — on the default
@@ -450,6 +459,10 @@ async def run_investigation(
     brief = expand_env(
         jenv.get_template(f"briefs/{template}.md.j2").render(
             host=req.host, findings_text=ftext, is_temperature=bool(_TEMP_RE.search(ftext)),
+            # Not every guest has a shell. Promising SSH to a host that has
+            # none sends the agent hunting for a tool it cannot use, and the
+            # ssh_diagnostic tool is bound to one host anyway.
+            has_ssh=_has_ssh(cfg, req.host),
         ),
         source=f"briefs/{template}.md.j2",
     )
@@ -496,7 +509,7 @@ async def run_investigation(
             await rt.emit_loki([_action(req.host, "approval_requested", req.fingerprint,
                                         f"Approval requested for {req.host}", generated_at)])
         answer, source = await _await_approval(
-            rt, inv_id, _approval_text(req, ftext),
+            rt, inv_id, _approval_text(req, ftext, has_ssh=_has_ssh(cfg, req.host)),
             cfg.settings.approvals.approve_timeout_s,
             send_prompt=resume_id is None,
         )
