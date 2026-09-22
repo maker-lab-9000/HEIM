@@ -417,26 +417,50 @@ class IncidentStore:
     #: operator's triage queue on the overview (dashboard spec §12).
     ATTENTION_STATUSES = ("incomplete", "failed", "needs_human")
 
+    #: A re-run in one of these states never actually ran, so it does not
+    #: count as having dealt with the investigation it re-runs.
+    _UNHANDLED_RETRY_STATUSES = ("declined",)
+
+    def _attention_where(self) -> tuple[str, tuple]:
+        """The WHERE clause shared by the card and its count, so they agree.
+
+        An investigation leaves the queue once someone has re-run it: the
+        re-run carries the story from there, and if it ends badly too it is
+        listed itself — the chain shows its latest link, never both. Status
+        alone is not enough; live, a RE-RUN on #6 completed as #13 and the
+        card went on showing #6. A re-run that was declined never ran, so it
+        leaves the original waiting. Only an explicit ``retry_of`` link
+        supersedes: a later, unrelated run on the same host proves nothing
+        about this one.
+        """
+        holes = ", ".join("?" * len(self.ATTENTION_STATUSES))
+        skip = ", ".join("?" * len(self._UNHANDLED_RETRY_STATUSES))
+        sql = (
+            f"WHERE i.status IN ({holes}) AND NOT EXISTS ("
+            "SELECT 1 FROM investigations r WHERE r.retry_of = i.id "
+            f"AND r.status NOT IN ({skip}))"
+        )
+        return sql, (*self.ATTENTION_STATUSES, *self._UNHANDLED_RETRY_STATUSES)
+
     def needs_attention(self, limit: int = 6) -> list[dict]:
-        """Investigations that ended badly, newest first.
+        """Investigations that ended badly and nobody has re-run, newest first.
 
         ``id`` breaks the tie because a batch of retries can share one
         ``started_at``, and a LIMIT over a tie can repeat or skip a row.
         """
-        holes = ", ".join("?" * len(self.ATTENTION_STATUSES))
+        where, params = self._attention_where()
         cur = self._db.execute(
-            f"SELECT * FROM investigations WHERE status IN ({holes}) "
-            "ORDER BY started_at DESC, id DESC LIMIT ?",
-            (*self.ATTENTION_STATUSES, limit),
+            f"SELECT i.* FROM investigations i {where} "
+            "ORDER BY i.started_at DESC, i.id DESC LIMIT ?",
+            (*params, limit),
         )
         return [dict(r) for r in cur.fetchall()]
 
     def needs_attention_count(self) -> int:
         """How many there are in total — the number behind the "all" link."""
-        holes = ", ".join("?" * len(self.ATTENTION_STATUSES))
+        where, params = self._attention_where()
         row = self._db.execute(
-            f"SELECT COUNT(*) AS n FROM investigations WHERE status IN ({holes})",
-            self.ATTENTION_STATUSES,
+            f"SELECT COUNT(*) AS n FROM investigations i {where}", params,
         ).fetchone()
         return int(row["n"] or 0)
 
