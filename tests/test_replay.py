@@ -69,7 +69,9 @@ def rt(tmp_path, monkeypatch) -> Runtime:
     cfg.settings.home_assistant = None
     cfg.settings.telegram = None
     cfg.settings.store_transcripts = True
-    cfg.settings.model_prices = {"claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
+    # keyed on the configured investigator model, so a replay with no override
+    # is priced whatever model config/agents/investigator.yaml names
+    cfg.settings.model_prices = {cfg.agents["investigator"].model: {"input": 3.0, "output": 15.0},
                                  "claude-haiku-4-6": {"input": 0.8, "output": 4.0}}
     cfg.settings.db_path = str(tmp_path / "rt.sqlite3")
     return Runtime(config=cfg, store=IncidentStore(tmp_path / "rt.sqlite3"),
@@ -321,7 +323,7 @@ async def test_run_replay_stores_a_second_investigation(rt, monkeypatch):
     assert row["trigger"] == "replay" and row["replay_of"] == inv_id
     assert row["status"] == "complete" and row["incomplete_reason"] == ""
     assert row["host"] == "ubuntu-server" and row["host_role"] == "guest"
-    assert row["model"] == "claude-sonnet-4-6"
+    assert row["model"] == rt.config.agents["investigator"].model
     # provenance copied verbatim from the original — same question, same brief
     assert row["brief_md"] == rt.store.investigation(inv_id)["brief_md"]
     assert json.loads(row["findings_json"])[0]["metric"] == "Filesystem used"
@@ -382,6 +384,7 @@ async def test_replay_rejects_unknown_id_broken_transcript_and_missing_brief(rt,
 
 
 async def test_model_override_reaches_the_api_call_and_the_row(rt, monkeypatch):
+    configured = rt.config.agents["investigator"].model   # captured BEFORE the run
     inv_id = _seed_original(rt, await _record_transcript(monkeypatch))
     client = _patch_client(monkeypatch, _replay_script())
 
@@ -392,7 +395,7 @@ async def test_model_override_reaches_the_api_call_and_the_row(rt, monkeypatch):
     # priced against the model that actually answered
     assert res["cost"] == pytest.approx((1400 * 0.8 + 110 * 4.0) / 1e6)
     # the configured agent is not mutated for the next caller
-    assert rt.config.agents["investigator"].model == "claude-sonnet-4-6"
+    assert rt.config.agents["investigator"].model == configured
 
 
 async def test_default_system_prompt_is_the_investigators(rt, monkeypatch):

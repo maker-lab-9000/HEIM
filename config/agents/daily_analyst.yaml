@@ -7,6 +7,8 @@ primary:
   model: google/gemma-4-31b-it:free
 fallback:
   provider: anthropic
-  model: claude-opus-4-6
-max_tokens: 4096
+  model: claude-opus-5-5
+# Doubled from 4096: Claude Opus 5.5 always thinks (it cannot be disabled) and
+# thinking counts toward max_tokens, while the JSON analysis still has to fit.
+max_tokens: 8192
 prompt: analyst.md

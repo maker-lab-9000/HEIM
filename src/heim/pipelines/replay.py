@@ -145,7 +145,7 @@ async def run_replay(
             log.exception("could not record replay failure")
         return None
 
-    report = salvage(result.output_text, ftext)
+    report = salvage(result.output_text, ftext, stop_reason=getattr(result, "stop_reason", ""))
     record_tool_feedback(rt, inv_id, report.report_md)
     cost = cost_of(agent_cfg.model, result.input_tokens, result.output_tokens,
                    cfg.settings.model_prices)

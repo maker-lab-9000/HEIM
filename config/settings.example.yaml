@@ -70,15 +70,17 @@ retention_days: 120           # prune resolved incidents, findings, runs and fin
 # EXAMPLE VALUES ONLY — check your provider's current pricing before trusting
 # any line you copy from here.
 # Model prices for cost accounting, USD per million tokens. Sourced from
-# Anthropic's public pricing (verified 2026-06-24) — re-check when providers
+# Anthropic's public pricing (verified 2026-09-22) — re-check when providers
 # change rates; a model absent here renders as "—", never a guessed number.
 model_prices:
+  claude-fable-5-1:    { input: 10.00, output: 50.00 }
   claude-fable-5:      { input: 10.00, output: 50.00 }
+  claude-opus-5-5:     { input:  4.00, output: 20.00 }
   claude-opus-5:       { input:  5.00, output: 25.00 }
   claude-opus-4-8:     { input:  5.00, output: 25.00 }
   claude-opus-4-7:     { input:  5.00, output: 25.00 }
   claude-opus-4-6:     { input:  5.00, output: 25.00 }
-  claude-sonnet-5:     { input:  3.00, output: 15.00 }
+  claude-sonnet-5:     { input:  2.00, output: 10.00 }
   claude-sonnet-4-6:   { input:  3.00, output: 15.00 }
   claude-haiku-4-5:    { input:  1.00, output:  5.00 }
   # OpenRouter models: put the provider's rate here; free tiers are 0.
@@ -95,7 +97,7 @@ store_transcripts: false
 # default only (no select is rendered, every run uses the investigator agent's
 # model). List only ids that appear in `model_prices` above, so a run on the
 # chosen model is still priced. Example:
-#   investigator_models: [claude-opus-4-6, claude-haiku-4-5]
+#   investigator_models: [claude-opus-5-5, claude-haiku-4-5]
 investigator_models: []
 
 # Maps Prometheus `instance` label address prefixes to host names — used by the
