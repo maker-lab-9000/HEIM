@@ -405,6 +405,32 @@ The repo ships the full self-hosted observability layer HEIM plugs into — depl
   the same `host|qid|name` incident fingerprints as the daily reconcile (no duplicate
   incidents across the two paths). If you add rules, give them a `qid`.
 
+### Where each piece runs (this deployment)
+
+HEIM runs on its own small guest, **`heim`** (Proxmox VM 103) — the observability VM.
+It holds no metrics itself: it reads Prometheus on `ubuntu-server`, so moving it cost
+nothing on the metrics side, and its own footprint is small (the SQLite store, Docker,
+and a nightly database backup).
+
+| Guest | VM | Role in the stack |
+|---|---|---|
+| `heim` | 103 | **HEIM** — the daemon (daily reports, alert poller, job queue), the investigation agent, and the web dashboard (`:8300`). Monitored itself via node_exporter + the Proxmox API; no SSH. |
+| `ubuntu-server` | 100 | **Prometheus** (the metrics store every report and investigation reads) and **Loki** (HEIM's AI-event stream), plus its own exporters; also the workloads being watched (Docker, Jellyfin, Photos). |
+| `homelab` | — | The Proxmox hypervisor, scraped via node_exporter, smartctl_exporter and the PVE API exporter. |
+| `home-assistant` | 101 | Watched via its REST API and Prometheus integration. |
+| `monitor-box` | 102 | Powered off by design; excluded from backups. |
+
+Two consequences worth knowing:
+
+- **HEIM cannot report its own outage.** If VM 103 is down, so is the daemon that would
+  have noticed. `KeyVMDown` still fires in Prometheus, and the dead-man's switch
+  (`HEIM_DEADMAN_URL`) is the live cover — configure it.
+- **The analyst and the investigator are told what `heim` is** (`config/prompts/analyst.md`,
+  `config/hosts/heim.yaml`), including to judge its disk and network in absolute bytes.
+  It idles near zero, so its own few KB/s of writes read as a large percentage jump;
+  before it was documented, the daily analyst flagged exactly that as "an undocumented
+  guest driving a jump in host disk and network load."
+
 ---
 
 ## What's deliberately the same as the n8n stack

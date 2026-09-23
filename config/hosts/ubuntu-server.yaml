@@ -10,7 +10,7 @@ ssh:
 
 # Injected into the investigator prompt's [FACTS] block.
 facts: |
-  Target host 'ubuntu-server' = Proxmox VM 100 (4 vCPU, 16 GiB) on bare-metal 'homelab'. Runs Docker + a Photos library. Physical hardware (SMART, drive temps) lives on 'homelab' and is NOT visible from inside the VM — a clean VM view never rules out a host hardware cause; say so when in-VM evidence is inconclusive.
+  Target host 'ubuntu-server' = Proxmox VM 100 (10 vCPU, 16 GiB) on bare-metal 'homelab'. Runs Docker + a Photos library. Physical hardware (SMART, drive temps) lives on 'homelab' and is NOT visible from inside the VM — a clean VM view never rules out a host hardware cause; say so when in-VM evidence is inconclusive.
   Mounts: /docker-data = Docker data-root (growth → images/volumes) · /Photos = PhotoPrism + backups (growth normal) · /JellyMedia = Jellyfin media (growth normal; excluded from fs alerts) · / = OS + everything else. Judge growth against the mount's purpose: media on /JellyMedia is normal; a stray file on / or image pileup on /docker-data is not.
 
 # Injected into the investigator prompt's [PRIVILEGES] block. Keep this in sync
