@@ -153,6 +153,7 @@ def _patch_client(monkeypatch, script: list | None = None) -> _FakeClient:
 
 
 async def test_request_model_override_reaches_client(rt, monkeypatch):
+    configured = rt.config.agents["investigator"].model   # captured BEFORE the run
     client = _patch_client(monkeypatch)
     req = InvestigationRequest(host="ubuntu-server", model_override="claude-opus-4-6")
 
@@ -164,15 +165,18 @@ async def test_request_model_override_reaches_client(rt, monkeypatch):
     # priced against the model that actually ran, not the configured default
     assert row["cost"] == pytest.approx((100 * 5.0 + 20 * 25.0) / 1e6)
     # …and the configured agent is untouched for the next caller
-    assert rt.config.agents["investigator"].model == "claude-sonnet-4-6"
+    assert rt.config.agents["investigator"].model == configured
 
 
 async def test_no_override_runs_the_configured_model(rt, monkeypatch):
+    # read rather than hardcoded, so a model bump in investigator.yaml does
+    # not fail a test about overrides
+    configured = rt.config.agents["investigator"].model
     client = _patch_client(monkeypatch)
     result = await run_investigation(rt, InvestigationRequest(host="ubuntu-server"),
                                      require_approval=False)
-    assert {k["model"] for k in client.messages.kwargs} == {"claude-sonnet-4-6"}
-    assert rt.store.investigation(result["id"])["model"] == "claude-sonnet-4-6"
+    assert {k["model"] for k in client.messages.kwargs} == {configured}
+    assert rt.store.investigation(result["id"])["model"] == configured
 
 
 def test_approval_text_names_an_overridden_model(rt):
@@ -241,9 +245,11 @@ def test_dashboard_rejects_any_model_when_none_are_configured(plain_client):
 
 
 def test_select_rendered_only_when_configured(actions_client, plain_client):
+    from heim.config import load_config
+    configured = load_config(ROOT / "config").agents["investigator"].model
     with_models = actions_client.get("/hosts").text
     assert '<select class="mselect mono" name="model"' in with_models
-    assert "default (claude-sonnet-4-6)" in with_models
+    assert f"default ({configured})" in with_models
     for mid in MODELS:
         assert f'<option value="{mid}">' in with_models
     assert '<select name="model"' not in plain_client.get("/hosts").text

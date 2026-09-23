@@ -545,7 +545,7 @@ async def run_investigation(
             )
 
             # --------------------------------------------------------- rendering
-            report = salvage(result.output_text, ftext)
+            report = salvage(result.output_text, ftext, stop_reason=getattr(result, "stop_reason", ""))
             # the agent's own notes on its toolbox (optional section) — kept in
             # the report AND indexed per tool for the dashboard's usage card
             record_tool_feedback(rt, inv_id, report.report_md)

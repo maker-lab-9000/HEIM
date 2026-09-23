@@ -253,7 +253,7 @@ in March is not full today).
 
 ```bash
 heim replay 42                                   # same model: reproducibility check
-heim replay 42 --model claude-haiku-4-6          # cheaper model, same evidence
+heim replay 42 --model claude-haiku-4-5          # cheaper model, same evidence
 heim replay 42 --prompt-file prompts/candidate.md.j2
 ```
 
