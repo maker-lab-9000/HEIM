@@ -1,0 +1,335 @@
+# Weekly read-only security audit — sources, checks, allowlists.
+# Everything the audit READS is listed here and nowhere else; the model never
+# chooses a read. The loader (heim.security.catalogue) refuses any SSH line
+# guard_command would block or that uses sudo cat/grep, any HA path outside
+# guard_ha_path, and any PVE path outside PVE_AUDIT_ALLOW (GET-only).
+pve_node: homelab
+ssh_host: ubuntu-server
+ha_host: home-assistant
+
+params:
+  expected_offline_vms: [monitor-box]     # powered off by design: "stopped" is not a finding
+
+sources:
+  - {key: pve.version,            kind: pve, target: /api2/json/version}
+  - {key: pve.node_status,        kind: pve, target: /api2/json/nodes/homelab/status}
+  - {key: pve.resources_vm,       kind: pve, target: "/api2/json/cluster/resources?type=vm"}
+  - {key: pve.access_users,       kind: pve, target: /api2/json/access/users}
+  - {key: pve.access_acl,         kind: pve, target: /api2/json/access/acl,   control: pve.access_users}
+  - {key: pve.access_roles,       kind: pve, target: /api2/json/access/roles}
+  - {key: pve.access_tfa,         kind: pve, target: /api2/json/access/tfa,   control: pve.access_users}
+  - {key: pve.fw_cluster_options, kind: pve, target: /api2/json/cluster/firewall/options}
+  - {key: pve.fw_cluster_rules,   kind: pve, target: /api2/json/cluster/firewall/rules, control: pve.fw_cluster_options}
+  - {key: pve.fw_node_options,    kind: pve, target: /api2/json/nodes/homelab/firewall/options}
+  - {key: pve.fw_node_rules,      kind: pve, target: /api2/json/nodes/homelab/firewall/rules, control: pve.fw_node_options}
+  - {key: pve.fw_vm_options,      kind: pve, target: "/api2/json/nodes/homelab/qemu/{vmid}/firewall/options", expand: vmid}
+  - {key: pve.vm_config,          kind: pve, target: "/api2/json/nodes/homelab/qemu/{vmid}/config", expand: vmid}
+  - {key: pve.vm_status,          kind: pve, target: "/api2/json/nodes/homelab/qemu/{vmid}/status/current", expand: vmid}
+  - {key: pve.apt_versions,       kind: pve, target: /api2/json/nodes/homelab/apt/versions}
+  - {key: pve.apt_repositories,   kind: pve, target: /api2/json/nodes/homelab/apt/repositories}
+  - {key: pve.certificates,       kind: pve, target: /api2/json/nodes/homelab/certificates/info}
+  - {key: pve.backup_jobs,        kind: pve, target: /api2/json/cluster/backup, control: pve.resources_vm}
+  - {key: pve.tasks_vzdump,       kind: pve, target: "/api2/json/nodes/homelab/tasks?typefilter=vzdump&limit=20"}
+  - {key: pve.tasks_errors,       kind: pve, target: "/api2/json/nodes/homelab/tasks?errors=1&limit=50", control: pve.tasks_vzdump}
+  - {key: pve.services,           kind: pve, target: /api2/json/nodes/homelab/services}
+  - {key: pve.journal,            kind: pve, target: "/api2/json/nodes/homelab/journal?lastentries=1000"}
+
+  - {key: ha.config,              kind: ha,  target: /api/config}
+  - {key: ha.states,              kind: ha,  target: /api/states}
+
+  - {key: prom.reboot_required,   kind: prom, target: node_reboot_required}
+  - {key: prom.apt_pending,       kind: prom, target: "sum by (instance) (apt_upgrades_pending)"}
+  - {key: prom.apt_present,       kind: prom, target: "count by (instance) (node_exporter_build_info)"}
+  - {key: prom.failed_units,      kind: prom, target: 'node_systemd_unit_state{state="failed"} == 1'}
+  - {key: prom.timex,             kind: prom, target: node_timex_sync_status}
+  - {key: prom.up,                kind: prom, target: up}
+  - {key: prom.os_info,           kind: prom, target: node_os_info}
+
+  # ubuntu-server: no sudo except ss / agent-docker (sudoers), and `sudo -n -l` (own rights).
+  - {key: ssh.listeners,          kind: ssh, target: "sudo ss -tunlpH"}
+  - {key: ssh.sshd_config,        kind: ssh, target: "cat /etc/ssh/sshd_config"}
+  - {key: ssh.sshd_config_d,      kind: ssh, target: "cat /etc/ssh/sshd_config.d/*.conf 2>/dev/null"}
+  - {key: ssh.sshd_config_d_ls,   kind: ssh, target: "ls -la /etc/ssh/sshd_config.d/"}
+  # no -q: it would hide the "not seeing messages from other users" hint that tells 0 from no-permission
+  - {key: ssh.auth_fail_count,    kind: ssh, target: "journalctl --no-pager -u ssh -u sshd --since=-7d -o cat | grep -c -E 'Failed password|Invalid user|maximum authentication attempts'"}
+  - {key: ssh.auth_fail_sample,   kind: ssh, target: "journalctl --no-pager -u ssh -u sshd --since=-7d -o cat | grep -E 'Failed password|Invalid user|maximum authentication attempts' | tail -n 20"}
+  - {key: ssh.updates_available,  kind: ssh, target: "cat /var/lib/update-notifier/updates-available"}
+  - {key: ssh.auto_upgrades,      kind: ssh, target: "cat /etc/apt/apt.conf.d/20auto-upgrades"}
+  - {key: ssh.unit_states,        kind: ssh, target: "systemctl is-active ufw nftables fail2ban unattended-upgrades ssh"}
+  - {key: ssh.world_writable,     kind: ssh, target: "find /etc /usr/local /opt -xdev -type f -perm -0002 2>/dev/null"}
+  - {key: ssh.last_logins,        kind: ssh, target: "last -w -F -n 100 -s -7days"}
+  - {key: ssh.login_shells,       kind: ssh, target: "grep -E ':/bin/(ba|z|da)?sh$' /etc/passwd"}
+  - {key: ssh.sudo_scope,         kind: ssh, target: "sudo -n -l"}
+  - {key: ssh.docker_ps,          kind: ssh, target: "sudo agent-docker ps"}
+  - {key: ssh.docker_inspect,     kind: ssh, target: "sudo agent-docker inspect {container}", expand: container}
+  - {key: ssh.docker_images,      kind: ssh, target: "sudo agent-docker images"}
+
+checks:
+  # ---------------------------------------------------------------- Proxmox
+  - id: pve.tfa_missing
+    title: Interactive Proxmox accounts without a second factor
+    severity: warning
+    sources: [pve.access_tfa, pve.access_users]
+    params: {interactive_users: ["root@pam"]}
+    recommendation: Add a TOTP or WebAuthn factor under Datacenter → Permissions → Two Factor for every account a person logs in with.
+  - id: pve.firewall_disabled
+    title: Proxmox firewall state (cluster, node, per-VM)
+    severity: warning
+    sources: [pve.fw_cluster_options, pve.fw_cluster_rules, pve.fw_node_options, pve.fw_node_rules, pve.fw_vm_options, pve.vm_config]
+    recommendation: Either enable the datacenter firewall with an explicit rule set, or remove firewall=1 from the NICs so the config states what is actually enforced. Mark as false positive if "no PVE firewall" is the intended design.
+  - id: pve.pending_updates
+    title: Proxmox host packages with a newer version available
+    severity: warning
+    sources: [pve.apt_versions]
+    recommendation: Schedule `apt update && apt dist-upgrade` on the hypervisor in a maintenance window; reboot if the kernel changed.
+  - id: pve.pending_updates_sensitive
+    title: Security-relevant Proxmox packages pending
+    severity: warning
+    sources: [pve.apt_versions]
+    params:
+      classes:
+        kernel: [proxmox-kernel, pve-kernel, linux-image]
+        microcode: [amd64-microcode, intel-microcode]
+        ssh: [openssh]
+        firewall: [pve-firewall, proxmox-firewall]
+        hypervisor: [pve-qemu-kvm, qemu-server, pve-manager, libpve-access-control, pve-container]
+        tls: [openssl, libssl, ca-certificates]
+    recommendation: Prioritise these classes in the next hypervisor update window.
+  - id: pve.repo_security
+    title: Debian security repository enabled on the hypervisor
+    severity: critical
+    sources: [pve.apt_repositories]
+    recommendation: Re-enable the Debian *-security suite in /etc/apt/sources.list(.d); without it security fixes never arrive.
+  - id: pve.repo_risky
+    title: Test/enterprise repositories
+    severity: warning
+    sources: [pve.apt_repositories]
+    recommendation: Disable pve-test on a production node; pve-enterprise needs a subscription or apt update fails.
+  - id: pve.cert_expiry
+    title: Proxmox web/API certificate validity
+    severity: warning
+    sources: [pve.certificates]
+    params: {warning_days: 90, critical_days: 30}
+    recommendation: Renew via `pvecm updatecerts` (internal CA) or the ACME plugin before expiry.
+  - id: pve.acl_privileged
+    title: Non-root principals holding modify privileges
+    severity: warning
+    sources: [pve.access_acl, pve.access_roles]
+    recommendation: Keep service accounts on *Auditor roles; move any human account with modify rights behind TFA.
+  - id: pve.backup_coverage
+    title: Running VMs without a backup job
+    severity: warning
+    sources: [pve.backup_jobs, pve.resources_vm]
+    recommendation: Add the VM to a vzdump job (Datacenter → Backup) or document why it is excluded.
+  - id: pve.backup_last_status
+    title: Result of the most recent backup tasks
+    severity: warning
+    sources: [pve.tasks_vzdump, pve.backup_jobs]
+    params: {max_age_days: 8}
+    recommendation: Open the failed task's log in the PVE UI; check the target storage's free space and the guest agent.
+  - id: pve.failed_tasks
+    title: Failed Proxmox tasks in the last 7 days
+    severity: info
+    sources: [pve.tasks_errors]
+  - id: pve.services_dead
+    title: Security-relevant hypervisor services not running
+    severity: warning
+    sources: [pve.services]
+    params:
+      required_active: [sshd, pveproxy, pvedaemon, pve-firewall, pvefw-logger]
+      time_sync_any: [chrony, systemd-timesyncd]
+    recommendation: "`systemctl status <service>` on the hypervisor and restart it deliberately."
+  - id: pve.auth_failures
+    title: Failed SSH / PVE authentication attempts in the hypervisor journal
+    severity: warning
+    sources: [pve.journal]
+    params: {critical_count: 50}
+    recommendation: Identify the source addresses in the journal; if they are outside your LAN/Tailscale, close the exposure at the router; consider key-only SSH on the hypervisor.
+  - id: pve.vm_hardening
+    title: VM configuration hygiene (protection, passthrough, guest agent)
+    severity: info
+    sources: [pve.vm_config]
+  - id: pve.stopped_vm_onboot
+    title: Stopped VMs that would start on host boot
+    severity: info
+    sources: [pve.vm_config, pve.vm_status]
+  - id: pve.secureboot
+    title: Secure Boot state of the hypervisor
+    severity: info
+    sources: [pve.node_status]
+
+  # ---------------------------------------------------------- Home Assistant
+  - id: ha.pending_updates_sensitive
+    title: Security-sensitive Home Assistant updates pending
+    severity: warning
+    sources: [ha.states]
+    params:
+      sensitive_patterns: [core, operating_system, supervisor, vaultwarden, bitwarden, letsencrypt, let_s_encrypt, ssh, adguard, nginx, proxy, wireguard, tailscale, cloudflared]
+    recommendation: Apply core/OS/supervisor updates first, then the password vault, TLS and remote-access add-ons.
+  - id: ha.pending_updates_other
+    title: Other Home Assistant updates pending
+    severity: info
+    sources: [ha.states]
+  - id: ha.core_update_exposed
+    title: Publicly reachable Home Assistant running an outdated core
+    severity: critical
+    sources: [ha.states, ha.config]
+    params: {core_entity: update.home_assistant_core_update}
+    recommendation: Update HA core now, or temporarily disable the port-forward/DynDNS exposure until it is updated.
+  - id: ha.external_url
+    title: Home Assistant external URL
+    severity: info
+    sources: [ha.config]
+  - id: ha.safe_mode
+    title: Home Assistant running in safe or recovery mode
+    severity: warning
+    sources: [ha.config]
+    recommendation: Fix the failing integration/config and restart normally; safe mode disables custom components and some protections.
+  - id: ha.cert_expiry
+    title: Certificate-expiry sensors
+    severity: warning
+    sources: [ha.states]
+    params: {warning_days: 30, critical_days: 14}
+    recommendation: Renew the certificate; for sensors reporting unknown/unavailable, fix the cert-expiry integration's host/port.
+  - id: ha.login_notifications
+    title: Failed-login / IP-ban notifications in Home Assistant
+    severity: warning
+    sources: [ha.states]
+    recommendation: Review the notification's source address; keep ip_ban_enabled on.
+  - id: ha.external_dirs
+    title: Allowlisted external directories
+    severity: info
+    sources: [ha.config]
+    params: {allowed: [/media, /config/www, /share]}
+
+  # -------------------------------------------------------------- Prometheus
+  - id: prom.reboot_required
+    title: Hosts needing a reboot to apply installed updates
+    severity: warning
+    sources: [prom.reboot_required]
+    recommendation: Reboot the guest (or hypervisor) in a maintenance window.
+  - id: prom.apt_pending
+    title: Pending apt upgrades as reported by node_exporter
+    severity: warning
+    sources: [prom.apt_pending, prom.apt_present]
+    recommendation: Apply the upgrades; for hosts flagged "collector absent", install prometheus-node-exporter-collectors (owner-side step 2).
+  - id: prom.failed_units
+    title: systemd units in failed state
+    severity: warning
+    sources: [prom.failed_units]
+    params: {expected_failed: []}
+    recommendation: "`systemctl status <unit>`; if the unit is irrelevant hardware support, mask it or list it under expected_failed."
+  - id: prom.time_sync
+    title: Clock not synchronised
+    severity: warning
+    sources: [prom.timex]
+    recommendation: Check chrony/timesyncd on the host; TLS and log correlation depend on it.
+  - id: prom.targets_down
+    title: Prometheus targets down (blind spots for this audit)
+    severity: warning
+    sources: [prom.up]
+    recommendation: Restore the exporter; until then this audit cannot see that host.
+  - id: prom.os_eol
+    title: Operating system end-of-life horizon
+    severity: warning
+    sources: [prom.os_info]
+    params:
+      warning_days: 180
+      review_by: "2027-06-01"           # re-check these dates against the vendors by then
+      os_eol:
+        "ubuntu 24.04": "2029-05-31"     # standard support
+        "debian 13": "2028-06-30"        # regular (non-LTS) support, approximate
+    recommendation: Plan the distribution upgrade before the date; extend the os_eol table when a new OS appears.
+
+  # ------------------------------------------------- ubuntu-server via SSH
+  - id: ssh.listeners_unexpected
+    title: Services listening on all interfaces
+    severity: warning
+    sources: [ssh.listeners]
+    params:
+      expected_ports: {"22": sshd, "9090": prometheus, "9100": node_exporter, "3100": loki, "8081": cadvisor}
+      critical_ports: {"2375": "Docker API without TLS", "2376": "Docker API", "23": telnet, "3389": rdp, "5900": vnc}
+    recommendation: Bind the service to 127.0.0.1 or a Docker-internal network, or add it to expected_ports once reviewed.
+  - id: ssh.sshd_password_auth
+    title: SSH password authentication
+    severity: warning
+    sources: [ssh.sshd_config, ssh.sshd_config_d, ssh.sshd_config_d_ls]
+    recommendation: Set `PasswordAuthentication no` in a drop-in under /etc/ssh/sshd_config.d/ (check 50-cloud-init.conf) after confirming key access.
+  - id: ssh.sshd_root_login
+    title: SSH root login
+    severity: critical
+    sources: [ssh.sshd_config, ssh.sshd_config_d, ssh.sshd_config_d_ls]
+    recommendation: Set `PermitRootLogin prohibit-password` or `no`.
+  - id: ssh.sshd_empty_passwords
+    title: SSH empty passwords
+    severity: critical
+    sources: [ssh.sshd_config, ssh.sshd_config_d, ssh.sshd_config_d_ls]
+    recommendation: Set `PermitEmptyPasswords no`.
+  - id: ssh.sshd_hardening
+    title: Other sshd directives worth a look
+    severity: info
+    sources: [ssh.sshd_config, ssh.sshd_config_d, ssh.sshd_config_d_ls]
+  - id: ssh.auth_failures
+    title: Failed SSH authentication attempts (7 days)
+    severity: warning
+    sources: [ssh.auth_fail_count, ssh.auth_fail_sample]
+    params: {critical_count: 100}
+    recommendation: Check the sample lines for the source addresses; if external, the SSH port is exposed — close it at the router and rely on Tailscale.
+  - id: ssh.pending_security_updates
+    title: Pending Ubuntu security updates
+    severity: warning
+    sources: [ssh.updates_available]
+    recommendation: "`sudo apt update && sudo apt upgrade` on ubuntu-server; enable unattended-upgrades for security pockets."
+  - id: ssh.auto_upgrades_off
+    title: Unattended security upgrades disabled
+    severity: warning
+    sources: [ssh.auto_upgrades, ssh.unit_states]
+    recommendation: "`dpkg-reconfigure unattended-upgrades` and confirm the unit is active."
+  - id: ssh.host_firewall
+    title: Host firewall units
+    severity: info
+    sources: [ssh.unit_states]
+  - id: ssh.fail2ban_absent
+    title: fail2ban presence
+    severity: info
+    sources: [ssh.unit_states]
+  - id: ssh.world_writable
+    title: World-writable files under /etc, /usr/local, /opt
+    severity: warning
+    sources: [ssh.world_writable]
+    recommendation: "`chmod o-w <path>` after checking what created it."
+  - id: ssh.external_logins
+    title: Logins from outside trusted networks (7 days)
+    severity: warning
+    sources: [ssh.last_logins]
+    params:
+      trusted_cidrs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "fd00::/8", "::1/128"]
+    recommendation: Confirm each address is yours; otherwise rotate keys and review the router's port-forwards.
+  - id: ssh.login_shell_users
+    title: Accounts with a login shell
+    severity: info
+    sources: [ssh.login_shells]
+  - id: ssh.agent_sudo_scope
+    title: sudo rights of the monitoring user
+    severity: warning
+    sources: [ssh.sudo_scope]
+    params: {expected_sudo_binaries: [du, df, findmnt, lsof, ls, ss, agent-docker]}
+    recommendation: Trim /etc/sudoers.d/<agent> back to the read-only set; the agent must never gain a mutating command.
+  - id: ssh.docker_privileged
+    title: Containers with elevated host access
+    severity: warning
+    sources: [ssh.docker_inspect]
+    recommendation: Drop --privileged/host networking/added capabilities where the image does not need them; mount docker.sock read-only and only where required (cAdvisor).
+  - id: ssh.docker_stale_images
+    title: Container images older than six months
+    severity: info
+    sources: [ssh.docker_images]
+    params: {max_age_months: 6}
+
+  # ---------------------------------------------------------------- compound
+  - id: net.no_firewall_any_layer
+    title: No packet filter at any layer for ubuntu-server
+    severity: warning
+    sources: []
+    compound: true
+    recommendation: Pick one layer — the Proxmox VM firewall or ufw/nftables in the guest — and enable it with an explicit allow list.
