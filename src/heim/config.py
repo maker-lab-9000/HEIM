@@ -22,7 +22,7 @@ from typing import Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from heim.incidents.types import HostRouting
 
@@ -57,9 +57,42 @@ class HomeAssistantCfg(BaseModel):
     url: str
 
 
+_WEEKDAYS_CRON = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def parse_weekly(spec: str) -> tuple[str, int, int]:
+    """``"mon 06:00"`` → ``("mon", 6, 0)`` — the weekly cron slot format.
+
+    APScheduler's ``day_of_week`` takes the same three-letter names, so the
+    daemon passes the parts straight through. Anything else raises ValueError
+    naming the value, so a typo in settings fails at load, not next Monday.
+    """
+    parts = str(spec or "").strip().lower().split()
+    if len(parts) != 2 or parts[0] not in _WEEKDAYS_CRON:
+        raise ValueError(f"weekly schedule must be '<mon..sun> HH:MM', got {spec!r}")
+    hh, sep, mm = parts[1].partition(":")
+    if not sep or not hh.isdigit() or not mm.isdigit() or ":" in mm:
+        raise ValueError(f"weekly schedule must be '<mon..sun> HH:MM', got {spec!r}")
+    hour, minute = int(hh), int(mm)
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        raise ValueError(f"weekly schedule time out of range in {spec!r}")
+    return parts[0], hour, minute
+
+
 class SchedulesCfg(BaseModel):
     daily: list[str] = ["07:00", "22:00"]  # HH:MM in the configured timezone
     poll_minutes: int = 5
+    #: Weekly read-only security audit slot, "<mon..sun> HH:MM" in the
+    #: configured timezone. "" disables the job. Monday morning by default:
+    #: Sunday is maintenance night (PVE stop-mode backups, HEIM's own backup).
+    security_audit: str = "mon 06:00"
+
+    @field_validator("security_audit")
+    @classmethod
+    def _valid_weekly(cls, v: str) -> str:
+        if v:
+            parse_weekly(v)
+        return v
 
 
 def _timeout_s(hours: float) -> float | None:
@@ -237,6 +270,8 @@ class Config:
     analyst: AnalystCfg | None
     prompts_dir: Path
     queries_path: Path
+    #: config/security/checks.yaml — the weekly audit's sources, checks and allowlists
+    security_checks_path: Path | None = None
 
     def routing(self) -> HostRouting:
         """Derive incident/investigation routing from the host files."""
@@ -347,6 +382,7 @@ def load_config(root: Path | None = None) -> Config:
         analyst=analyst,
         prompts_dir=root / "prompts",
         queries_path=root / "queries" / "daily.yaml",
+        security_checks_path=root / "security" / "checks.yaml",
     )
 
 

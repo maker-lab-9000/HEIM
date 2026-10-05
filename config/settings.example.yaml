@@ -40,6 +40,8 @@ home_assistant:
 schedules:
   daily: ["07:00", "22:00"]   # local time, see `timezone`
   poll_minutes: 5             # fast-path alert poller interval
+  security_audit: "mon 06:00" # weekly read-only security audit ("" disables). Monday:
+                              # Sunday night runs the PVE stop-mode backups and HEIM's own backup.
 
 approvals:
   require: true               # human Telegram approval before any investigation
