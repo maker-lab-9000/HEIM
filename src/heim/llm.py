@@ -55,7 +55,18 @@ async def _complete_anthropic(model: str, system: str, user: str,
         system=system,
         messages=[{"role": "user", "content": user}],
     )
+    # Read text blocks only: models that think by default (Opus 5.5, Sonnet 5)
+    # also return `thinking` blocks, empty unless display is requested.
     text = "".join(b.text for b in resp.content if b.type == "text")
+    stop = str(getattr(resp, "stop_reason", "") or "")
+    if stop in ("refusal", "max_tokens"):
+        # Otherwise these surface only as "the analysis did not parse". A
+        # refusal is a safety-classifier decline (HTTP 200); max_tokens on a
+        # thinking model usually means thinking spent the budget first.
+        details = getattr(resp, "stop_details", None)
+        log.warning("analyst model %s stopped with %r%s — output is likely unusable "
+                    "(%d chars of text)", model, stop,
+                    f" ({getattr(details, 'category', '')})" if details else "", len(text))
     usage = getattr(resp, "usage", None)
     return text, {"input": int(getattr(usage, "input_tokens", 0) or 0),
                   "output": int(getattr(usage, "output_tokens", 0) or 0)}

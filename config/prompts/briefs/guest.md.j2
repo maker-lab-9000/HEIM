@@ -1,4 +1,4 @@
-Investigate the following alert(s) detected on host "{{ host }}" during automated monitoring. Determine the ROOT CAUSE by running read-only diagnostic commands over SSH and/or querying Prometheus. Do not stop at the symptom — dig until you can explain WHY it is happening.
+Investigate the following alert(s) detected on host "{{ host }}" during automated monitoring. Determine the ROOT CAUSE by {% if has_ssh %}running read-only diagnostic commands over SSH and/or querying Prometheus{% else %}querying Prometheus and the proxmox_api tool — there is NO shell on this host, so do not plan around ssh_diagnostic; say plainly in your report which questions you could not answer without one{% endif %}. Do not stop at the symptom — dig until you can explain WHY it is happening.
 
 DETECTED FINDINGS:
 {{ findings_text }}

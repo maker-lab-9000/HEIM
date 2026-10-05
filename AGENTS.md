@@ -87,6 +87,14 @@ Conventions:
    preserved. Keep prompt and salvage logic in sync.
 7. **HA compatibility** — entity ids stay `sensor.pam_*` (dashboards built for the n8n
    stack read them).
+8. **Physical disks by role, never by kernel name** — the hypervisor's USB disks
+   re-enumerate at boot, so `sda`/`sdb`/… move between drives. A disk's identity is its
+   serial, mapped to a role (`photos`, `jellymedia`, `raid1-a`, …) in ONE place: the
+   `homelab:disk_role:info` recording rule in `prometheus/alerts.yml`. Queries and alerts
+   join on it (`* on(device) group_left(disk) homelab:disk_role:info`) and HEIM names a
+   disk series after its `disk` label. Never write `device="sdX"` in a rule or query —
+   `tests/test_disk_identity.py` fails if you do. Replacing a drive means editing its
+   serial there; `DiskRoleUnresolved` / `DiskUnmapped` fire until you do.
 
 ---
 
@@ -113,8 +121,13 @@ Conventions:
   subclass + a guard (or hard-scoped client) + list it in `config/agents/investigator.yaml`.
 - **New delivery channel** (ntfy, Matrix, Discord, webhook…): `channels/<x>.py` with
   fire-and-forget semantics, exposed on `Runtime`, called from pipelines.
-- **New host**: `config/hosts/<name>.yaml` (+ OS-side permission set, + entry in
-  `instance_host_map`). The host `role` drives brief selection and reconcile gating.
+- **New host**: `config/hosts/<name>.yaml` (+ OS-side permission set if it has a
+  shell, + entry in `instance_host_map`, + APPEND to `host_color_order`). The host
+  `role` drives brief selection and reconcile gating; omitting the `ssh:` block makes
+  it a Prometheus/API-only guest, and the brief and approval prompt adapt. For a
+  Proxmox guest the host name MUST equal the PVE guest name, or its `node_*` and
+  `pve_*` series resolve to two different hosts (`config/hosts/heim.yaml` is the
+  worked example).
 
 ---
 

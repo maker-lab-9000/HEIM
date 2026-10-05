@@ -54,16 +54,19 @@ def test_config_values_interpolated(cfg):
     assert cfg.hosts["ubuntu-server"].ssh.host == "10.0.0.10"
     assert cfg.hosts["ubuntu-server"].ssh.user == "monitoring-agent"  # ${...:-default}
     assert cfg.settings.instance_host_map == {
-        "10.0.0.10": "ubuntu-server", "10.0.0.2": "homelab", "10.0.0.3": "home-assistant"}
+        "10.0.0.10": "ubuntu-server", "10.0.0.2": "homelab", "10.0.0.3": "home-assistant",
+        "10.0.0.4": "heim"}
     assert "10.0.0.2:9100" in cfg.hosts["homelab"].facts
 
 
 def test_config_loads_and_routes(cfg):
-    assert set(cfg.hosts) == {"ubuntu-server", "homelab", "home-assistant"}
+    assert set(cfg.hosts) == {"ubuntu-server", "homelab", "home-assistant", "heim"}
     assert set(cfg.tools) == {"ssh_diagnostic", "prometheus_query", "discover_metrics", "ha_api", "proxmox_api"}
     assert "investigator" in cfg.agents
     assert cfg.analyst is not None and cfg.analyst.fallback is not None
     r = cfg.routing()
+    # 'heim' is a guest with NO ssh block, so it must not appear here — that is
+    # what keeps the pipeline from planning shell commands it cannot run.
     assert r.ssh_hosts == frozenset({"ubuntu-server"})
     assert r.hypervisor_host == "homelab"
     assert "temperature" in r.hypervisor_categories
@@ -191,3 +194,90 @@ def test_config_dir_without_any_settings_file_still_fails_loudly(tmp_path, monke
     croot.mkdir()
     with pytest.raises(FileNotFoundError, match="no settings.example.yaml to fall back to"):
         load_config(croot)
+
+
+# ============================================ a guest with no shell (host 'heim')
+
+
+def test_heim_host_is_a_shell_less_guest(cfg):
+    """'heim' is monitored via Prometheus + the Proxmox API only.
+
+    Its name matches the Proxmox guest name for qemu/103 deliberately: HEIM
+    derives a host's identity from instance_host_map for node_* series and
+    from the PVE guest name for pve_* series, so a mismatch would make one
+    machine appear as two hosts with two sets of fingerprints.
+    """
+    host = cfg.hosts["heim"]
+    assert host.role == "guest"
+    assert host.ssh is None                       # no shell
+    assert host.privileges == ""                  # and so nothing to declare
+    assert "NO shell" in host.facts
+    assert 'id="qemu/103"' in host.facts          # the hypervisor vantage
+    assert "10.0.0.4:9100" in host.facts          # ${HEIM_OBSERVABILITY_IP} expanded
+    # it must not be offered to the SSH router
+    assert "heim" not in cfg.routing().ssh_hosts
+
+
+def test_guest_brief_adapts_to_a_host_with_no_shell(cfg):
+    from jinja2 import Environment, FileSystemLoader
+
+    env = Environment(loader=FileSystemLoader(cfg.prompts_dir))
+    tpl = env.get_template("briefs/guest.md.j2")
+
+    with_shell = tpl.render(host="ubuntu-server", findings_text="1. mem", has_ssh=True)
+    assert "over SSH" in with_shell
+
+    without = tpl.render(host="heim", findings_text="1. mem", has_ssh=False)
+    assert "NO shell on this host" in without
+    assert "do not plan around ssh_diagnostic" in without
+    # and it must not still promise SSH
+    assert "over SSH" not in without
+
+
+def test_approval_text_does_not_promise_ssh_to_a_shell_less_host():
+    from heim.pipelines.investigate import InvestigationRequest, _approval_text
+
+    req = InvestigationRequest(host="heim", host_role="guest")
+    assert "SSH in" in _approval_text(req, "f", has_ssh=True)
+    no_shell = _approval_text(req, "f", has_ssh=False)
+    assert "SSH" not in no_shell
+    assert "Proxmox API" in no_shell
+
+
+# ====================================================== host badge color order
+
+
+def test_color_order_appends_new_hosts_instead_of_repainting():
+    """Color follows the entity, never its rank (dashboard spec §1).
+
+    Config order is alphabetical by filename, so adding 'heim' would otherwise
+    have shifted home-assistant, homelab and ubuntu-server by one slot each.
+    """
+    from heim.dashboard.format import color_order, host_color
+
+    config_order = ("heim", "home-assistant", "homelab", "ubuntu-server")
+    pinned = ["home-assistant", "homelab", "ubuntu-server", "heim"]
+    order = color_order(config_order, pinned)
+
+    assert order == ("home-assistant", "homelab", "ubuntu-server", "heim")
+    # the three that existed before keep the slots they had
+    assert host_color("home-assistant", order) == "--host-1"
+    assert host_color("homelab", order) == "--host-2"
+    assert host_color("ubuntu-server", order) == "--host-3"
+    assert host_color("heim", order) == "--host-4"
+
+
+def test_color_order_falls_back_to_config_order_and_drops_stale_pins():
+    from heim.dashboard.format import color_order
+
+    config_order = ("a", "b")
+    assert color_order(config_order) == ("a", "b")          # nothing pinned
+    assert color_order(config_order, ["b"]) == ("b", "a")   # partial pin
+    # a pinned host that no longer exists must not consume a color slot
+    assert color_order(config_order, ["gone", "b"]) == ("b", "a")
+    assert color_order((), ["a"]) == ()
+
+
+def test_shipped_settings_pin_every_configured_host(cfg):
+    """A host missing from the pin list silently reverts to rank ordering."""
+    assert set(cfg.settings.host_color_order) == set(cfg.hosts)

@@ -326,13 +326,36 @@ HOST_SLOTS = 5
 HOST_MUTED = "--ink-3"
 
 
+def color_order(config_order, pinned=()) -> tuple[str, ...]:
+    """Badge-color order: pinned hosts first, then the rest in config order.
+
+    Color must follow the entity, never its rank. Config order is alphabetical
+    by filename, so without pinning, adding a host named earlier in the
+    alphabet repaints every host that now sorts after it — which is exactly
+    what adding 'heim' did to home-assistant, homelab and ubuntu-server.
+
+    A pinned name that is not a configured host is dropped rather than
+    consuming a slot, so a stale entry cannot silently shift the live hosts.
+    """
+    known = {str(h).strip() for h in (config_order or [])}
+    seen: set[str] = set()
+    out: list[str] = []
+    for name in list(pinned or []) + list(config_order or []):
+        clean = str(name).strip()
+        if clean and clean in known and clean not in seen:
+            seen.add(clean)
+            out.append(clean)
+    return tuple(out)
+
+
 def host_color(host: str | None, hosts=()) -> str:
     """The CSS variable name for ``host``'s badge dot.
 
-    Slots are handed out in *config order* so a host keeps the same color on
-    every page for as long as the config is stable — color follows the entity,
-    exactly like the tool badges. The color is never the only encoding: the
-    badge always prints the host name next to the dot.
+    Slots are handed out by position in ``hosts``, which the app builds with
+    :func:`color_order` — so ``settings.host_color_order`` pins a host's color
+    for good and a newly added host lands at the end instead of reshuffling
+    the others. Color follows the entity, exactly like the tool badges, and is
+    never the only encoding: the badge always prints the host name.
     """
     name = str(host or "").strip()
     order = [str(h) for h in (hosts or [])]

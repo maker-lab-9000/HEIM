@@ -39,15 +39,30 @@ class InvestigationReport:
     raw: str = ""
 
 
-def salvage(agent_output: str, findings_text: str) -> InvestigationReport:
-    """Port of the hardened Render Report incomplete/salvage block."""
+def salvage(agent_output: str, findings_text: str, *, stop_reason: str = "") -> InvestigationReport:
+    """Port of the hardened Render Report incomplete/salvage block.
+
+    ``stop_reason`` is the model's own account of why it stopped. It is not in
+    the n8n original: it exists because Claude Sonnet 5 and Opus 5.5 add two
+    ways to finish with no report that the generic "transient error" wording
+    misdiagnoses — a safety-classifier decline (``refusal``), and adaptive
+    thinking spending the whole ``max_tokens`` budget (``max_tokens``). Both
+    fail the same way on a re-run, so naming them is the whole point.
+    """
     md = (agent_output or "").strip()
     m = _SUMMARY_RE.search(md)
     if m:
         return InvestigationReport(report_md=md[m.start():], incomplete=False)
 
     raw = md
-    if not raw:
+    if stop_reason == "refusal":
+        reason = ("the model declined the request — its safety classifier flagged it, so "
+                  "re-running it unchanged will be declined again")
+    elif stop_reason == "max_tokens":
+        reason = ("the model hit its max_tokens limit before writing the report — on models "
+                  "that think by default, thinking counts toward that limit, so raise "
+                  "max_tokens in config/agents/ or narrow the finding")
+    elif not raw:
         reason = ("the agent returned no conclusion — most often a transient model/API error, "
                   "or (less often) the step budget")
     elif _LEAK_RE.search(raw):

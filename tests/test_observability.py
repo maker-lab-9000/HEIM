@@ -810,7 +810,8 @@ def test_no_dashboard_token_leaks_into_the_environment():
 # ----------------------------------------------------------- health card
 
 
-def test_health_card_shows_the_analysis_and_every_host(client):
+def test_health_card_shows_the_analysis_and_every_host(seeded):
+    client, _ids, cfg = seeded
     html = client.get("/").text
     card = html[html.index('class="card health"'):html.index("latest runs")]
     # the analyst's words, not counters
@@ -818,9 +819,10 @@ def test_health_card_shows_the_analysis_and_every_host(client):
     assert "One container accounts for the growth." in card
     assert 'href="/findings#run-1"' in card
     # …and one chip per configured host, including the ones that are fine
-    for host in ("ubuntu-server", "homelab", "home-assistant"):
+    for host in cfg.hosts:
         assert host in card
-    assert "1 critical" in card and card.count("clear") == 2
+    # every host but the one critical reads clear
+    assert "1 critical" in card and card.count("clear") == len(cfg.hosts) - 1
 
 
 def test_health_card_survives_a_run_with_no_headline(tmp_path, monkeypatch):
@@ -833,7 +835,7 @@ def test_health_card_survives_a_run_with_no_headline(tmp_path, monkeypatch):
     with TestClient(create_app(cfg)) as client:
         card = client.get("/").text
         assert 'class="card health"' in card
-        assert "ubuntu-server" in card and card.count("clear") == 3
+        assert "ubuntu-server" in card and card.count("clear") == len(cfg.hosts)
 
 
 # ------------------------------------------------------------ tool usage

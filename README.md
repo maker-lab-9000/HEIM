@@ -181,7 +181,11 @@ the rail — focused on tracking the agent's investigations: every investigation
 what triggered it (findings + the exact brief sent to the agent), its trigger source,
 agent + model, real token usage and cost, and a terminal-style transcript of each tool
 call ($ command, result preview, duration, blocked markers) with a "burn line" showing
-where the token budget went. The pages:
+where the token budget went.
+
+<img src="docs/screenshots/dashboard-overview.png" alt="HEIM dashboard overview: KPI tiles (open incidents, running investigations, pending approval, 24h tokens, queue), the latest analysis with a per-host health strip, the needs-attention card, latest runs, and tool usage with the agent's own tooling suggestions" width="900">
+
+The pages:
 
 - **Overview** — KPI tiles (incidents, running/pending/queued, tokens + cost 24h), a
   **health card** (the latest analysis in words + a live per-host strip), the last 10
@@ -249,7 +253,7 @@ in March is not full today).
 
 ```bash
 heim replay 42                                   # same model: reproducibility check
-heim replay 42 --model claude-haiku-4-6          # cheaper model, same evidence
+heim replay 42 --model claude-haiku-4-5          # cheaper model, same evidence
 heim replay 42 --prompt-file prompts/candidate.md.j2
 ```
 
@@ -340,9 +344,9 @@ Four knobs are worth setting deliberately:
 ### `config/hosts/*.yaml` — add a host, add a file
 | Field | Meaning |
 |---|---|
-| `role` | `guest` (SSH-reachable, fully investigable) · `hypervisor` (investigated from the guest side + its own API) · `ha-guest` (API only) |
+| `role` | `guest` (fully investigable; SSH-reachable if it has an `ssh:` block) · `hypervisor` (investigated from the guest side + its own API) · `ha-guest` (API only) |
 | `investigable` | `all`, or a category list (`[cpu, memory, temperature, disk, diskHealth]`) — gates which findings trigger investigations |
-| `ssh` | host/port/user/key for `role: guest` (key path overridable via `HEIM_SSH_KEY`) |
+| `ssh` | host/port/user/key for a `role: guest` with a shell (key path overridable via `HEIM_SSH_KEY`). Omit it and the guest is monitored via Prometheus + `proxmox_api` only — the brief and the approval prompt both drop their SSH wording, so the agent does not plan around a shell it has not got. |
 | `api` | base URL (+ `verify_ssl`) for hypervisor / ha-guest hosts |
 | `facts` | injected verbatim into the investigator's `[FACTS]` prompt block — topology truths the agent must know |
 | `privileges` | injected into `[PRIVILEGES]` — keep in sync with the host's actual sudoers/groups |
@@ -350,6 +354,16 @@ Four knobs are worth setting deliberately:
 To add a second SSH host: create the YAML (`role: guest` + `ssh:`), grant the same
 read-only permission set on the host (see *Security*), and add its address to
 `instance_host_map` in settings. The reconciler and poller pick it up automatically.
+
+Two things to get right when the host is a Proxmox guest:
+
+- **Name it exactly as the PVE guest is named.** A host's identity comes from
+  `instance_host_map` for `node_*` series and from the PVE guest name for `pve_*`
+  series. If those disagree, one machine shows up as two hosts with two sets of
+  fingerprints. `config/hosts/heim.yaml` is the worked example (guest `qemu/103`).
+- **Append it to `host_color_order`.** Badge colours are handed out by position, and
+  config order is alphabetical by filename, so an unpinned new host repaints every
+  host that now sorts after it.
 
 ### `config/tools/*.yaml` — add a tool, add a file + a class
 `name`, LLM-facing `description`, JSON-schema `args`/`required`, `options` (host binding,
@@ -390,6 +404,32 @@ The repo ships the full self-hosted observability layer HEIM plugs into — depl
   [`config/queries/daily.yaml`](config/queries/daily.yaml), which is how the poller builds
   the same `host|qid|name` incident fingerprints as the daily reconcile (no duplicate
   incidents across the two paths). If you add rules, give them a `qid`.
+
+### Where each piece runs (this deployment)
+
+HEIM runs on its own small guest, **`heim`** (Proxmox VM 103) — the observability VM.
+It holds no metrics itself: it reads Prometheus on `ubuntu-server`, so moving it cost
+nothing on the metrics side, and its own footprint is small (the SQLite store, Docker,
+and a nightly database backup).
+
+| Guest | VM | Role in the stack |
+|---|---|---|
+| `heim` | 103 | **HEIM** — the daemon (daily reports, alert poller, job queue), the investigation agent, and the web dashboard (`:8300`). Monitored itself via node_exporter + the Proxmox API; no SSH. |
+| `ubuntu-server` | 100 | **Prometheus** (the metrics store every report and investigation reads) and **Loki** (HEIM's AI-event stream), plus its own exporters; also the workloads being watched (Docker, Jellyfin, Photos). |
+| `homelab` | — | The Proxmox hypervisor, scraped via node_exporter, smartctl_exporter and the PVE API exporter. |
+| `home-assistant` | 101 | Watched via its REST API and Prometheus integration. |
+| `monitor-box` | 102 | Powered off by design; excluded from backups. |
+
+Two consequences worth knowing:
+
+- **HEIM cannot report its own outage.** If VM 103 is down, so is the daemon that would
+  have noticed. `KeyVMDown` still fires in Prometheus, and the dead-man's switch
+  (`HEIM_DEADMAN_URL`) is the live cover — configure it.
+- **The analyst and the investigator are told what `heim` is** (`config/prompts/analyst.md`,
+  `config/hosts/heim.yaml`), including to judge its disk and network in absolute bytes.
+  It idles near zero, so its own few KB/s of writes read as a large percentage jump;
+  before it was documented, the daily analyst flagged exactly that as "an undocumented
+  guest driving a jump in host disk and network load."
 
 ---
 

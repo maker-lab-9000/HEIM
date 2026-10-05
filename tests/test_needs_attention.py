@@ -140,6 +140,56 @@ def test_store_needs_attention_limit_and_empty(tmp_path):
     s.close()
 
 
+def test_a_rerun_takes_the_original_off_the_queue(tmp_path):
+    """Live, 2026-09-22: RE-RUN on #6 produced #13, which completed — and the
+    card still showed #6, because the query looked at status alone. Acting on
+    an item is what the card asks for; once someone has, it is not waiting on
+    them any more."""
+    s = IncidentStore(tmp_path / "n.sqlite3")
+    original = s.create_investigation(fingerprint="homelab|mem_used|", host="homelab",
+                                      status="needs_human", started_at="2026-09-20T07:00:00")
+    s.create_investigation(fingerprint="homelab|mem_used|", host="homelab", retry_of=original,
+                           trigger="dashboard", status="complete",
+                           started_at="2026-09-22T09:00:00")
+    assert s.needs_attention() == []
+    assert s.needs_attention_count() == 0             # the "all (N)" link agrees
+    s.close()
+
+
+def test_a_rerun_that_also_ends_badly_shows_once_as_itself(tmp_path):
+    """The chain's latest link carries the story — never both rows."""
+    s = IncidentStore(tmp_path / "n.sqlite3")
+    first = s.create_investigation(host="home-assistant", status="needs_human",
+                                   started_at="2026-09-19T07:00:00")
+    retry = s.create_investigation(host="home-assistant", retry_of=first, status="failed",
+                                   started_at="2026-09-22T09:00:00")
+    assert [r["id"] for r in s.needs_attention()] == [retry]
+    assert s.needs_attention_count() == 1
+    s.close()
+
+
+def test_a_declined_rerun_leaves_the_original_waiting(tmp_path):
+    """A re-run nobody approved never ran, so the original is still unhandled."""
+    s = IncidentStore(tmp_path / "n.sqlite3")
+    first = s.create_investigation(host="homelab", status="needs_human",
+                                   started_at="2026-09-19T07:00:00")
+    s.create_investigation(host="homelab", retry_of=first, status="declined",
+                           started_at="2026-09-22T09:00:00")
+    assert [r["id"] for r in s.needs_attention()] == [first]
+    s.close()
+
+
+def test_an_unrelated_later_run_does_not_hide_anything(tmp_path):
+    """Only an explicit re-run supersedes — not any later run on the host."""
+    s = IncidentStore(tmp_path / "n.sqlite3")
+    first = s.create_investigation(host="homelab", status="needs_human",
+                                   started_at="2026-09-19T07:00:00")
+    s.create_investigation(host="homelab", status="complete",
+                           started_at="2026-09-22T09:00:00")      # no retry_of
+    assert [r["id"] for r in s.needs_attention()] == [first]
+    s.close()
+
+
 # -------------------------------------------------------------------- card
 
 def test_overview_needs_attention_card(seeded_client):

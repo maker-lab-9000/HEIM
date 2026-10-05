@@ -116,3 +116,46 @@ def test_chunk_text_hard_cut_long_line():
     parts = chunk_text("y" * 9000, limit=3900)
     assert len(parts) == 3
     assert all(len(p) <= 3900 for p in parts)
+
+
+# ------------------------------------------- new stop reasons (Sonnet 5 / Opus 5.5)
+#
+# Both models think by default, and the thinking counts toward max_tokens; both
+# run safety classifiers that answer a declined request with HTTP 200 and
+# stop_reason "refusal". Either way the agent returns no report — and the old
+# message blamed "a transient model/API error", which sends the operator to
+# re-run something that will fail the same way.
+
+
+def test_salvage_names_a_refusal():
+    r = salvage("", "1. [warning] mem", stop_reason="refusal")
+    assert r.incomplete
+    assert "declined" in r.reason and "safety" in r.reason
+    assert "transient" not in r.reason            # not the generic blame
+    assert "declined" in r.report_md               # and the report says so too
+
+
+def test_salvage_names_running_out_of_tokens():
+    r = salvage("", "1. [warning] mem", stop_reason="max_tokens")
+    assert r.incomplete
+    assert "max_tokens" in r.reason
+    assert "thinking" in r.reason                  # the likely culprit on these models
+    assert "transient" not in r.reason
+
+
+def test_salvage_truncated_mid_report_is_still_named():
+    """Cut off after some text but before '## Summary' — say why, keep the raw."""
+    r = salvage("Checking memory first", "f", stop_reason="max_tokens")
+    assert r.incomplete and "max_tokens" in r.reason
+    assert "Checking memory first" in r.report_md  # raw output preserved
+
+
+def test_salvage_ignores_stop_reason_when_the_report_is_there():
+    """A report that made it wins, whatever the stop reason says."""
+    r = salvage(GOOD, "f", stop_reason="max_tokens")
+    assert not r.incomplete
+
+
+def test_salvage_default_stop_reason_is_unchanged():
+    """Callers that pass nothing get exactly the old wording."""
+    assert "transient" in salvage("", "f").reason

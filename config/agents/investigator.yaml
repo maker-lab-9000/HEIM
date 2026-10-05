@@ -1,7 +1,10 @@
 # The root-cause investigator agent (port of n8n PAM 20's Investigator).
 name: investigator
-model: claude-sonnet-4-6
-max_tokens: 4096
+model: claude-sonnet-5
+# Doubled from 4096 with the move to Claude Sonnet 5: thinking is adaptive by
+# default there and counts toward max_tokens, so a 4.6-sized cap can end a
+# turn inside its own reasoning before the report is written.
+max_tokens: 8192
 soft_step_budget: 15   # the prompt tells the model to conclude by ~12-15 commands
 hard_step_cap: 25      # the loop force-finalizes here (n8n used maxIterations 40)
 prompt: investigator.md.j2
