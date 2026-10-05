@@ -47,8 +47,9 @@ _DISK_HEALTH_QIDS = (
     "spare",
     "media_err",
     "errlog",
-    "sda_wear",
-    "sdb_crc",
+    "ssd_wear",
+    "disk_crc",
+    "disk_identity",
 )
 _DISK_QIDS = ("fs_used", "inodes_used", "pve_pool_used")
 _NETWORK_QIDS = ("net_err", "n8n_net_spike")
@@ -90,7 +91,12 @@ def _name_for(qid: str, labels: dict) -> str:
         return (
             (labels.get("device") or "") + " " + (labels.get("mountpoint") or "")
         ).strip()
-    if qid in ("drive_temp", "smart_status", "media_err", "sdb_crc", "net_err"):
+    if qid in ("drive_temp", "smart_status", "media_err", "disk_crc", "disk_identity"):
+        # A physical disk's role (serial-keyed, from homelab:disk_role:info)
+        # wins over its kernel name, which USB re-enumeration reshuffles.
+        # Same rule as aggregate.series_name, so both paths agree.
+        return labels.get("disk") or labels.get("device") or ""
+    if qid == "net_err":
         return labels.get("device") or ""
     if qid == "exporter_up":
         return labels.get("job") or ""

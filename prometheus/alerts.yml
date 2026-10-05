@@ -14,6 +14,37 @@
 # Deploy: see prometheus/README.md (mount + rule_files entry + reload).
 
 groups:
+  # ── Disk identity ─────────────────────────────────────────────────────
+  # The ONE place a physical disk's role is defined, keyed on its serial.
+  # Kernel names (sda, sdb…) are handed out in enumeration order, and the
+  # hypervisor's USB disks re-enumerate across reboots: on 2026-10-05 the
+  # /JellyMedia SSD was `sdd` while every rule said `sdb`. Rules and HEIM's
+  # queries select and name disks by this `disk` label instead.
+  #
+  # Reads node_disk_info (the kernel's view), NOT smartctl: the RAID1 Toshibas
+  # spin down and the SMART exporter does not wake them, so SMART series come
+  # and go; node_disk_info is present whether a disk is asleep or not.
+  #
+  # Replacing a disk: change its serial here. DiskRoleUnresolved fires until
+  # you do, and DiskUnmapped flags the new disk as having no role.
+  - name: disk-identity
+    rules:
+      - record: homelab:disk_role:info
+        expr: |
+          max by (device, disk, serial) (
+              label_replace(node_disk_info{job="proxmox-host-node-exporter", serial="25425A400593"}, "disk", "photos", "", "")
+            or label_replace(node_disk_info{job="proxmox-host-node-exporter", serial="H479980093"}, "disk", "jellymedia", "", "")
+            or label_replace(node_disk_info{job="proxmox-host-node-exporter", serial="82O3S57XS89H"}, "disk", "raid1-a", "", "")
+            or label_replace(node_disk_info{job="proxmox-host-node-exporter", serial="82O3S57WS89H"}, "disk", "raid1-b", "", "")
+            or label_replace(node_disk_info{job="proxmox-host-node-exporter", serial="S30CJ9ADA40735"}, "disk", "backup", "", "")
+            or label_replace(node_disk_info{job="proxmox-host-node-exporter", serial="MQ28B44306633"}, "disk", "system", "", "")
+            # node_exporter says nvme0n1, the SMART exporter says nvme0: emit
+            # the SMART spelling too, so `on(device)` joins work from both sides
+            or label_replace(
+                 label_replace(node_disk_info{job="proxmox-host-node-exporter", serial="MQ28B44306633"}, "disk", "system", "", ""),
+                 "device", "$1", "device", "(nvme[0-9]+)n[0-9]+")
+          )
+
   - name: homelab-fast-path
     rules:
       # ── Availability ────────────────────────────────────────────────────
@@ -124,43 +155,74 @@ groups:
 
       # ── Disk health ─────────────────────────────────────────────────────
       - alert: SmartFail
-        expr: smartctl_device_smart_status != 1
+        expr: (smartctl_device_smart_status * on(device) group_left(disk) homelab:disk_role:info) != 1
         for: 5m
         labels: { severity: critical, qid: smart_status }
         annotations:
-          summary: "SMART FAILED: {{ $labels.device }}"
-          description: "SMART overall-health for {{ $labels.device }} is failing — imminent drive failure risk. Note the drive→mount mapping: sda→/Photos, sdb→/JellyMedia, nvme0→ubuntu-server LVM."
+          summary: "SMART FAILED: {{ $labels.disk }} ({{ $labels.device }})"
+          description: "SMART overall-health for the {{ $labels.disk }} disk is failing — imminent drive failure risk. Roles: photos→/Photos, jellymedia→/JellyMedia, raid1-a/raid1-b→md0 /toshiba_raid, backup→host backups, system→Proxmox OS + all VM disks."
 
       - alert: MediaErrors
-        expr: increase(smartctl_device_media_errors[30m]) > 0
+        expr: (increase(smartctl_device_media_errors[30m]) * on(device) group_left(disk) homelab:disk_role:info) > 0
         labels: { severity: critical, qid: media_err }
         annotations:
-          summary: "New media errors on {{ $labels.device }}"
-          description: "{{ $labels.device }} logged new media errors in the last 30m — active surface/NAND problem."
+          summary: "New media errors on {{ $labels.disk }} ({{ $labels.device }})"
+          description: "The {{ $labels.disk }} disk logged new media errors in the last 30m — active surface/NAND problem."
 
       - alert: CRCErrorsIncreasing
-        expr: increase(smartctl_device_attribute{device="sdb",attribute_name="UDMA_CRC_Error_Count",attribute_value_type="raw"}[30m]) > 0
-        labels: { severity: critical, qid: sdb_crc }
+        # every disk, not just one: a rising CRC count is a cable/connector/port
+        # fault wherever it happens. Sleeping disks report SMART only while
+        # awake; increase() works on the samples there are.
+        expr: (increase(smartctl_device_attribute{attribute_name="UDMA_CRC_Error_Count",attribute_value_type="raw"}[30m]) * on(device) group_left(disk) homelab:disk_role:info) > 0
+        labels: { severity: critical, qid: disk_crc }
         annotations:
-          summary: "CRC errors increasing on sdb"
-          description: "sdb's UDMA CRC error count increased in the last 30m — active SATA cable/connector/port fault (the historical static count is expected; growth is not). sdb backs /JellyMedia."
+          summary: "CRC errors increasing on {{ $labels.disk }} ({{ $labels.device }})"
+          description: "The {{ $labels.disk }} disk's UDMA CRC error count increased in the last 30m — active cable/connector/port fault. A static count is history (jellymedia has carried 115 for a long time); growth is not. Roles: photos→/Photos, jellymedia→/JellyMedia, raid1-a/raid1-b→md0 /toshiba_raid, backup→host backups, system→Proxmox OS + all VM disks."
 
       # ── Temperature ─────────────────────────────────────────────────────
       - alert: DriveTempCritical
-        expr: smartctl_device_temperature{temperature_type="current"} > 65
+        expr: (smartctl_device_temperature{temperature_type="current"} * on(device) group_left(disk) homelab:disk_role:info) > 65
         for: 10m
         labels: { severity: critical, qid: drive_temp }
         annotations:
-          summary: "Drive {{ $labels.device }} at {{ $value | printf \"%.0f\" }}°C"
-          description: "{{ $labels.device }} has been above 65°C for 10m — thermal damage risk. Mapping: sda→/Photos, sdb→/JellyMedia, nvme0→ubuntu-server LVM."
+          summary: "Drive {{ $labels.disk }} at {{ $value | printf \"%.0f\" }}°C"
+          description: "The {{ $labels.disk }} disk ({{ $labels.device }}) has been above 65°C for 10m — thermal damage risk. Roles: photos→/Photos, jellymedia→/JellyMedia, raid1-a/raid1-b→md0 /toshiba_raid, backup→host backups, system→Proxmox OS + all VM disks."
 
       - alert: DriveTempWarning
-        expr: smartctl_device_temperature{temperature_type="current"} > 55
+        expr: (smartctl_device_temperature{temperature_type="current"} * on(device) group_left(disk) homelab:disk_role:info) > 55
         for: 30m
         labels: { severity: warning, qid: drive_temp }
         annotations:
-          summary: "Drive {{ $labels.device }} at {{ $value | printf \"%.0f\" }}°C"
-          description: "{{ $labels.device }} has been above 55°C for 30 sustained minutes (brief spikes are ignored)."
+          summary: "Drive {{ $labels.disk }} at {{ $value | printf \"%.0f\" }}°C"
+          description: "The {{ $labels.disk }} disk ({{ $labels.device }}) has been above 55°C for 30 sustained minutes (brief spikes are ignored)."
+
+      # ── Disk identity drift ─────────────────────────────────────────────
+      - alert: DiskRoleUnresolved
+        # a role in homelab:disk_role:info matches no disk: replaced, removed,
+        # or not enumerated. Guarded on the exporter being up, so a dead
+        # node_exporter pages once (ExporterDown), not as six missing disks.
+        expr: |
+          (
+              absent(homelab:disk_role:info{disk="photos"})
+            or absent(homelab:disk_role:info{disk="jellymedia"})
+            or absent(homelab:disk_role:info{disk="raid1-a"})
+            or absent(homelab:disk_role:info{disk="raid1-b"})
+            or absent(homelab:disk_role:info{disk="backup"})
+            or absent(homelab:disk_role:info{disk="system"})
+          ) and on() (up{job="proxmox-host-node-exporter"} == 1)
+        for: 15m
+        labels: { severity: warning, qid: disk_identity }
+        annotations:
+          summary: "No disk found for role {{ $labels.disk }}"
+          description: "The {{ $labels.disk }} role in homelab:disk_role:info (prometheus/alerts.yml) matches no disk on the hypervisor. If the drive was replaced, put its serial in the mapping; until then its SMART, temperature and CRC rules watch nothing."
+
+      - alert: DiskUnmapped
+        expr: node_disk_info{job="proxmox-host-node-exporter", device=~"sd.+|nvme.+"} unless on(device) homelab:disk_role:info
+        for: 15m
+        labels: { severity: warning, qid: disk_identity }
+        annotations:
+          summary: "Disk {{ $labels.device }} has no role"
+          description: "{{ $labels.device }} ({{ $labels.model }}) is on the hypervisor but not in homelab:disk_role:info, so no disk rule watches it. Add its serial to the mapping in prometheus/alerts.yml."
 
       - alert: HostTempCritical
         expr: max by (instance) (node_hwmon_temp_celsius) > 90

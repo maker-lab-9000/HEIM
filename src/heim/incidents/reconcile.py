@@ -60,7 +60,7 @@ _CPU_QIDS = ("cpu_busy", "load_per_core", "cpu_psi", "procs_blocked", "pve_vm_cp
 _MEM_QIDS = ("mem_used", "swap_used", "mem_psi", "oom", "pve_vm_mem")
 _TEMP_QIDS = ("drive_temp", "host_temp_max", "chip_temp")
 _DISK_HEALTH_QIDS = (
-    "smart_status", "nvme_wear", "spare", "media_err", "errlog", "sda_wear", "sdb_crc",
+    "smart_status", "nvme_wear", "spare", "media_err", "errlog", "ssd_wear", "disk_crc", "disk_identity",
 )
 _DISK_QIDS = ("fs_used", "fs_used_bytes", "inodes_used", "pve_pool_used", "pve_pool_used_bytes")
 

@@ -97,9 +97,19 @@ def host_from_metric(metric: dict | None, host_by_ip: dict[str, str]) -> str:
 
 def series_name(metric: dict | None, guest_names: dict[str, str]) -> str:
     """Port of ``seriesName`` (public for the same reason as
-    :func:`host_from_metric`)."""
+    :func:`host_from_metric`).
+
+    One deliberate divergence from the n8n original: a ``disk`` label wins
+    over ``device``. Physical disks on the hypervisor get a stable role
+    (``photos``, ``jellymedia``…) from the ``homelab:disk_role:info``
+    recording rule, keyed on serial; their kernel names (``sda``…) are handed
+    out in USB enumeration order and reshuffle across reboots. Naming by
+    ``device`` turned a reboot into a new fingerprint for the same drive.
+    """
     if not metric:
         return ""
+    if metric.get("disk"):
+        return str(metric["disk"])
     mid = metric.get("id")
     if mid:
         if mid.startswith("qemu/") or mid.startswith("lxc/"):
