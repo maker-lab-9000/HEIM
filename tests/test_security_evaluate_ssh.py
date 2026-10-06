@@ -163,3 +163,60 @@ def test_compound_no_firewall_any_layer_unavailable_when_pve_side_unverified():
     units = ssh("ssh.unit_states", "inactive\ninactive\ninactive\nactive\nactive\n", exit_code=3)
     rows = rows_for("net.no_firewall_any_layer", units)
     assert rows[0].status == "unavailable"
+
+
+# ---- FR-3: per-evaluator exit-code rules -----------------------------------
+
+def test_fr3_external_logins_requires_exit_0_or_the_wtmp_trailer():
+    gone = rows_for("ssh.external_logins", ssh("ssh.last_logins", "", exit_code=1, stderr="last: cannot open /var/log/wtmp: No such file or directory\n"))
+    assert gone[0].status == "unavailable" and "wtmp" in gone[0].detail
+    quiet = rows_for("ssh.external_logins", ssh("ssh.last_logins", "\nwtmp begins Mon Sep  1 00:00:01 2026\n"))
+    assert quiet[0].status == "ok"
+    trailer_nonzero = rows_for("ssh.external_logins", ssh("ssh.last_logins", "\nwtmp begins Mon Sep  1 00:00:01 2026\n", exit_code=1))
+    assert trailer_nonzero[0].status == "ok"
+
+
+def test_fr3_auth_failures_unknown_stderr_is_unavailable():
+    rows = rows_for("ssh.auth_failures", ssh("ssh.auth_fail_count", "0\n", exit_code=127, stderr="bash: journalctl: command not found\n"),
+                    ssh("ssh.auth_fail_sample", "", exit_code=1, stderr="bash: journalctl: command not found\n"))
+    assert rows[0].status == "unavailable" and "command not found" in rows[0].detail
+    healthy = rows_for("ssh.auth_failures", ssh("ssh.auth_fail_count", "0\n", exit_code=1), ssh("ssh.auth_fail_sample", "", exit_code=1))
+    assert healthy[0].status == "ok"                         # grep -c with zero matches exits 1
+
+
+def test_fr3_docker_stale_images_requires_exit_0():
+    rows = rows_for("ssh.docker_stale_images", ssh("ssh.docker_images", "", exit_code=1, stderr="sudo: a password is required\n"))
+    assert rows[0].status == "unavailable"
+    hdr = rows_for("ssh.docker_stale_images", ssh("ssh.docker_images", "REPOSITORY TAG IMAGE ID CREATED SIZE\n"))
+    assert hdr[0].status == "ok"
+
+
+def test_fr3_login_shell_users_requires_exit_0():
+    rows = rows_for("ssh.login_shell_users", ssh("ssh.login_shells", "", exit_code=2, stderr="grep: /etc/passwd: Permission denied\n"))
+    assert rows[0].status == "unavailable"
+
+
+def test_fr3_world_writable_exit_1_and_empty_stays_ok():
+    # GNU find exits 1 on any permission-denied directory (stderr is discarded by 2>/dev/null)
+    rows = rows_for("ssh.world_writable", ssh("ssh.world_writable", "", exit_code=1))
+    assert rows[0].status == "ok"
+
+
+# ---- FR-5(b)/(d) -----------------------------------------------------------
+
+def test_fr5d_no_containers_running_is_ok_and_denied_ps_is_unavailable():
+    none = Evidence("ssh.docker_inspect[_none]", "empty", body="", exit_code=0,
+                    detail="docker ps answered: no containers running", target=CAT.sources["ssh.docker_inspect"].target)
+    rows = rows_for("ssh.docker_privileged", none)
+    assert [r.status for r in rows] == ["ok"] and rows[0].subject == "no-containers-running"
+    denied = Evidence("ssh.docker_inspect", "error", detail="container list unavailable — per-container sources not fetched",
+                      target=CAT.sources["ssh.docker_inspect"].target)
+    assert rows_for("ssh.docker_privileged", denied)[0].status == "unavailable"
+    assert rows_for("ssh.docker_privileged")[0].status == "unavailable"     # nothing collected at all
+
+
+def test_fr5b_an_evaluator_returning_no_rows_is_unavailable_not_ok():
+    from heim.security.types import Evidence as E
+    b = [E("pve.apt_repositories", "ok", body={"files": [], "infos": []})]     # no standard-repos
+    rows = rows_for("pve.repo_risky", *b)
+    assert [r.status for r in rows] == ["unavailable"] and "no rows" in rows[0].detail

@@ -161,7 +161,8 @@ def acl_privileged(spec, ev, ctx):
             out.append(fail(spec, ctx.pve_node, ugid, f"{ugid} holds {role} at {a.get('path')} with non-audit privileges", detail=", ".join(strong)))
         else:
             out.append(ok(spec, ctx.pve_node, ugid))
-    return out
+    # only root@pam entries (or none, proven genuine by the access_users control)
+    return out or [ok(spec, ctx.pve_node, "acl")]
 
 
 def backup_coverage(spec, ev, ctx):
@@ -262,6 +263,7 @@ def vm_hardening(spec, ev, ctx):
             out.append(unavailable(spec, name, f"vm_config[{vmid}]: {e.status} — {e.detail or 'no data'}", subject=vmid))
             continue
         cfg = e.body
+        before = len(out)
         if str(cfg.get("protection", 0)) != "1":
             out.append(note(spec, name, "protection", f"{name}: protection flag not set (accidental destroy/edit is possible)"))
         pt = sorted(k for k in cfg if k.startswith(("hostpci", "usb")))
@@ -269,6 +271,8 @@ def vm_hardening(spec, ev, ctx):
             out.append(note(spec, name, "passthrough", f"{name}: device passthrough present ({', '.join(pt)})"))
         if "agent" not in cfg:
             out.append(note(spec, name, "agent", f"{name}: QEMU guest agent not configured"))
+        if len(out) == before:
+            out.append(ok(spec, name, "hardening"))
     return out
 
 
@@ -289,6 +293,8 @@ def stopped_vm_onboot(spec, ev, ctx):
             out.append(note(spec, name, "onboot", f"{name} is stopped but onboot=1 — it would start on the next host boot"))
         elif str(st.body.get("status")) == "running" and name in ctx.expected_offline_vms:
             out.append(note(spec, name, "running", f"{name} is running although it is expected to be powered off"))
+        else:
+            out.append(ok(spec, name, "onboot"))
     return out
 
 

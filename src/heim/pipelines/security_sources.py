@@ -223,6 +223,11 @@ async def fetch_ssh(cfg: Config, sources: list[SourceSpec], *, ssh_host: str) ->
             # docker_names), or by a malformed `ps` row must still surface as
             # evidence — never vanish silently, or a privileged/docker.sock
             # container could sit past the cap while the check still says ok.
+            if total == 0 and ps.exit_code == 0:
+                # a header-only `docker ps` is a genuine answer: nothing runs
+                out.append(Evidence(f"{s.key}[_none]", "empty", body="", exit_code=0,
+                                    detail="docker ps answered: no containers running", target=s.target))
+                continue
             skipped = total - inspected
             if skipped > 0:
                 out.append(Evidence(

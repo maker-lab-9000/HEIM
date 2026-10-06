@@ -114,6 +114,11 @@ def auth_failures(spec, ev, ctx):
     hint = f"{cnt.stderr} {sample.stderr}"
     if any(h in hint for h in _JOURNAL_HINT):
         return [unavailable(spec, ctx.ssh_host, "the SSH user cannot read the system journal — add it to the systemd-journal group (owner-side step 1) or leave this check unverified")]
+    # The exit code is no signal here (grep -c exits 1 on a healthy zero), but
+    # any other stderr means journalctl itself failed — a "0" is then not a count.
+    other = hint.strip()
+    if other:
+        return [unavailable(spec, ctx.ssh_host, f"journalctl failed: {other[:120]}")]
     text = _text(cnt).strip().splitlines()
     try:
         n = int(text[-1]) if text else 0
@@ -179,15 +184,23 @@ def world_writable(spec, ev, ctx):
 
 
 def external_logins(spec, ev, ctx):
+    e = ev.get("ssh.last_logins")
+    # `last` always ends a successful read with the "wtmp begins" trailer;
+    # without it (and without exit 0) the login log was not read.
+    if e.exit_code != 0 and "wtmp begins" not in _text(e):
+        return [unavailable(spec, ctx.ssh_host, f"last did not read the login log (exit {e.exit_code}: {e.stderr.strip()[:100] or 'no output'})")]
     cidrs = [str(c) for c in spec.params.get("trusted_cidrs") or []]
-    ext = sorted({ip for ip in parse_last_hosts(_text(ev.get("ssh.last_logins"))) if not ip_in_cidrs(ip, cidrs)})
+    ext = sorted({ip for ip in parse_last_hosts(_text(e)) if not ip_in_cidrs(ip, cidrs)})
     if ext:
         return [fail(spec, ctx.ssh_host, "external", f"{len(ext)} login source address(es) outside the trusted networks in the last 7 days", detail=", ".join(ext))]
     return [ok(spec, ctx.ssh_host, "external")]
 
 
 def login_shell_users(spec, ev, ctx):
-    users = [l.split(":", 1)[0] for l in _text(ev.get("ssh.login_shells")).splitlines() if ":" in l]
+    e = ev.get("ssh.login_shells")
+    if e.exit_code != 0:      # /etc/passwd always has root's shell: no match means no read
+        return [unavailable(spec, ctx.ssh_host, f"/etc/passwd was not read (exit {e.exit_code}: {e.stderr.strip()[:100] or 'no output'})")]
+    users = [l.split(":", 1)[0] for l in _text(e).splitlines() if ":" in l]
     if not users:
         return [ok(spec, ctx.ssh_host, "users")]
     return [note(spec, ctx.ssh_host, "users", f"{len(users)} account(s) have a login shell", detail=", ".join(users[:20]))]
@@ -219,6 +232,9 @@ def agent_sudo_scope(spec, ev, ctx):
 def docker_privileged(spec, ev, ctx):
     out = []
     for name, e in ev.expanded("ssh.docker_inspect").items():
+        if name == "_none" and e.status == "empty":     # docker ps answered with zero containers
+            out.append(ok(spec, ctx.ssh_host, "no-containers-running"))
+            continue
         if e.status != "ok":
             out.append(unavailable(spec, ctx.ssh_host, f"inspect {name}: {e.detail or e.status}"))
             continue
@@ -243,8 +259,11 @@ def docker_privileged(spec, ev, ctx):
 
 
 def docker_stale_images(spec, ev, ctx):
+    e = ev.get("ssh.docker_images")
+    if e.exit_code != 0:
+        return [unavailable(spec, ctx.ssh_host, f"docker images did not answer (exit {e.exit_code}: {e.stderr.strip()[:100] or 'no output'})")]
     max_m = int(spec.params.get("max_age_months", 6))
-    stale = [(name, m) for name, m in parse_docker_images(_text(ev.get("ssh.docker_images"))) if m >= max_m]
+    stale = [(name, m) for name, m in parse_docker_images(_text(e)) if m >= max_m]
     if not stale:
         return [ok(spec, ctx.ssh_host, "images")]
     return [note(spec, ctx.ssh_host, name, f"image {name} was built {m} months ago") for name, m in stale[:15]]

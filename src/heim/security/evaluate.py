@@ -189,7 +189,9 @@ def evaluate(cat: Catalogue, ev: EvidenceBundle, ctx: EvalContext) -> list[Check
         except Exception as exc:  # one bad payload must not sink the other 46 checks
             log.exception("evaluator %s failed", spec.id)
             rows = [unavailable(spec, default_host(spec, ctx), f"evaluator error: {type(exc).__name__}: {exc}")]
-        results.extend(rows or [ok(spec, default_host(spec, ctx), "-")])
+        # an evaluator that means "healthy" says so with an explicit ok row;
+        # an empty list is "nothing verified", never a pass (Design §5)
+        results.extend(rows or [unavailable(spec, default_host(spec, ctx), "evaluator produced no rows")])
     for spec in cat.checks:
         if not spec.compound:
             continue

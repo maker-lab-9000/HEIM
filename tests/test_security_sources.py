@@ -250,3 +250,29 @@ async def test_collect_evidence_bounds_each_kind(cfg, monkeypatch):
     assert bundle.get("pve.version").status == "ok"
     assert bundle.get("ha.config").status == "timeout" and bundle.get("ssh.listeners").status == "timeout"
     assert bundle.collected_at == "2026-09-28T06:00:00"
+
+
+async def test_fr5d_header_only_docker_ps_yields_a_no_containers_marker(cfg, monkeypatch):
+    conn = _Conn(_ssh_docker_script(_ps_text([])))
+
+    async def fake_connect(*a, **k):
+        return conn
+    monkeypatch.setattr(src.asyncssh, "connect", fake_connect)
+    out = {e.key: e for e in await src.fetch_ssh(cfg, _DOCKER_SOURCES, ssh_host="ubuntu-server")}
+    marker = out["ssh.docker_inspect[_none]"]
+    assert marker.status == "empty" and marker.usable and "no containers" in marker.detail
+    assert "ssh.docker_inspect[_not_inspected]" not in out
+
+
+async def test_fr5d_denied_docker_ps_yields_no_marker(cfg, monkeypatch):
+    def script(cmd):
+        if cmd == "sudo agent-docker ps":
+            return _SshResult("", stderr="sudo: a password is required\n", exit_status=1)
+        return _SshResult("x\n")
+    conn = _Conn(script)
+
+    async def fake_connect(*a, **k):
+        return conn
+    monkeypatch.setattr(src.asyncssh, "connect", fake_connect)
+    out = {e.key: e for e in await src.fetch_ssh(cfg, _DOCKER_SOURCES, ssh_host="ubuntu-server")}
+    assert "ssh.docker_inspect[_none]" not in out and out["ssh.docker_inspect"].status == "error"

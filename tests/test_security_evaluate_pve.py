@@ -258,3 +258,29 @@ def test_duplicate_fingerprint_collapses_to_worst_status_either_order():
     acl_rev = list(reversed(acl))
     rows_rev = results_for("pve.acl_privileged", bundle(ev("pve.access_acl", acl_rev), ev("pve.access_roles", roles), ev("pve.access_users", USERS)))
     assert len(rows_rev) == 1 and rows_rev[0].status == "fail"
+
+
+# ---- FR-5(b): healthy answers are explicit ok rows, not empty lists ---------
+
+def test_fr5b_acl_with_only_root_entries_is_ok():
+    acl = [{"ugid": "root@pam", "roleid": "Administrator", "path": "/"}]
+    roles = [{"roleid": "Administrator", "privs": "Sys.Modify,VM.Config.Disk"}]
+    rows = results_for("pve.acl_privileged", bundle(ev("pve.access_acl", acl), ev("pve.access_roles", roles), ev("pve.access_users", USERS)))
+    assert [r.status for r in rows] == ["ok"]
+    none = results_for("pve.acl_privileged", bundle(ev("pve.access_acl", [], "empty"), ev("pve.access_roles", roles), ev("pve.access_users", USERS)))
+    assert [r.status for r in none] == ["ok"]          # empty list, control proves it genuine
+
+
+HARDENED = {"protection": 1, "agent": "1", "onboot": 1, "net0": "virtio=AA,bridge=vmbr0"}
+
+
+def test_fr5b_fully_hardened_vm_is_ok():
+    b = bundle(ev("pve.vm_config[100]", HARDENED))
+    rows = results_for("pve.vm_hardening", b)
+    assert [(r.status, r.subject) for r in rows] == [("ok", "hardening")]
+
+
+def test_fr5b_running_onboot_vm_is_ok_for_stopped_vm_onboot():
+    b = bundle(ev("pve.vm_config[100]", HARDENED), ev("pve.vm_status[100]", {"status": "running"}))
+    rows = results_for("pve.stopped_vm_onboot", b)
+    assert [(r.status, r.subject) for r in rows] == [("ok", "onboot")]
