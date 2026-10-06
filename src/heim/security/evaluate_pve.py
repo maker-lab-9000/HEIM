@@ -15,12 +15,20 @@ _PVE_FAIL = re.compile(r"pvedaemon\[\d+\]: authentication failure")
 
 def _list(ev: EvidenceBundle, key: str) -> list:
     b = ev.get(key).body
-    return b if isinstance(b, list) else []
+    if b is None:
+        return []
+    if not isinstance(b, list):
+        raise TypeError(f"{key}: expected a list body, got {type(b).__name__}")
+    return b
 
 
 def _dict(ev: EvidenceBundle, key: str) -> dict:
     b = ev.get(key).body
-    return b if isinstance(b, dict) else {}
+    if b is None:
+        return {}
+    if not isinstance(b, dict):
+        raise TypeError(f"{key}: expected a dict body, got {type(b).__name__}")
+    return b
 
 
 def tfa_missing(spec: CheckSpec, ev: EvidenceBundle, ctx: EvalContext):
@@ -51,6 +59,8 @@ def firewall_disabled(spec, ev, ctx):
     vm_fw = ev.expanded("pve.fw_vm_options")
     for vmid, cfg_e in ev.expanded("pve.vm_config").items():
         if not cfg_e.usable or not isinstance(cfg_e.body, dict):
+            out.append(unavailable(spec, ctx.vm_name(vmid),
+                                   f"vm_config[{vmid}]: {cfg_e.status} — {cfg_e.detail or 'no data'}", subject=vmid))
             continue
         flagged = sorted(k for k, v in cfg_e.body.items() if k.startswith("net") and "firewall=1" in str(v))
         fw = vm_fw.get(vmid)
@@ -133,13 +143,20 @@ def cert_expiry(spec, ev, ctx):
 
 
 def acl_privileged(spec, ev, ctx):
-    roles = {str(r.get("roleid")): str(r.get("privs") or "") for r in _list(ev, "pve.access_roles")}
+    acl = _list(ev, "pve.access_acl")
+    roles_rows = _list(ev, "pve.access_roles")
+    if acl and not roles_rows:
+        return [unavailable(spec, ctx.pve_node, "access_roles returned no roles — cannot verify any ACL entry's privileges")]
+    roles = {str(r.get("roleid")): str(r.get("privs") or "") for r in roles_rows}
     out = []
-    for a in _list(ev, "pve.access_acl"):
+    for a in acl:
         ugid, role = str(a.get("ugid") or ""), str(a.get("roleid") or "")
         if ugid.startswith("root@pam"):
             continue
-        strong = sorted(p for p in roles.get(role, "").split(",") if _MODIFY.search(p))
+        if role not in roles:
+            out.append(unavailable(spec, ctx.pve_node, f"role {role!r} not found in access_roles", subject=ugid))
+            continue
+        strong = sorted(p for p in roles[role].split(",") if _MODIFY.search(p))
         if strong:
             out.append(fail(spec, ctx.pve_node, ugid, f"{ugid} holds {role} at {a.get('path')} with non-audit privileges", detail=", ".join(strong)))
         else:
@@ -148,6 +165,11 @@ def acl_privileged(spec, ev, ctx):
 
 
 def backup_coverage(spec, ev, ctx):
+    vms = _list(ev, "pve.resources_vm")
+    if not vms:
+        return [unavailable(spec, ctx.pve_node,
+                            "resources_vm returned no VMs — cannot tell 'no VMs' from 'not permitted' "
+                            "(cluster/resources is permission-filtered)")]
     jobs = [j for j in _list(ev, "pve.backup_jobs") if str(j.get("enabled", 1)) != "0"]
     covered: set[str] = set()
     cover_all = False
@@ -158,7 +180,7 @@ def backup_coverage(spec, ev, ctx):
             excluded |= {v.strip() for v in str(j.get("exclude") or "").split(",") if v.strip()}
         covered |= {v.strip() for v in str(j.get("vmid") or "").split(",") if v.strip()}
     out = []
-    for vm in _list(ev, "pve.resources_vm"):
+    for vm in vms:
         vmid, name, status = str(vm.get("vmid")), str(vm.get("name") or vm.get("vmid")), str(vm.get("status") or "")
         if vmid in covered or (cover_all and vmid not in excluded):
             out.append(ok(spec, name, "backup"))
@@ -235,9 +257,11 @@ def auth_failures(spec, ev, ctx):
 def vm_hardening(spec, ev, ctx):
     out = []
     for vmid, e in ev.expanded("pve.vm_config").items():
+        name = ctx.vm_name(vmid)
         if not e.usable or not isinstance(e.body, dict):
+            out.append(unavailable(spec, name, f"vm_config[{vmid}]: {e.status} — {e.detail or 'no data'}", subject=vmid))
             continue
-        name, cfg = ctx.vm_name(vmid), e.body
+        cfg = e.body
         if str(cfg.get("protection", 0)) != "1":
             out.append(note(spec, name, "protection", f"{name}: protection flag not set (accidental destroy/edit is possible)"))
         pt = sorted(k for k in cfg if k.startswith(("hostpci", "usb")))
@@ -252,10 +276,15 @@ def stopped_vm_onboot(spec, ev, ctx):
     out = []
     status = ev.expanded("pve.vm_status")
     for vmid, e in ev.expanded("pve.vm_config").items():
-        st = status.get(vmid)
-        if not (e.usable and isinstance(e.body, dict) and st is not None and st.usable and isinstance(st.body, dict)):
-            continue
         name = ctx.vm_name(vmid)
+        if not e.usable or not isinstance(e.body, dict):
+            out.append(unavailable(spec, name, f"vm_config[{vmid}]: {e.status} — {e.detail or 'no data'}", subject=vmid))
+            continue
+        st = status.get(vmid)
+        if st is None or not st.usable or not isinstance(st.body, dict):
+            reason = f"vm_status[{vmid}]: {st.status if st is not None else 'not collected'} — {(st.detail if st is not None else '') or 'no data'}"
+            out.append(unavailable(spec, name, reason, subject=vmid))
+            continue
         if str(st.body.get("status")) == "stopped" and str(e.body.get("onboot", 0)) == "1":
             out.append(note(spec, name, "onboot", f"{name} is stopped but onboot=1 — it would start on the next host boot"))
         elif str(st.body.get("status")) == "running" and name in ctx.expected_offline_vms:

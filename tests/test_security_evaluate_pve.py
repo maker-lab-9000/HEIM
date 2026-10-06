@@ -165,11 +165,96 @@ def test_vm_notes_and_secureboot():
     hard = results_for("pve.vm_hardening", b)
     assert any(r.host == "ubuntu-server" and "passthrough" in r.summary for r in hard)
     assert any(r.host == "ubuntu-server" and "protection" in r.summary for r in hard)
-    assert results_for("pve.stopped_vm_onboot", b)[0].host == "monitor-box"
+    stopped_notes = [r for r in results_for("pve.stopped_vm_onboot", b) if r.status == "note"]
+    assert stopped_notes and stopped_notes[0].host == "monitor-box"
     assert results_for("pve.secureboot", b)[0].status == "note"
 
 
-def test_evaluator_exception_becomes_unavailable_not_a_crash():
+def test_evaluator_exception_becomes_unavailable_not_ok():
     b = bundle(ev("pve.certificates", "this is not a list"))
     rows = results_for("pve.cert_expiry", b)
-    assert rows and all(r.status in ("unavailable", "ok") for r in rows)
+    assert rows and all(r.status == "unavailable" for r in rows)
+
+
+def test_one_evaluator_crash_does_not_sink_sibling_checks():
+    b = bundle(ev("pve.certificates", "this is not a list"), ev("pve.apt_versions", APT))
+    cert_rows = results_for("pve.cert_expiry", b)
+    assert cert_rows and all(r.status == "unavailable" for r in cert_rows)
+    pending_rows = results_for("pve.pending_updates", b)
+    assert pending_rows and pending_rows[0].status == "fail" and "2 of 3" in pending_rows[0].summary
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1 (task-4-findings-r1.md): no silent `ok` on unverifiable evidence,
+# and one row per fingerprint.
+
+def test_vm_hardening_unavailable_when_no_vm_config_collected():
+    b = bundle(ev("pve.resources_vm", RES))
+    rows = results_for("pve.vm_hardening", b)
+    assert len(rows) == 1 and rows[0].status == "unavailable"
+
+
+def test_vm_hardening_unavailable_when_every_vm_config_denied():
+    b = bundle(ev("pve.resources_vm", RES),
+               ev("pve.vm_config[100]", None, status="denied", detail="HTTP 403"),
+               ev("pve.vm_config[102]", None, status="denied", detail="HTTP 403"))
+    rows = results_for("pve.vm_hardening", b)
+    assert len(rows) == 1 and rows[0].status == "unavailable"
+
+
+def test_vm_hardening_mix_of_usable_and_unusable_items_yields_rows_for_both():
+    b = bundle(ev("pve.resources_vm", RES),
+               ev("pve.vm_config[100]", {"hostpci0": "0000:03:00"}),
+               ev("pve.vm_config[102]", None, status="denied", detail="HTTP 403"))
+    rows = results_for("pve.vm_hardening", b)
+    assert any(r.status == "unavailable" and r.host == "monitor-box" for r in rows)
+    assert any(r.status == "note" and r.host == "ubuntu-server" and "passthrough" in r.summary for r in rows)
+
+
+def test_stopped_vm_onboot_unavailable_when_no_vm_config_collected():
+    b = bundle(ev("pve.resources_vm", RES))
+    rows = results_for("pve.stopped_vm_onboot", b)
+    assert len(rows) == 1 and rows[0].status == "unavailable"
+
+
+def test_firewall_disabled_unavailable_item_for_denied_vm_config():
+    b = bundle(ev("pve.fw_cluster_options", {"enable": 1}), ev("pve.fw_cluster_rules", [{"a": 1}]),
+               ev("pve.fw_node_options", {}), ev("pve.fw_node_rules", [], "empty"),
+               ev("pve.resources_vm", RES),
+               ev("pve.vm_config[100]", None, status="denied", detail="HTTP 403"))
+    rows = results_for("pve.firewall_disabled", b)
+    assert any(r.status == "unavailable" and r.host == "ubuntu-server" for r in rows)
+
+
+def test_backup_coverage_unavailable_when_resources_vm_empty():
+    jobs = [{"id": "j1", "enabled": 1, "vmid": "100"}]
+    rows = results_for("pve.backup_coverage", bundle(ev("pve.backup_jobs", jobs), ev("pve.resources_vm", [], "empty")))
+    assert len(rows) == 1 and rows[0].status == "unavailable" and "not permitted" in rows[0].detail
+
+
+def test_acl_privileged_unknown_role_is_unavailable_for_that_principal():
+    roles = [{"roleid": "PAMAuditor", "privs": "Sys.Audit"}]
+    acl = [{"ugid": "auditor@pve", "roleid": "PAMAuditor", "path": "/", "type": "user"},
+           {"ugid": "ops@pve", "roleid": "Administrator", "path": "/", "type": "user"}]
+    rows = results_for("pve.acl_privileged", bundle(ev("pve.access_acl", acl), ev("pve.access_roles", roles), ev("pve.access_users", USERS)))
+    by = {r.subject: r for r in rows}
+    assert by["ops@pve"].status == "unavailable" and "Administrator" in by["ops@pve"].detail
+    assert by["auditor@pve"].status == "ok"
+
+
+def test_acl_privileged_whole_check_unavailable_when_roles_empty():
+    acl = [{"ugid": "ops@pve", "roleid": "Administrator", "path": "/", "type": "user"}]
+    rows = results_for("pve.acl_privileged", bundle(ev("pve.access_acl", acl), ev("pve.access_roles", [], "empty"), ev("pve.access_users", USERS)))
+    assert len(rows) == 1 and rows[0].status == "unavailable"
+
+
+def test_duplicate_fingerprint_collapses_to_worst_status_either_order():
+    roles = [{"roleid": "PAMAuditor", "privs": "Sys.Audit"}, {"roleid": "PVEVMAdmin", "privs": "VM.Allocate"}]
+    acl = [{"ugid": "svc@pve", "roleid": "PAMAuditor", "path": "/", "type": "user"},
+           {"ugid": "svc@pve", "roleid": "PVEVMAdmin", "path": "/vms", "type": "user"}]
+    rows = results_for("pve.acl_privileged", bundle(ev("pve.access_acl", acl), ev("pve.access_roles", roles), ev("pve.access_users", USERS)))
+    assert len(rows) == 1 and rows[0].status == "fail"
+
+    acl_rev = list(reversed(acl))
+    rows_rev = results_for("pve.acl_privileged", bundle(ev("pve.access_acl", acl_rev), ev("pve.access_roles", roles), ev("pve.access_users", USERS)))
+    assert len(rows_rev) == 1 and rows_rev[0].status == "fail"
