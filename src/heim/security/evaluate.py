@@ -109,29 +109,17 @@ def _registry() -> tuple[dict[str, Evaluator], dict[str, Compound]]:
     from heim.security import evaluate_pve
     plain.update(evaluate_pve.EVALUATORS)
 
-    # TODO(task 6): drop this try/except once evaluate_ha, evaluate_prom,
-    # evaluate_ssh and evaluate_compound exist — Task 6's test asserts every
-    # catalogue check has a registered evaluator.
-    try:
-        from heim.security import evaluate_ha
-        plain.update(evaluate_ha.EVALUATORS)
-    except ImportError:
-        pass
-    try:
-        from heim.security import evaluate_prom
-        plain.update(evaluate_prom.EVALUATORS)
-    except ImportError:
-        pass
-    try:
-        from heim.security import evaluate_ssh
-        plain.update(evaluate_ssh.EVALUATORS)
-    except ImportError:
-        pass
-    try:
-        from heim.security import evaluate_compound
-        compound.update(evaluate_compound.COMPOUND)
-    except ImportError:
-        pass
+    from heim.security import evaluate_ha
+    plain.update(evaluate_ha.EVALUATORS)
+
+    from heim.security import evaluate_prom
+    plain.update(evaluate_prom.EVALUATORS)
+
+    from heim.security import evaluate_ssh
+    plain.update(evaluate_ssh.EVALUATORS)
+
+    from heim.security import evaluate_compound
+    compound.update(evaluate_compound.COMPOUND)
 
     return plain, compound
 
