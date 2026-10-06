@@ -142,12 +142,12 @@ def test_ha_malformed_body_type_becomes_unavailable_via_dispatcher():
     assert rows[0].status == "unavailable"
 
 
-def test_prom_failed_units_empty_vector_is_unavailable_not_ok():
-    # node_systemd_unit_state{state="failed"}==1 is a sparse metric: an
-    # empty vector means either "nothing failed" or "nothing was scraped at
-    # all" — indistinguishable here, so it must not resolve to `ok`.
+def test_prom_failed_units_empty_vector_is_the_healthy_ok():
+    # node_systemd_unit_state{state="failed"}==1 is a value-filtered query:
+    # an empty vector is its designed healthy answer (no unit failed), not
+    # missing evidence (R5(c), amended after Task 5's review).
     rows = rows_for("prom.failed_units", Evidence("prom.failed_units", "ok", body=[]))
-    assert rows[0].status == "unavailable"
+    assert rows[0].status == "ok"
 
 
 def test_prom_malformed_vector_body_becomes_unavailable_via_dispatcher():

@@ -56,14 +56,13 @@ def failed_units(spec, ev, ctx):
     for s in _vec(ev, "prom.failed_units"):
         h, unit = _host(ctx, s), str(s["metric"].get("name") or "?")
         out.append(ok(spec, h, unit) if unit in expected else fail(spec, h, unit, f"{h}: systemd unit {unit} is in failed state"))
-    # R5 deviation from the brief: node_systemd_unit_state{state="failed"}==1
-    # is a sparse metric — it legitimately returns no series both when
-    # nothing is failed AND when node_exporter was never scraped at all (a
-    # total blind spot). Those two cases are indistinguishable from this
-    # vector alone, so an empty vector must be `unavailable`, not `ok`
-    # (R5(c)), matching every other prom.* check's empty-vector fallback.
-    return out or [unavailable(spec, "prometheus",
-                               'node_systemd_unit_state{state="failed"}==1 returned no series — cannot tell "no failed units" from a scrape/collector gap')]
+    # node_systemd_unit_state{state="failed"}==1 is a value-filtered query:
+    # an empty vector is its designed healthy answer (no unit failed), not
+    # missing evidence (R5(c), amended after Task 5's review). A Prometheus
+    # that didn't answer is already `unavailable` via the dispatcher's
+    # gate_sources (non-ok evidence status), and an unscraped node_exporter
+    # is reported separately by prom.targets_down.
+    return out or [ok(spec, "all", "none-failed")]
 
 
 def time_sync(spec, ev, ctx):
