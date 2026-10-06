@@ -118,6 +118,19 @@ def test_docker_inspect_and_images():
     assert [r.subject for r in stale if r.status == "note"] == ["old/thing:v1"]
 
 
+def test_docker_inspect_not_inspected_sentinel_is_unavailable():
+    """A container skipped by the 40-cap or by name validation still produces
+    ONE sentinel Evidence (ssh.docker_inspect[_not_inspected]); the evaluator
+    must turn that into an `unavailable` row, never silently drop it."""
+    graf = json.dumps([{"Name": "/grafana", "HostConfig": {"Privileged": False, "Binds": [], "NetworkMode": "bridge", "CapAdd": None}}])
+    sentinel = Evidence("ssh.docker_inspect[_not_inspected]", "error",
+                        detail="1 container(s) not inspected (cap 40 or a name that failed validation)",
+                        target=CAT.sources["ssh.docker_inspect"].target)
+    rows = {r.subject: r for r in rows_for("ssh.docker_privileged", ssh("ssh.docker_inspect[grafana]", graf), sentinel)}
+    assert rows["grafana"].status == "ok"
+    assert any(r.status == "unavailable" for r in rows.values())
+
+
 def test_compound_no_firewall_any_layer():
     fw_off = [Evidence("pve.fw_cluster_options", "ok", body={"digest": "x"}), Evidence("pve.fw_cluster_rules", "empty", body=[]),
               Evidence("pve.fw_node_options", "ok", body={}), Evidence("pve.fw_node_rules", "empty", body=[])]

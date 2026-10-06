@@ -72,6 +72,15 @@ def _all(sources: list[SourceSpec], status: str, detail: str) -> list[Evidence]:
     return [Evidence(s.key, status, detail=detail, target=s.target) for s in sources]
 
 
+def _docker_ps_row_count(ps_text: str) -> int:
+    """Container rows in ``docker ps`` output (header excluded), independent
+    of ``docker_names``'s own NAME_RE filtering — the ground truth for how
+    many containers SHOULD be inspected, so a name that fails validation (or
+    is simply dropped by the cap) can still be counted as "not inspected"
+    rather than disappearing."""
+    return sum(1 for line in (ps_text or "").splitlines()[1:] if line.split())
+
+
 # ---------------------------------------------------------------------- HTTP
 
 async def fetch_pve(cfg: Config, sources: list[SourceSpec], *, node: str) -> list[Evidence]:
@@ -202,10 +211,24 @@ async def fetch_ssh(cfg: Config, sources: list[SourceSpec], *, ssh_host: str) ->
             # with fullmatch (not match): NAME_RE ends in `$`, and in Python `$`
             # also matches just before a trailing newline, so `.match` alone
             # could let a crafted "name\n<injected>" through this gate.
-            for name in docker_names(str(ps.body or ""))[:MAX_CONTAINERS]:
+            ps_text = str(ps.body or "")
+            total = _docker_ps_row_count(ps_text)
+            inspected = 0
+            for name in docker_names(ps_text)[:MAX_CONTAINERS]:
                 if not NAME_RE.fullmatch(name):
                     continue
                 out.append(await run(f"{s.key}[{name}]", s.target.replace("{container}", name)))
+                inspected += 1
+            # A container dropped by the cap, by NAME_RE (here or inside
+            # docker_names), or by a malformed `ps` row must still surface as
+            # evidence — never vanish silently, or a privileged/docker.sock
+            # container could sit past the cap while the check still says ok.
+            skipped = total - inspected
+            if skipped > 0:
+                out.append(Evidence(
+                    f"{s.key}[_not_inspected]", "error",
+                    detail=f"{skipped} container(s) not inspected (cap {MAX_CONTAINERS} or a name that failed validation)",
+                    target=s.target))
     finally:
         conn.close()
     return out

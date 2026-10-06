@@ -161,6 +161,64 @@ async def test_fetch_ssh_runs_guarded_lines_and_expands_containers(cfg, monkeypa
     assert conn.closed and all(not c.startswith("rm") for c in conn.ran)
 
 
+def _ps_text(names):
+    header = "CONTAINER ID IMAGE COMMAND CREATED STATUS PORTS NAMES"
+    rows = "\n".join(f"c{i:02d} img cmd 1d Up  {n}" for i, n in enumerate(names))
+    return header + "\n" + rows + "\n"
+
+
+def _ssh_docker_script(ps_text):
+    def script(cmd):
+        if cmd == "sudo agent-docker ps":
+            return _SshResult(ps_text)
+        if cmd.startswith("sudo agent-docker inspect "):
+            return _SshResult(json.dumps([{"HostConfig": {}}]))
+        return _SshResult("x\n")
+    return script
+
+
+_DOCKER_SOURCES = [SourceSpec("ssh.docker_ps", "ssh", "sudo agent-docker ps"),
+                   SourceSpec("ssh.docker_inspect", "ssh", "sudo agent-docker inspect {container}", expand="container")]
+
+
+async def test_fetch_ssh_sentinel_when_containers_exceed_cap(cfg, monkeypatch):
+    names = [f"c{i}" for i in range(41)]
+    conn = _Conn(_ssh_docker_script(_ps_text(names)))
+
+    async def fake_connect(*a, **k):
+        return conn
+    monkeypatch.setattr(src.asyncssh, "connect", fake_connect)
+    out = {e.key: e for e in await src.fetch_ssh(cfg, _DOCKER_SOURCES, ssh_host="ubuntu-server")}
+    inspected = [k for k in out if k.startswith("ssh.docker_inspect[") and k != "ssh.docker_inspect[_not_inspected]"]
+    assert len(inspected) == src.MAX_CONTAINERS
+    sentinel = out["ssh.docker_inspect[_not_inspected]"]
+    assert sentinel.status == "error" and "1 container" in sentinel.detail
+    assert sentinel.target == "sudo agent-docker inspect {container}"
+
+
+async def test_fetch_ssh_sentinel_when_a_name_fails_validation(cfg, monkeypatch):
+    conn = _Conn(_ssh_docker_script(_ps_text(["grafana", "bad;name"])))
+
+    async def fake_connect(*a, **k):
+        return conn
+    monkeypatch.setattr(src.asyncssh, "connect", fake_connect)
+    out = {e.key: e for e in await src.fetch_ssh(cfg, _DOCKER_SOURCES, ssh_host="ubuntu-server")}
+    assert "ssh.docker_inspect[grafana]" in out
+    sentinel = out["ssh.docker_inspect[_not_inspected]"]
+    assert sentinel.status == "error" and "1 container" in sentinel.detail
+
+
+async def test_fetch_ssh_no_sentinel_when_every_container_inspected(cfg, monkeypatch):
+    conn = _Conn(_ssh_docker_script(_ps_text(["grafana", "cadvisor"])))
+
+    async def fake_connect(*a, **k):
+        return conn
+    monkeypatch.setattr(src.asyncssh, "connect", fake_connect)
+    out = {e.key: e for e in await src.fetch_ssh(cfg, _DOCKER_SOURCES, ssh_host="ubuntu-server")}
+    assert "ssh.docker_inspect[_not_inspected]" not in out
+    assert "ssh.docker_inspect[grafana]" in out and "ssh.docker_inspect[cadvisor]" in out
+
+
 async def test_fetch_ssh_connect_failure_marks_every_source(cfg, monkeypatch):
     async def fake_connect(*a, **k):
         raise OSError("no route to host")
