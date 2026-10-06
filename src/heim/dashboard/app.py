@@ -1007,7 +1007,7 @@ NAV = [
     {"href": "/hosts", "label": "hosts", "icon": "▢"},
 ]
 
-_TRIGGERS = ["daily", "poller", "manual"]
+_TRIGGERS = ["daily", "poller", "manual", "security_audit"]
 
 
 def _query(**params) -> str:

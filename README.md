@@ -110,7 +110,7 @@ heim/
 │   └── provisioning/datasources/loki.yml
 ├── loki/                           # docker-compose + config for the AI event store
 ├── prometheus/                     # docker-compose, scrape config, and alerts.yml (fast-path rules)
-├── tests/                          # 596 tests, incl. faithful-port golden cases
+├── tests/                          # 958 tests, incl. faithful-port golden cases
 └── docs/ARCHITECTURE.md            # design, data flow, n8n→module provenance map
 ```
 
