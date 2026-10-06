@@ -29,11 +29,13 @@ def _sorted(rows: list[CheckResult]) -> list[CheckResult]:
 
 
 def coverage_gaps(results: list[CheckResult]) -> list[str]:
-    seen: dict[str, str] = {}
+    seen: dict[tuple[str, str, str], str] = {}
     for r in results:
-        if r.status == "unavailable" and r.check_id not in seen:
-            seen[r.check_id] = r.detail or r.summary.removeprefix("not verified: ")
-    return [f"{cid} — {why}" for cid, why in sorted(seen.items())]
+        if r.status == "unavailable":
+            key = (r.check_id, r.host, r.subject)
+            if key not in seen:
+                seen[key] = r.detail or r.summary.removeprefix("not verified: ")
+    return [f"{cid} ({host}/{subject}) — {why}" for (cid, host, subject), why in sorted(seen.items())]
 
 
 def overall_of(rows: list[dict]) -> str:
@@ -53,7 +55,8 @@ def render_audit_report(results: list[CheckResult], diff: AuditDiff, *,
     warn = sum(1 for r in findings if r.severity == "warning")
     gaps = coverage_gaps(results)
     notes = _sorted([r for r in results if r.status == "note"])
-    passed = sorted({r.check_id for r in results if r.status == "ok"} - {r.check_id for r in results if r.status == "fail"})
+    passed = sorted({r.check_id for r in results if r.status == "ok"}
+                     - {r.check_id for r in results if r.status in ("fail", "unavailable")})
 
     L = ["## Summary", "",
          f"Weekly read-only security audit generated {generated_at}. {len(results)} check rows evaluated; "

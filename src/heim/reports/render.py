@@ -171,8 +171,20 @@ def extract_tool_feedback(report_md: str) -> list[tuple[str, str]]:
 
 # ---------------------------------------------------------------- html emails
 
-def _md_to_html(md: str) -> str:
-    return md_lib.markdown(md, extensions=["tables", "fenced_code", "sane_lists"])
+def _md_to_html(md: str, *, allow_raw_html: bool = True) -> str:
+    """Markdown -> HTML. ``allow_raw_html=False`` deregisters python-markdown's
+    raw-HTML passthrough (the ``html_block`` preprocessor and ``html`` inline
+    pattern), so any ``<...>`` in the source — e.g. finding text sourced from
+    HA states, ``ss``, docker names, journal lines, none of which are
+    HTML-sanitised — is emitted as escaped text rather than live markup.
+    ``investigation_email`` keeps the default (unchanged behaviour); only
+    ``security_audit_email`` disables it, because that report embeds
+    unsanitised remote-origin strings."""
+    instance = md_lib.Markdown(extensions=["tables", "fenced_code", "sane_lists"])
+    if not allow_raw_html:
+        instance.preprocessors.deregister("html_block")
+        instance.inlinePatterns.deregister("html")
+    return instance.convert(md)
 
 
 def investigation_email(
@@ -224,7 +236,7 @@ def security_audit_email(
         host="homelab · all hosts",
         generated_at=generated_at.replace("T", " ")[:16],
         incomplete=incomplete,
-        body=_md_to_html(report_md),
+        body=_md_to_html(report_md, allow_raw_html=False),
         n_steps=n_steps,
         input_tokens=f"{input_tokens:,}",
         output_tokens=f"{output_tokens:,}",

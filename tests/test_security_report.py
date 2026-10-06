@@ -44,12 +44,35 @@ def test_report_with_nothing_found():
 
 
 def test_coverage_and_demote_and_brief():
-    assert coverage_gaps(RESULTS) == ["ssh.auth_failures — journal denied"]
+    assert coverage_gaps(RESULTS) == ["ssh.auth_failures (ubuntu-server/-) — journal denied"]
     assert demote_headings("## Summary\ntext\n### Sub\n# Top") == "### Summary\ntext\n#### Sub\n## Top"
     b = brief_sections(RESULTS, DIFF)
     assert set(b) == {"table", "notes", "coverage", "resolved", "excerpts"}
     assert "| critical |" in b["table"] and "root@pam" in b["table"] and "Secure Boot" in b["notes"]
     assert "ssh.auth_failures" in b["coverage"] and "ssh.world_writable" in b["resolved"]
+
+
+def test_f1_passed_requires_ok_and_no_fail_or_unavailable_rows():
+    # pve.vm_config: VM A ok, VM B unavailable — the check id must not be "passed",
+    # and VM B's unavailable subject must be listed as a coverage gap.
+    rows = [
+        res("pve.vm_config", "homelab", "100", status="ok", summary=""),
+        res("pve.vm_config", "homelab", "101", status="unavailable", summary="not verified: denied", detail="denied"),
+    ]
+    md = render_audit_report(rows, AuditDiff(), generated_at=GEN, weeks={})
+    assert "pve.vm_config" not in md.split("## Passed checks")[1]
+    assert "101" in md.split("## Coverage gaps")[1]
+
+
+def test_f1_coverage_gaps_distinct_subjects_both_listed():
+    rows = [
+        res("pve.vm_config", "homelab", "101", status="unavailable", summary="not verified: denied", detail="denied"),
+        res("pve.vm_config", "homelab", "102", status="unavailable", summary="not verified: timeout", detail="timeout"),
+    ]
+    gaps = coverage_gaps(rows)
+    assert len(gaps) == 2
+    assert any("101" in g for g in gaps)
+    assert any("102" in g for g in gaps)
 
 
 def test_digest_is_bounded_and_mentions_assessment_state():
@@ -83,3 +106,11 @@ def test_security_audit_email_subject_and_body():
     subject2, _ = security_audit_email(report_md="## Summary\n\nx", incomplete=True, generated_at=GEN,
                                        n_findings=1, n_new=0, n_resolved=0, n_steps=0, input_tokens=0, output_tokens=0)
     assert subject2.endswith("(AI assessment unavailable)") and "1 finding," in subject2
+
+
+def test_f2_security_audit_email_escapes_raw_html_in_finding_text():
+    report_md = "## Summary\n\nhello <img src=x onerror=alert(1)> world"
+    _, html = security_audit_email(report_md=report_md, incomplete=False, generated_at=GEN,
+                                   n_findings=1, n_new=1, n_resolved=0, n_steps=0, input_tokens=0, output_tokens=0)
+    assert "&lt;img" in html
+    assert "<img src=x" not in html
