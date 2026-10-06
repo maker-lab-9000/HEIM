@@ -276,3 +276,16 @@ async def test_fr5d_denied_docker_ps_yields_no_marker(cfg, monkeypatch):
     monkeypatch.setattr(src.asyncssh, "connect", fake_connect)
     out = {e.key: e for e in await src.fetch_ssh(cfg, _DOCKER_SOURCES, ssh_host="ubuntu-server")}
     assert "ssh.docker_inspect[_none]" not in out and out["ssh.docker_inspect"].status == "error"
+
+
+async def test_fr5h_fetch_ha_requests_the_guard_normalised_path(cfg, monkeypatch):
+    calls = fake_httpx(monkeypatch, lambda url, params: (200, json.dumps({"version": "x"})))
+    out = await src.fetch_ha(cfg, [SourceSpec("ha.config", "ha", " api/config ")], host="home-assistant")
+    assert out[0].status == "ok" and out[0].target == "/api/config"
+    assert [c["url"] for c in calls] and all(c["url"].endswith("/api/config") and " " not in c["url"] for c in calls)
+
+
+async def test_fr5h_fetch_ha_blocks_a_path_the_guard_rejects(cfg, monkeypatch):
+    calls = fake_httpx(monkeypatch, lambda url, params: (200, "{}"))
+    out = await src.fetch_ha(cfg, [SourceSpec("ha.x", "ha", "/api/services/homeassistant/restart")], host="home-assistant")
+    assert out[0].status == "blocked" and not calls

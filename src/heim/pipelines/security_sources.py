@@ -16,7 +16,7 @@ import asyncssh
 import httpx
 
 from heim.config import Config, env
-from heim.guards import guard_command
+from heim.guards import guard_command, guard_ha_path
 from heim.security.catalogue import Catalogue, CatalogueError, validate_pve_path
 from heim.security.parsers import NAME_RE, docker_names, vmids_from_resources
 from heim.security.types import Evidence, EvidenceBundle, SourceSpec
@@ -138,14 +138,18 @@ async def fetch_ha(cfg: Config, sources: list[SourceSpec], *, host: str) -> list
     verify = h.api.verify_ssl if (h and h.api) else True
 
     async def get(s: SourceSpec) -> Evidence:
+        g = guard_ha_path(s.target)       # re-checked at fetch time, as fetch_pve does
+        if not g.allowed:
+            return Evidence(s.key, "blocked", detail=g.reason or "guard", target=s.target)
+        path = g.normalized
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S, verify=verify) as client:
-                r = await client.get(base + s.target, headers={"Authorization": f"Bearer {token}"})
+                r = await client.get(base + path, headers={"Authorization": f"Bearer {token}"})
         except httpx.TimeoutException:
-            return Evidence(s.key, "timeout", detail=f"no answer in {HTTP_TIMEOUT_S}s", target=s.target)
+            return Evidence(s.key, "timeout", detail=f"no answer in {HTTP_TIMEOUT_S}s", target=path)
         except httpx.HTTPError as exc:
-            return Evidence(s.key, "error", detail=f"{type(exc).__name__}: {exc}", target=s.target)
-        return classify_http(s.key, r.status_code, r.text, unwrap="", target=s.target)
+            return Evidence(s.key, "error", detail=f"{type(exc).__name__}: {exc}", target=path)
+        return classify_http(s.key, r.status_code, r.text, unwrap="", target=path)
 
     return list(await asyncio.gather(*(get(s) for s in sources)))
 

@@ -47,7 +47,7 @@ config/security/checks.yaml ─► security.catalogue (validates every read: gua
                            ─► pipelines.security_sources.collect_evidence (GET / PromQL / fixed SSH lines, bounded)
                            ─► security.evaluate (pure; empty-list control rule; ok/fail/note/unavailable)
                            ─► store.active_suppressions · security.diff (new/persisting/resolved/carried)
-                           ─► store.insert_run(kind=security_audit) + insert_findings(source=security_audit)
+                           ─► store.insert_run(kind=security_audit, or security_audit_dryrun) + insert_findings(source=security_audit)
                            ─► security.report.render_audit_report ('## Summary' first, model-free)
                            ─► agent.runner over agents/security_auditor.yaml (prometheus_query, discover_metrics, proxmox_api)
                               → reports.salvage → '## AI assessment' appendix, or a one-line reason
@@ -56,7 +56,8 @@ config/security/checks.yaml ─► security.catalogue (validates every read: gua
 
 `schedules.security_audit` defaults to `"mon 06:00"` and runs even if a server's
 `config/settings.yaml` doesn't set the key; set it to `""` there to disable. A
-`--dry-run` still writes a row to the store (it becomes next run's comparison baseline).
+`--dry-run` is recorded separately (`runs.kind=security_audit_dryrun`) and never becomes the
+comparison baseline: the next real run still diffs against the previous *real* run.
 The first run is a triage run — see the plan's "## Owner-side steps" for what to fill in
 `config/security/checks.yaml` afterwards.
 

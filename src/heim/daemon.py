@@ -31,6 +31,7 @@ from heim.pipelines.poller import run_poll
 from heim.pipelines.queue import request_from_payload
 from heim.pipelines.security_audit import run_security_audit
 from heim.config import parse_weekly
+from heim.security.catalogue import load_catalogue
 from heim.runtime import Runtime, build_runtime
 
 log = logging.getLogger(__name__)
@@ -90,6 +91,24 @@ async def _security_audit_job(rt: Runtime) -> None:
     except Exception as exc:
         log.exception("security audit failed")
         await rt.notify(f"🔴 HEIM weekly security audit FAILED: {type(exc).__name__}: {exc}")
+
+
+async def _check_audit_catalogue(rt: Runtime) -> bool:
+    """Validate config/security/checks.yaml at startup (Design §5: "at startup
+    and in heim check"). A bad catalogue costs only the weekly audit, so it is
+    logged and notified — never raised: like the other startup steps, it must
+    not take the daily reports and the poller down with it."""
+    try:
+        load_catalogue(rt.config.security_checks_path)
+        return True
+    except Exception as exc:
+        log.error("security audit catalogue %s is invalid: %s", rt.config.security_checks_path, exc)
+        try:
+            await rt.notify(f"🔴 HEIM security audit: checks.yaml is invalid — the weekly audit will fail "
+                            f"until it is fixed: {type(exc).__name__}: {exc}")
+        except Exception:
+            log.exception("notifying the invalid security catalogue failed")
+        return False
 
 
 # ------------------------------------------------ nightly backup + retention
@@ -226,6 +245,7 @@ async def run_daemon() -> None:
                       args=[rt], name="nightly-backup", misfire_grace_time=3600)
     audit_spec = rt.config.settings.schedules.security_audit
     if audit_spec:
+        await _check_audit_catalogue(rt)
         scheduler.add_job(_security_audit_job, weekly_trigger(audit_spec, tz), args=[rt],
                           name="security-audit", misfire_grace_time=AUDIT_MISFIRE_GRACE_S)
 

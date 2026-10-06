@@ -30,7 +30,10 @@ def rt(tmp_path, monkeypatch):
     cfg.settings.loki = None
     cfg.settings.email = None
     cfg.settings.home_assistant = None
-    return Runtime(config=cfg, store=IncidentStore(tmp_path / "rt.sqlite3"), dry_run=True, out_dir=tmp_path / "out")
+    # a REAL run (dry_run=False): every channel is already disabled above, so
+    # nothing leaves the process — and a dry run is recorded under its own
+    # runs.kind (FR-4), which the diff tests must not be exercising by accident.
+    return Runtime(config=cfg, store=IncidentStore(tmp_path / "rt.sqlite3"), dry_run=False, out_dir=tmp_path / "out")
 
 
 def _bundle(*, tfa_empty=True, ha_public=True):
@@ -282,3 +285,77 @@ async def test_brief_build_failure_before_the_row_exists_still_delivers(rt, monk
     assert not rt.store.investigations()
     assert len(rt.store.findings_for_run(res["run_id"])) == 3
     assert res["subject"].startswith("🛡️")
+
+
+# --- final review fix wave ---------------------------------------------
+
+def _crit_notices(monkeypatch, rt):
+    sent: list[str] = []
+
+    async def spy(text):
+        sent.append(text)
+    monkeypatch.setattr(rt, "notify", spy)
+    return sent
+
+
+async def test_fr4_a_dry_run_never_becomes_the_diff_baseline(rt, monkeypatch):
+    _stub_collect(monkeypatch, _bundle())
+    _stub_agent(monkeypatch)
+    rt.dry_run = True
+    await pipe.run_security_audit(rt)                                   # the first-week triage dry run
+    assert rt.store.runs(limit=1, kind="security_audit_dryrun") and not rt.store.runs(limit=1, kind="security_audit")
+    rt.dry_run = False
+    sent = _crit_notices(monkeypatch, rt)
+    res = await pipe.run_security_audit(rt)                             # the first real Monday run
+    assert res["new"] == 3 and res["persisting"] == 0
+    assert any(t.startswith("🔴 New critical security finding") for t in sent)
+
+
+async def test_fr4_a_real_run_still_diffs_against_the_previous_real_run(rt, monkeypatch):
+    _stub_collect(monkeypatch, _bundle())
+    _stub_agent(monkeypatch)
+    await pipe.run_security_audit(rt)
+    sent = _crit_notices(monkeypatch, rt)
+    res = await pipe.run_security_audit(rt)
+    assert res["new"] == 0 and res["persisting"] == 3
+    assert not any(t.startswith("🔴") for t in sent)
+
+
+async def test_fr5a_report_write_back_failure_still_delivers(rt, monkeypatch, tmp_path):
+    _stub_collect(monkeypatch, _bundle())
+    _stub_agent(monkeypatch)
+    orig = rt.store.update_investigation
+
+    def flaky(inv_id, **kw):
+        if set(kw) == {"report_md"}:                                    # the post-assessment write-back only
+            raise RuntimeError("database is locked")
+        return orig(inv_id, **kw)
+    monkeypatch.setattr(rt.store, "update_investigation", flaky)
+    res = await pipe.run_security_audit(rt)
+    assert res["assessment"] == "complete" and res["subject"].startswith("🛡️")
+    assert list((tmp_path / "out").glob("*.html"))                      # the email was still delivered
+
+
+async def test_fr5e_missing_agent_is_reported_as_not_configured(rt, monkeypatch, tmp_path):
+    _stub_collect(monkeypatch, _bundle())
+    del rt.config.agents["security_auditor"]
+    sent = _crit_notices(monkeypatch, rt)
+    res = await pipe.run_security_audit(rt)                             # llm=True
+    assert res["assessment"] == "skipped"
+    html = next((tmp_path / "out").glob("*.html")).read_text()
+    assert "skipped (agent not configured)" in html and "--no-llm" not in html
+    assert any("agent not configured" in t for t in sent) and not any("--no-llm" in t for t in sent)
+
+
+async def test_fr5f_run_level_loki_events_carry_category_security(rt, monkeypatch):
+    _stub_collect(monkeypatch, _bundle())
+    _stub_agent(monkeypatch)
+    events: list[dict] = []
+
+    async def spy(evs):
+        events.extend(evs)
+    monkeypatch.setattr(rt, "emit_loki", spy)
+    await pipe.run_security_audit(rt)
+    run_level = [e for e in events if e["event"] in ("investigation", "action")]
+    assert {e["event"] for e in run_level} == {"investigation", "action"}
+    assert all(e["labels"].get("category") == "security" for e in run_level)

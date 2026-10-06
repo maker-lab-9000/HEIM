@@ -16,7 +16,6 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -42,6 +41,7 @@ from heim.tools.base import ToolContext, load_tools
 log = logging.getLogger(__name__)
 
 AUDIT_KIND = "security_audit"          # runs.kind · findings.source · investigations.trigger
+DRYRUN_KIND = "security_audit_dryrun"  # runs.kind of a dry run — never the diff baseline
 AGENT_NAME = "security_auditor"        # config/agents/security_auditor.yaml · investigations.agent_name
 AUDIT_HOST = "all"                     # investigations.host for the run-level row
 
@@ -119,7 +119,7 @@ async def run_security_audit(rt: Runtime, *, llm: bool = True) -> dict:
     report_md = render_audit_report(results, diff, generated_at=generated_at, weeks=weeks)
     gaps = coverage_gaps(results)
     run_id = rt.store.insert_run(
-        kind=AUDIT_KIND, run_at=generated_at, overall=overall_of(rows),
+        kind=DRYRUN_KIND if rt.dry_run else AUDIT_KIND, run_at=generated_at, overall=overall_of(rows),
         model_used=cfg.agents[AGENT_NAME].model if (llm and AGENT_NAME in cfg.agents) else "",
         duration_s=round(time.time() - t0, 3),
         counts_json=json.dumps({"checks": len(results), "findings": len(rows), "new": len(diff.new),
@@ -138,6 +138,8 @@ async def run_security_audit(rt: Runtime, *, llm: bool = True) -> dict:
     # too, defensively, so nothing above it can ever cost the deterministic
     # report or the findings already persisted.
     inv_id, assessment_md, agent_result, status, reason = 0, None, None, "skipped", ""
+    if llm and AGENT_NAME not in cfg.agents:
+        reason = "agent not configured"
     if llm and AGENT_NAME in cfg.agents:
         try:
             inv_id, assessment_md, agent_result, status, reason = await _assessment(
@@ -150,10 +152,13 @@ async def run_security_audit(rt: Runtime, *, llm: bool = True) -> dict:
     if assessment_md:
         final_md = f"{report_md}\n\n## AI assessment\n\n{demote_headings(assessment_md)}"
     else:
-        why = {"skipped": "skipped (--no-llm)", "failed": f"failed — {reason}"}.get(status, reason or "no assessment")
+        why = {"skipped": f"skipped ({reason or '--no-llm'})", "failed": f"failed — {reason}"}.get(status, reason or "no assessment")
         final_md = f"{report_md}\n\n## AI assessment\n\n_Unavailable — {why}._"
     if inv_id:
-        rt.store.update_investigation(inv_id, report_md=final_md)
+        try:      # the run and findings are persisted already: never let this cost delivery
+            rt.store.update_investigation(inv_id, report_md=final_md)
+        except Exception:
+            log.exception("security audit: writing the final report to investigation %s failed", inv_id)
 
     # 7. deliver
     subject = await _deliver(rt, run_id=run_id, final_md=final_md, diff=diff, results=results, rows=rows, inv_id=inv_id,
@@ -166,6 +171,12 @@ async def run_security_audit(rt: Runtime, *, llm: bool = True) -> dict:
         "carried": len(diff.carried), "unavailable": len(gaps), "assessment": status,
         "cost": float(cost or 0.0), "subject": subject, "duration_s": round(time.time() - t0, 1),
     }
+
+
+def _security(event: dict) -> dict:
+    """Tag a run-level Loki event ``labels.category="security"``."""
+    event["labels"]["category"] = "security"
+    return event
 
 
 async def _assessment(rt: Runtime, *, run_id: int, results: list[CheckResult], diff: AuditDiff,
@@ -191,7 +202,7 @@ async def _assessment(rt: Runtime, *, run_id: int, results: list[CheckResult], d
             agent_name=AGENT_NAME, model=agent_cfg.model, trigger=AUDIT_KIND, status="running",
             started_at=generated_at, brief_md=brief, findings_json=json.dumps(rows, ensure_ascii=False, default=str),
         )
-        await rt.emit_loki([_action(AUDIT_HOST, "audit_started", f"run-{run_id}", "Weekly security audit assessment started", rt.now_iso())])
+        await rt.emit_loki([_security(_action(AUDIT_HOST, "audit_started", f"run-{run_id}", "Weekly security audit assessment started", rt.now_iso()))])
         async with rt.investigation_slot():
             system = build_audit_system_prompt(rt, jenv)
             ctx = ToolContext(config=cfg, tag="security-audit", feed=rt.feed, audit=rt.audit)
@@ -274,11 +285,12 @@ async def _deliver(rt: Runtime, *, run_id: int, final_md: str, diff: AuditDiff, 
     try:
         events = finding_events(rows)
         if inv_id:
-            events.append({"event": "investigation", "labels": {"host": AUDIT_HOST, "status": "incomplete" if incomplete else "complete"},
+            events.append({"event": "investigation", "labels": {"host": AUDIT_HOST, "status": "incomplete" if incomplete else "complete",
+                                                                "category": "security"},
                            "fields": {"fingerprint": f"{AUDIT_HOST}|{AUDIT_KIND}|run-{run_id}", "rootCause": "", "confidence": "",
                                       "impact": f"{len(rows)} findings, {len(diff.new)} new", "remediation": [], "recommendedActions": [],
                                       "tokenEstimate": tok_in + tok_out, "nSteps": n_steps, "detectedAt": "", "resolvedAt": ""}})
-        events.append(_action(AUDIT_HOST, "report", f"run-{run_id}", "Weekly security audit report generated", rt.now_iso()))
+        events.append(_security(_action(AUDIT_HOST, "report", f"run-{run_id}", "Weekly security audit report generated", rt.now_iso())))
         await rt.emit_loki(events)
     except Exception:
         log.exception("security audit: loki emit failed")

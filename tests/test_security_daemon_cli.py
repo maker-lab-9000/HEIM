@@ -74,3 +74,55 @@ async def test_cli_handler_runs_pipeline_with_flags(rt, monkeypatch, capsys):
     rc = await cli._cmd_security_audit(Namespace(dry_run=True, no_llm=True))
     assert rc == 0 and calls == {"llm": False, "dry_run": True}
     assert '"findings": 2' in capsys.readouterr().out
+
+
+# FR-5(c): a bad checks.yaml surfaces at daemon startup, without taking the daemon down.
+
+async def test_startup_catalogue_check_notifies_on_a_bad_checks_yaml(rt, monkeypatch):
+    rt.config.security_checks_path.write_text("sources:\n  - {key: ssh.x, kind: ssh, target: 'rm -rf /'}\nchecks: []\n")
+    sent = []
+
+    async def capture(text):
+        sent.append(text)
+    monkeypatch.setattr(rt, "notify", capture)
+    assert await daemon._check_audit_catalogue(rt) is False             # never raises
+    assert sent and sent[0].startswith("🔴") and "checks.yaml" in sent[0]
+
+
+async def test_startup_catalogue_check_is_silent_when_valid(rt, monkeypatch):
+    sent = []
+
+    async def capture(text):
+        sent.append(text)
+    monkeypatch.setattr(rt, "notify", capture)
+    assert await daemon._check_audit_catalogue(rt) is True and sent == []
+
+
+async def test_run_daemon_checks_the_catalogue_before_registering_the_audit_job(rt, monkeypatch):
+    order = []
+
+    class _Stop(Exception):
+        pass
+
+    class FakeScheduler:
+        def __init__(self, **kw):
+            pass
+
+        def add_job(self, fn, trigger, **kw):
+            order.append(kw.get("name"))
+
+        def start(self):
+            raise _Stop
+
+        def shutdown(self, wait=False):
+            pass
+
+    async def fake_check(rt_):
+        order.append("catalogue-check")
+        return True
+    monkeypatch.setattr(daemon, "build_runtime", lambda: rt)
+    monkeypatch.setattr(daemon, "AsyncIOScheduler", FakeScheduler)
+    monkeypatch.setattr(daemon, "_check_audit_catalogue", fake_check)
+    with pytest.raises(_Stop):
+        await daemon.run_daemon()
+    assert "catalogue-check" in order and order.index("catalogue-check") < order.index("security-audit")

@@ -175,7 +175,7 @@ def telegram_digest(diff: AuditDiff, results: list[CheckResult], *, generated_at
     elif assessment == "failed":
         L += ["", f"⚠️ AI assessment failed — {reason}"]
     elif assessment == "skipped":
-        L += ["", "ℹ️ AI assessment skipped (--no-llm)"]
+        L += ["", f"ℹ️ AI assessment skipped ({reason or '--no-llm'})"]
     L += ["", "Full report by email · dashboard: /investigations?trigger=security_audit"]
     text = "\n".join(L)
     return text if len(text) <= TELEGRAM_MAX else text[:TELEGRAM_MAX - 2] + " …"
