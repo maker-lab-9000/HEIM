@@ -1,0 +1,13 @@
+name: security_auditor
+model: claude-sonnet-5
+max_tokens: 8192        # adaptive thinking counts toward max_tokens (same reason as the investigator)
+soft_step_budget: 4     # the prompt says most weeks need no tool call at all
+hard_step_cap: 6        # verification only — every check was already run by deterministic code
+prompt: security_auditor.md.j2
+tools:
+  - prometheus_query
+  - discover_metrics
+  - proxmox_api
+# Deliberately NO ssh_diagnostic: the model never chooses a shell command in
+# the audit. Every SSH read is a fixed, guard-validated line in
+# config/security/checks.yaml executed by HEIM code, not by the model.
