@@ -37,11 +37,33 @@ def client(tmp_path, monkeypatch):
         yield c
 
 
+@pytest.fixture()
+def empty_client(tmp_path, monkeypatch):
+    monkeypatch.delenv("HEIM_DASHBOARD_TOKEN", raising=False)
+    croot = tmp_path / "config"
+    shutil.copytree(ROOT / "config", croot, ignore=shutil.ignore_patterns("settings.yaml"))
+    shutil.copy(croot / "settings.example.yaml", croot / "settings.yaml")
+    cfg = load_config(croot)
+    db = tmp_path / "heim.sqlite3"
+    cfg.settings.db_path = str(db)
+    store = IncidentStore(db)
+    store.close()
+    with TestClient(create_app(cfg)) as c:
+        yield c
+
+
 def test_trigger_filter_offers_and_applies_security_audit(client):
     page = client.get("/investigations").text
     assert 'value="security_audit"' in page
     filtered = client.get("/investigations?trigger=security_audit").text
     assert "security_audit" in filtered and "all" in filtered
+
+
+def test_trigger_filter_offers_security_audit_before_its_first_run(empty_client):
+    # Store has zero rows — no insert_run, no create_investigation. The dropdown must
+    # still offer "security_audit" from _TRIGGERS alone, not from any stored row.
+    page = empty_client.get("/investigations").text
+    assert 'value="security_audit"' in page
 
 
 def test_detail_page_shows_agent_and_findings(client):
