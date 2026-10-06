@@ -200,6 +200,38 @@ def investigation_email(
     return subject, html
 
 
+def security_audit_email(
+    *,
+    report_md: str,
+    incomplete: bool,
+    generated_at: str,
+    n_findings: int,
+    n_new: int,
+    n_resolved: int,
+    n_steps: int,
+    input_tokens: int,
+    output_tokens: int,
+) -> tuple[str, str]:
+    """The weekly security-audit email. Reuses the investigation template: the
+    body is the deterministic report plus the model's appendix, and
+    ``incomplete`` means only that the appendix is missing."""
+    subject = (
+        f"🛡️ Weekly Security Audit — {n_findings} finding{'s' if n_findings != 1 else ''}, "
+        f"{n_new} new, {n_resolved} resolved — {generated_at[:10]}"
+        + (" (AI assessment unavailable)" if incomplete else "")
+    )
+    html = _env.get_template("investigation.html.j2").render(
+        host="homelab · all hosts",
+        generated_at=generated_at.replace("T", " ")[:16],
+        incomplete=incomplete,
+        body=_md_to_html(report_md),
+        n_steps=n_steps,
+        input_tokens=f"{input_tokens:,}",
+        output_tokens=f"{output_tokens:,}",
+    )
+    return subject, html
+
+
 def daily_email(
     *,
     analysis: dict | None,
