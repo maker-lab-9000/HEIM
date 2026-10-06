@@ -776,6 +776,19 @@ class IncidentStore:
             "SELECT * FROM findings ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
         return [dict(r) for r in cur.fetchall()]
 
+    def findings_for_run(self, run_id: int) -> list[dict]:
+        """Every finding row of one run (the security audit diffs against these)."""
+        cur = self._db.execute("SELECT * FROM findings WHERE run_id = ? ORDER BY id", (int(run_id),))
+        return [dict(r) for r in cur.fetchall()]
+
+    def finding_run_count(self, fingerprint: str, source: str) -> int:
+        """How many runs of ``source`` have reported ``fingerprint`` (weeks seen)."""
+        row = self._db.execute(
+            "SELECT COUNT(DISTINCT run_id) AS n FROM findings WHERE fingerprint = ? AND source = ?",
+            (str(fingerprint), str(source)),
+        ).fetchone()
+        return int(row["n"] or 0) if row is not None else 0
+
     def finding(self, finding_id: int) -> dict | None:
         row = self._db.execute("SELECT * FROM findings WHERE id = ?", (finding_id,)).fetchone()
         return dict(row) if row is not None else None
