@@ -4,13 +4,15 @@ import shutil
 from pathlib import Path
 
 import pytest
+from jinja2 import Environment, FileSystemLoader
 
 from heim.agent.runner import AgentResult, AgentStep
 from heim.config import load_config
 from heim.incidents.store import IncidentStore
 from heim.pipelines import security_audit as pipe
 from heim.runtime import Runtime
-from heim.security.types import Evidence, EvidenceBundle
+from heim.security.diff import AuditDiff
+from heim.security.types import CheckResult, Evidence, EvidenceBundle
 
 ROOT = Path(__file__).resolve().parent.parent
 USERS = [{"userid": "root@pam", "enable": 1}, {"userid": "auditor@pve", "enable": 1}]
@@ -150,8 +152,11 @@ async def test_model_exception_marks_investigation_failed_but_delivers(rt, monke
     _stub_agent(monkeypatch, raises=RuntimeError("api down"))
     res = await pipe.run_security_audit(rt)
     assert res["assessment"] == "failed"
-    assert rt.store.investigation(res["investigation_id"])["status"] == "failed"
+    inv = rt.store.investigation(res["investigation_id"])
+    assert inv["status"] == "failed"
+    assert "_Unavailable —" in inv["report_md"] and "failed" in inv["report_md"]
     assert res["subject"].startswith("🛡️")
+    assert len(rt.store.findings_for_run(res["run_id"])) == 3         # findings persisted regardless
 
 
 async def test_no_llm_skips_the_model_entirely(rt, monkeypatch):
@@ -174,3 +179,106 @@ async def test_everything_unreachable_raises(rt, monkeypatch):
     with pytest.raises(RuntimeError, match="unreachable"):
         await pipe.run_security_audit(rt)
     assert not rt.store.runs(limit=1, kind="security_audit")
+
+
+# --- fix round 1 -------------------------------------------------------
+# F1: evidence/finding text must never pass through ${VAR} expansion — only
+# the template source (authored by HEIM, not evidence) is expanded.
+
+def test_brief_does_not_expand_vars_found_in_evidence_text(rt, monkeypatch):
+    monkeypatch.setenv("SOME_SET_VAR", "s3cr3t")
+    jenv = Environment(loader=FileSystemLoader(rt.config.prompts_dir))
+    finding = CheckResult("ssh.failed_logins", "ubuntu-server", "sshd", "fail", "warning",
+                          "repeated failed logins", detail="Invalid user ${SOME_SET_VAR} from 1.2.3.4")
+    diff = AuditDiff(new=[finding])
+    brief = pipe.build_audit_brief(rt, jenv, [finding], diff, generated_at="2026-09-28T06:00:00Z")
+    assert "${SOME_SET_VAR}" in brief
+    assert "s3cr3t" not in brief
+
+
+def test_brief_tolerates_an_unset_var_in_evidence_text(rt):
+    jenv = Environment(loader=FileSystemLoader(rt.config.prompts_dir))
+    finding = CheckResult("ssh.failed_logins", "ubuntu-server", "sshd", "fail", "warning",
+                          "repeated failed logins", detail="Invalid user ${NOPE_UNSET_XYZ} from 1.2.3.4")
+    diff = AuditDiff(new=[finding])
+    brief = pipe.build_audit_brief(rt, jenv, [finding], diff, generated_at="2026-09-28T06:00:00Z")   # must not raise
+    assert "${NOPE_UNSET_XYZ}" in brief
+
+
+def test_a_var_written_in_the_template_itself_still_expands(rt, monkeypatch):
+    monkeypatch.setenv("TEMPLATE_VAR_XYZ", "expanded-ok")
+    tmpl_path = rt.config.prompts_dir / "briefs" / "security_audit.md.j2"
+    tmpl_path.write_text(tmpl_path.read_text() + "\nTemplate-level: ${TEMPLATE_VAR_XYZ}\n")
+    jenv = Environment(loader=FileSystemLoader(rt.config.prompts_dir))
+    brief = pipe.build_audit_brief(rt, jenv, [], AuditDiff(), generated_at="2026-09-28T06:00:00Z")
+    assert "Template-level: expanded-ok" in brief
+
+
+# F2: delivery channels are independently fire-and-forget.
+
+async def test_email_failure_does_not_block_other_channels_or_the_run(rt, monkeypatch):
+    _stub_collect(monkeypatch, _bundle())
+    _stub_agent(monkeypatch)
+
+    async def boom_email(subject, html):
+        raise RuntimeError("smtp down")
+    monkeypatch.setattr(rt, "send_email", boom_email)
+
+    calls = {"notify": 0, "push_ha": 0, "emit_loki": 0}
+    orig_notify, orig_push_ha, orig_emit_loki = rt.notify, rt.push_ha, rt.emit_loki
+
+    async def spy_notify(text):
+        calls["notify"] += 1
+        return await orig_notify(text)
+
+    async def spy_push_ha(suffix, state, attrs):
+        calls["push_ha"] += 1
+        return await orig_push_ha(suffix, state, attrs)
+
+    async def spy_emit_loki(events):
+        calls["emit_loki"] += 1
+        return await orig_emit_loki(events)
+
+    monkeypatch.setattr(rt, "notify", spy_notify)
+    monkeypatch.setattr(rt, "push_ha", spy_push_ha)
+    monkeypatch.setattr(rt, "emit_loki", spy_emit_loki)
+
+    res = await pipe.run_security_audit(rt)
+    assert calls["notify"] >= 1 and calls["push_ha"] == 1 and calls["emit_loki"] >= 1
+    assert res["subject"].startswith("🛡️ Weekly Security Audit — 3 findings, 3 new, 0 resolved")
+
+
+# F3: the model step is contained end-to-end; a failure anywhere in it
+# degrades only the AI-assessment section, and no investigations row is ever
+# left "running".
+
+async def test_salvage_failure_degrades_the_appendix_and_does_not_leave_the_row_running(rt, monkeypatch):
+    _stub_collect(monkeypatch, _bundle())
+    _stub_agent(monkeypatch)
+
+    def boom_salvage(*a, **k):
+        raise RuntimeError("salvage exploded")
+    monkeypatch.setattr(pipe, "salvage", boom_salvage)
+
+    res = await pipe.run_security_audit(rt)
+    assert res["assessment"] == "failed"
+    inv = rt.store.investigation(res["investigation_id"])
+    assert inv["status"] == "failed" and inv["status"] != "running"
+    assert "_Unavailable —" in inv["report_md"] and "salvage exploded" in inv["report_md"]
+    assert len(rt.store.findings_for_run(res["run_id"])) == 3
+    assert res["subject"].startswith("🛡️")
+
+
+async def test_brief_build_failure_before_the_row_exists_still_delivers(rt, monkeypatch):
+    _stub_collect(monkeypatch, _bundle())
+    _stub_agent(monkeypatch)
+
+    def boom_brief(*a, **k):
+        raise RuntimeError("brief exploded")
+    monkeypatch.setattr(pipe, "build_audit_brief", boom_brief)
+
+    res = await pipe.run_security_audit(rt)
+    assert res["assessment"] == "failed" and res["investigation_id"] == 0
+    assert not rt.store.investigations()
+    assert len(rt.store.findings_for_run(res["run_id"])) == 3
+    assert res["subject"].startswith("🛡️")

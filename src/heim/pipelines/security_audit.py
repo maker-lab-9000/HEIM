@@ -12,6 +12,7 @@ can render exactly what the model will see.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -50,25 +51,40 @@ AUDIT_HOST = "all"                     # investigations.host for the run-level r
 ATTACK_TERMS = ("exploit", "attack", "brute", "penetration", "pentest", "payload", "intrusion", "crack", "bypass")
 
 
+def _expanded_template(jenv: Environment, name: str):
+    """Load ``name``'s raw source and expand ``${VAR}`` in IT ONLY, then parse
+    it as a template. Evidence/finding data is rendered afterwards and must
+    never itself pass through ``expand_env`` — otherwise a ``${...}`` an
+    attacker can put into evidence text (an SSH "Invalid user ${X}" line, an
+    HA repair message, a PVE task-log line) could pull a real secret out of
+    HEIM's own environment, or an unset name could crash the run.
+    """
+    source, _, _ = jenv.loader.get_source(jenv, name)
+    return jenv.from_string(expand_env(source, source=name))
+
+
 def build_audit_system_prompt(rt: Runtime, jenv: Environment) -> str:
     cfg = rt.config
     agent = cfg.agents[AGENT_NAME]
-    facts = "\n".join(h.facts.strip() for h in sorted(cfg.hosts.values(), key=lambda h: h.name) if h.facts.strip())
-    return expand_env(
-        jenv.get_template(agent.prompt).render(now=rt.now_iso(), facts=facts,
-                                               soft_step_budget=agent.soft_step_budget),
-        source=agent.prompt,
+    # Host facts are operator-authored config — the same trust level as the
+    # template file itself, e.g. "${HEIM_PROXMOX_IP}" in a host's facts: is
+    # meant to expand — unlike the runtime evidence data rendered into the
+    # brief below, which must never be run through expand_env.
+    facts = expand_env(
+        "\n".join(h.facts.strip() for h in sorted(cfg.hosts.values(), key=lambda h: h.name) if h.facts.strip()),
+        source="host facts",
+    )
+    return _expanded_template(jenv, agent.prompt).render(
+        now=rt.now_iso(), facts=facts, soft_step_budget=agent.soft_step_budget,
     )
 
 
 def build_audit_brief(rt: Runtime, jenv: Environment, results: list[CheckResult], diff: AuditDiff, *,
                       generated_at: str) -> str:
     sections = brief_sections(results, diff)
-    return expand_env(
-        jenv.get_template("briefs/security_audit.md.j2").render(
-            generated_at=generated_at, n_new=len(diff.new), n_persisting=len(diff.persisting),
-            n_resolved=len(diff.resolved), n_carried=len(diff.carried), **sections),
-        source="briefs/security_audit.md.j2",
+    return _expanded_template(jenv, "briefs/security_audit.md.j2").render(
+        generated_at=generated_at, n_new=len(diff.new), n_persisting=len(diff.persisting),
+        n_resolved=len(diff.resolved), n_carried=len(diff.carried), **sections,
     )
 
 
@@ -116,11 +132,21 @@ async def run_security_audit(rt: Runtime, *, llm: bool = True) -> dict:
     )
     rt.store.insert_findings(run_id, generated_at, AUDIT_KIND, rows, [r["fingerprint"] for r in rows])
 
-    # 6. the model pass — explains, never detects; optional and degradable
+    # 6. the model pass — explains, never detects; optional and degradable.
+    # _assessment contains its own failures and never raises (except on
+    # cancellation, which must keep propagating); this call site is guarded
+    # too, defensively, so nothing above it can ever cost the deterministic
+    # report or the findings already persisted.
     inv_id, assessment_md, agent_result, status, reason = 0, None, None, "skipped", ""
     if llm and AGENT_NAME in cfg.agents:
-        inv_id, assessment_md, agent_result, status, reason = await _assessment(
-            rt, run_id=run_id, results=results, diff=diff, rows=rows, generated_at=generated_at)
+        try:
+            inv_id, assessment_md, agent_result, status, reason = await _assessment(
+                rt, run_id=run_id, results=results, diff=diff, rows=rows, generated_at=generated_at)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.exception("security audit: assessment call site failed unexpectedly")
+            inv_id, assessment_md, agent_result, status, reason = 0, None, None, "failed", f"{type(exc).__name__}: {exc}"
     if assessment_md:
         final_md = f"{report_md}\n\n## AI assessment\n\n{demote_headings(assessment_md)}"
     else:
@@ -144,18 +170,28 @@ async def run_security_audit(rt: Runtime, *, llm: bool = True) -> dict:
 
 async def _assessment(rt: Runtime, *, run_id: int, results: list[CheckResult], diff: AuditDiff,
                       rows: list[dict], generated_at: str) -> tuple[int, str | None, AgentResult | None, str, str]:
+    """Explains and prioritises the findings already persisted; never detects,
+    and never allowed to cost the run anything beyond this one section. The
+    WHOLE body below is one try: whatever fails — building the brief, creating
+    the row, the agent call, salvaging its output, costing it, writing it back
+    — degrades to ``("failed", reason)`` and, if an investigations row already
+    exists, that row is marked ``failed`` (never left ``running``). A
+    cancellation is re-raised after the same bookkeeping so the task still
+    cancels cooperatively.
+    """
     cfg = rt.config
     agent_cfg = cfg.agents[AGENT_NAME]
-    jenv = Environment(loader=FileSystemLoader(cfg.prompts_dir))
-    brief = build_audit_brief(rt, jenv, results, diff, generated_at=generated_at)
-    ftext = findings_text(rows)
-    inv_id = rt.store.create_investigation(
-        fingerprint=f"{AUDIT_HOST}|{AUDIT_KIND}|run-{run_id}", host=AUDIT_HOST, host_role="audit",
-        agent_name=AGENT_NAME, model=agent_cfg.model, trigger=AUDIT_KIND, status="running",
-        started_at=generated_at, brief_md=brief, findings_json=json.dumps(rows, ensure_ascii=False, default=str),
-    )
-    await rt.emit_loki([_action(AUDIT_HOST, "audit_started", f"run-{run_id}", "Weekly security audit assessment started", rt.now_iso())])
+    inv_id = 0
     try:
+        jenv = Environment(loader=FileSystemLoader(cfg.prompts_dir))
+        brief = build_audit_brief(rt, jenv, results, diff, generated_at=generated_at)
+        ftext = findings_text(rows)
+        inv_id = rt.store.create_investigation(
+            fingerprint=f"{AUDIT_HOST}|{AUDIT_KIND}|run-{run_id}", host=AUDIT_HOST, host_role="audit",
+            agent_name=AGENT_NAME, model=agent_cfg.model, trigger=AUDIT_KIND, status="running",
+            started_at=generated_at, brief_md=brief, findings_json=json.dumps(rows, ensure_ascii=False, default=str),
+        )
+        await rt.emit_loki([_action(AUDIT_HOST, "audit_started", f"run-{run_id}", "Weekly security audit assessment started", rt.now_iso())])
         async with rt.investigation_slot():
             system = build_audit_system_prompt(rt, jenv)
             ctx = ToolContext(config=cfg, tag="security-audit", feed=rt.feed, audit=rt.audit)
@@ -163,49 +199,88 @@ async def _assessment(rt: Runtime, *, run_id: int, results: list[CheckResult], d
             result = await run_agent(agent_cfg, system=system, user_prompt=brief, tools=tools,
                                      on_step=_step_recorder(rt, inv_id),
                                      collect_transcript=cfg.settings.store_transcripts)
+        report = salvage(result.output_text, ftext, stop_reason=result.stop_reason)
+        record_tool_feedback(rt, inv_id, report.report_md if not report.incomplete else result.output_text)
+        cost = cost_of(agent_cfg.model, result.input_tokens, result.output_tokens, cfg.settings.model_prices)
+        rt.store.update_investigation(
+            inv_id, status="incomplete" if report.incomplete else "complete",
+            incomplete_reason=(report.reason or "") if report.incomplete else "",
+            report_md=report.report_md, input_tokens=result.input_tokens, output_tokens=result.output_tokens,
+            n_steps=len(result.steps), cost=float(cost or 0.0),
+            transcript_json=_transcript_json(result.transcript), finished_at=rt.now_iso(),
+        )
+        if report.incomplete:
+            return inv_id, None, result, "incomplete", report.reason or "no '## Summary' in the model output"
+        return inv_id, report.report_md, result, "complete", ""
+    except asyncio.CancelledError:
+        log.warning("security audit assessment cancelled")
+        if inv_id:
+            rt.store.update_investigation(inv_id, status="failed", finished_at=rt.now_iso(), incomplete_reason="cancelled")
+        raise
     except Exception as exc:
         log.exception("security audit assessment failed")
         reason = f"{type(exc).__name__}: {exc}"
-        rt.store.update_investigation(inv_id, status="failed", finished_at=rt.now_iso(), incomplete_reason=reason)
+        if inv_id:
+            rt.store.update_investigation(inv_id, status="failed", finished_at=rt.now_iso(), incomplete_reason=reason)
         return inv_id, None, None, "failed", reason
-    report = salvage(result.output_text, ftext, stop_reason=result.stop_reason)
-    record_tool_feedback(rt, inv_id, report.report_md if not report.incomplete else result.output_text)
-    cost = cost_of(agent_cfg.model, result.input_tokens, result.output_tokens, cfg.settings.model_prices)
-    rt.store.update_investigation(
-        inv_id, status="incomplete" if report.incomplete else "complete",
-        incomplete_reason=(report.reason or "") if report.incomplete else "",
-        report_md=report.report_md, input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-        n_steps=len(result.steps), cost=float(cost or 0.0),
-        transcript_json=_transcript_json(result.transcript), finished_at=rt.now_iso(),
-    )
-    if report.incomplete:
-        return inv_id, None, result, "incomplete", report.reason or "no '## Summary' in the model output"
-    return inv_id, report.report_md, result, "complete", ""
 
 
 async def _deliver(rt: Runtime, *, run_id: int, final_md: str, diff: AuditDiff, results: list[CheckResult], rows: list[dict],
                    inv_id: int, agent_result: AgentResult | None, status: str, reason: str, generated_at: str) -> str:
+    """Every channel — email, Telegram digest, the extra critical-finding
+    ping, the HA sensor, Loki — is fire-and-forget: each gets its own
+    try/except so one channel's failure (an SMTP outage, say) can neither
+    block another channel nor fail the run after the report and findings are
+    already persisted. ``subject`` always has a value, even if building or
+    sending the email itself is what failed.
+    """
     incomplete = status in ("incomplete", "failed")
     n_steps = len(agent_result.steps) if agent_result else 0
     tok_in = agent_result.input_tokens if agent_result else 0
     tok_out = agent_result.output_tokens if agent_result else 0
-    subject, html = security_audit_email(report_md=final_md, incomplete=incomplete, generated_at=generated_at,
-                                         n_findings=len(rows), n_new=len(diff.new), n_resolved=len(diff.resolved),
-                                         n_steps=n_steps, input_tokens=tok_in, output_tokens=tok_out)
-    await rt.send_email(subject, html)
-    await rt.notify(telegram_digest(diff, results, generated_at=generated_at, assessment=status, reason=reason))
-    new_crit = [r for r in diff.new if r.severity == "critical"]
-    if new_crit:
-        await rt.notify("🔴 New critical security finding(s) this week:\n" +
-                        "\n".join(f"• {r.host} · {r.check_id} · {r.summary[:160]}" for r in new_crit[:5]))
-    state, attrs = ha_attributes(diff, results, generated_at=generated_at, report_md=final_md)
-    await rt.push_ha("security_audit", state, attrs)
-    events = finding_events(rows)
-    if inv_id:
-        events.append({"event": "investigation", "labels": {"host": AUDIT_HOST, "status": "incomplete" if incomplete else "complete"},
-                       "fields": {"fingerprint": f"{AUDIT_HOST}|{AUDIT_KIND}|run-{run_id}", "rootCause": "", "confidence": "",
-                                  "impact": f"{len(rows)} findings, {len(diff.new)} new", "remediation": [], "recommendedActions": [],
-                                  "tokenEstimate": tok_in + tok_out, "nSteps": n_steps, "detectedAt": "", "resolvedAt": ""}})
-    events.append(_action(AUDIT_HOST, "report", f"run-{run_id}", "Weekly security audit report generated", rt.now_iso()))
-    await rt.emit_loki(events)
+
+    subject = (
+        f"🛡️ Weekly Security Audit — {len(rows)} finding{'s' if len(rows) != 1 else ''}, "
+        f"{len(diff.new)} new, {len(diff.resolved)} resolved — {generated_at[:10]}"
+        + (" (AI assessment unavailable)" if incomplete else "")
+    )
+    try:
+        subject, html = security_audit_email(report_md=final_md, incomplete=incomplete, generated_at=generated_at,
+                                             n_findings=len(rows), n_new=len(diff.new), n_resolved=len(diff.resolved),
+                                             n_steps=n_steps, input_tokens=tok_in, output_tokens=tok_out)
+        await rt.send_email(subject, html)
+    except Exception:
+        log.exception("security audit: email delivery failed")
+
+    try:
+        await rt.notify(telegram_digest(diff, results, generated_at=generated_at, assessment=status, reason=reason))
+    except Exception:
+        log.exception("security audit: telegram digest failed")
+
+    try:
+        new_crit = [r for r in diff.new if r.severity == "critical"]
+        if new_crit:
+            await rt.notify("🔴 New critical security finding(s) this week:\n" +
+                            "\n".join(f"• {r.host} · {r.check_id} · {r.summary[:160]}" for r in new_crit[:5]))
+    except Exception:
+        log.exception("security audit: critical-finding notice failed")
+
+    try:
+        state, attrs = ha_attributes(diff, results, generated_at=generated_at, report_md=final_md)
+        await rt.push_ha("security_audit", state, attrs)
+    except Exception:
+        log.exception("security audit: HA push failed")
+
+    try:
+        events = finding_events(rows)
+        if inv_id:
+            events.append({"event": "investigation", "labels": {"host": AUDIT_HOST, "status": "incomplete" if incomplete else "complete"},
+                           "fields": {"fingerprint": f"{AUDIT_HOST}|{AUDIT_KIND}|run-{run_id}", "rootCause": "", "confidence": "",
+                                      "impact": f"{len(rows)} findings, {len(diff.new)} new", "remediation": [], "recommendedActions": [],
+                                      "tokenEstimate": tok_in + tok_out, "nSteps": n_steps, "detectedAt": "", "resolvedAt": ""}})
+        events.append(_action(AUDIT_HOST, "report", f"run-{run_id}", "Weekly security audit report generated", rt.now_iso()))
+        await rt.emit_loki(events)
+    except Exception:
+        log.exception("security audit: loki emit failed")
+
     return subject
