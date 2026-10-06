@@ -177,9 +177,10 @@ def _md_to_html(md: str, *, allow_raw_html: bool = True) -> str:
     pattern), so any ``<...>`` in the source — e.g. finding text sourced from
     HA states, ``ss``, docker names, journal lines, none of which are
     HTML-sanitised — is emitted as escaped text rather than live markup.
-    ``investigation_email`` keeps the default (unchanged behaviour); only
-    ``security_audit_email`` disables it, because that report embeds
-    unsanitised remote-origin strings."""
+    Every HEIM HTML sink that renders stored Markdown (the investigation and
+    security-audit emails, the dashboard's investigation detail page) passes
+    ``allow_raw_html=False``: stored briefs and reports embed unsanitised
+    remote-origin strings, so raw HTML there is a stored-XSS vector."""
     instance = md_lib.Markdown(extensions=["tables", "fenced_code", "sane_lists"])
     if not allow_raw_html:
         instance.preprocessors.deregister("html_block")
@@ -204,7 +205,7 @@ def investigation_email(
         host=host,
         generated_at=generated_at.replace("T", " ")[:16],
         incomplete=report.incomplete,
-        body=_md_to_html(report.report_md),
+        body=_md_to_html(report.report_md, allow_raw_html=False),
         n_steps=n_steps,
         input_tokens=f"{input_tokens:,}",
         output_tokens=f"{output_tokens:,}",

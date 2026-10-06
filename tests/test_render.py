@@ -159,3 +159,12 @@ def test_salvage_ignores_stop_reason_when_the_report_is_there():
 def test_salvage_default_stop_reason_is_unchanged():
     """Callers that pass nothing get exactly the old wording."""
     assert "transient" in salvage("", "f").reason
+
+
+def test_fr1_investigation_email_escapes_raw_html_in_stored_markdown():
+    rep = salvage("## Summary\n\nsshd: Invalid user <img src=x onerror=alert(1)>\n\n"
+                  "<script>alert(1)</script>\n", "f")
+    _, html = investigation_email(host="h", report=rep, generated_at="2026-09-16T07:00:00",
+                                  n_steps=1, input_tokens=1, output_tokens=1)
+    assert "<img src=x" not in html and "<script>alert" not in html
+    assert "&lt;img" in html and "&lt;script" in html

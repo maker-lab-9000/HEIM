@@ -114,3 +114,38 @@ def test_f2_security_audit_email_escapes_raw_html_in_finding_text():
                                    n_findings=1, n_new=1, n_resolved=0, n_steps=0, input_tokens=0, output_tokens=0)
     assert "&lt;img" in html
     assert "<img src=x" not in html
+
+
+def _audit_email_html(rows: list[CheckResult]) -> str:
+    md = render_audit_report(rows, AuditDiff(new=[r for r in rows if r.status == "fail"]), generated_at=GEN, weeks={})
+    _, html = security_audit_email(report_md=md, incomplete=False, generated_at=GEN, n_findings=1, n_new=1,
+                                   n_resolved=0, n_steps=0, input_tokens=0, output_tokens=0)
+    return html
+
+
+def test_fr2_evidence_summary_cannot_form_images_or_links_in_the_audit_email():
+    evil = "![t](http://x/p.png) [x](javascript:alert(1)) <http://203.0.113.9/>"
+    rows = [res("ssh.auth_failures", "ubuntu-server", "u1", summary=evil, detail="d"),
+            res("pve.secureboot", "homelab", "sb", status="note", sev="info", summary=evil),
+            res("ssh.listening", "ubuntu-server", "-", status="unavailable", summary="not verified", detail=evil)]
+    html = _audit_email_html(rows)
+    assert "<img src=" not in html and "href=" not in html
+    assert "javascript:alert(1)" in html and "http://x/p.png" in html     # text kept, inert
+
+
+def test_fr2_detail_cannot_close_its_code_fence():
+    detail = "line one\n```\n![t](http://x/p.png) after the fence"
+    html = _audit_email_html([res("ssh.auth_failures", "ubuntu-server", "u1", summary="s", detail=detail)])
+    block = html.split("<pre><code>", 1)[1].split("</code></pre>", 1)[0]
+    assert "after the fence" in block and "line one" in block
+    assert "<img src=" not in html
+
+
+def test_fr2_brief_sections_escape_evidence():
+    evil = res("ssh.auth_failures", "ubuntu-server", "u1", summary="[x](javascript:alert(1))", detail="![t](http://x/p.png)")
+    b = brief_sections([evil], AuditDiff(new=[evil]))
+    assert "\\[x\\](javascript" in b["table"]
+    assert "```\n![t](http://x/p.png)\n```" in b["excerpts"]          # verbatim, inside a fence
+    long = [res("ssh.world_writable", "h", f"/etc/{i}", detail="![t](http://x/p.png) " * 40) for i in range(10)]
+    clipped = brief_sections(long, AuditDiff(new=long))["excerpts"]
+    assert clipped.count("```") % 2 == 0                               # the clip never leaves a fence open

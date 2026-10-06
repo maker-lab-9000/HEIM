@@ -75,3 +75,33 @@ def test_detail_page_shows_agent_and_findings(client):
 def test_findings_page_lists_the_audit_row_with_a_verdict_form(client):
     html = client.get("/findings").text
     assert "pve.tfa_missing" in html and "root@pam" in html and "/actions/verdict" in html
+
+
+XSS = "<img src=x onerror=alert(1)>\n\n<script>alert(1)</script>"
+
+
+@pytest.fixture()
+def xss_client(tmp_path, monkeypatch):
+    monkeypatch.delenv("HEIM_DASHBOARD_TOKEN", raising=False)
+    croot = tmp_path / "config"
+    shutil.copytree(ROOT / "config", croot, ignore=shutil.ignore_patterns("settings.yaml"))
+    shutil.copy(croot / "settings.example.yaml", croot / "settings.yaml")
+    cfg = load_config(croot)
+    db = tmp_path / "heim.sqlite3"
+    cfg.settings.db_path = str(db)
+    store = IncidentStore(db)
+    store.create_investigation(fingerprint="all|security_audit|run-1", host="all", host_role="audit",
+                               agent_name="security_auditor", model="claude-sonnet-5", trigger="security_audit",
+                               status="complete", started_at="2026-09-28T06:00:00", finished_at="2026-09-28T06:04:00",
+                               report_md="## Summary\n\nreport text\n\n" + XSS,
+                               findings_json="[]", brief_md="EVIDENCE EXCERPTS\n\n" + XSS)
+    store.close()
+    with TestClient(create_app(cfg)) as c:
+        yield c
+
+
+def test_fr1_detail_page_escapes_raw_html_in_stored_brief_and_report(xss_client):
+    html = xss_client.get("/investigations/1").text
+    assert "report text" in html and "EVIDENCE EXCERPTS" in html
+    assert "<img src=x" not in html and "<script>alert" not in html
+    assert html.count("&lt;img") >= 2 and html.count("&lt;script") >= 2

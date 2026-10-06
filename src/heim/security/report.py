@@ -20,8 +20,29 @@ HA_REPORT_MAX = 12000
 EXCERPT_MAX = 3000
 
 
+_MD_SPECIAL = re.compile(r"([\\\[\]!*_`])")
+
+
+def md_escape(s: object) -> str:
+    """Neutralise an evidence-derived string before it is placed into Markdown.
+
+    Backslash-escapes ``\\ [ ] ! * _ `` and the backtick (python-markdown
+    honours these escapes), so remote-origin text cannot form a link, an image
+    (a remote fetch in the owner's mail client), emphasis or a code span.
+    ``<`` becomes ``&lt;``: python-markdown does NOT honour ``\\<``, so a
+    backslash would neither hide the character nor stop a ``<http://…>``
+    autolink, while the entity does both. Applied at render time only —
+    stored CheckResults keep the raw evidence."""
+    return _MD_SPECIAL.sub(r"\\\1", str(s if s is not None else "")).replace("<", "&lt;")
+
+
+def _fenced(s: object) -> str:
+    """Evidence placed inside a ``` block: a ``` in it cannot close the fence."""
+    return str(s if s is not None else "").replace("```", "'''")
+
+
 def _cell(s: object) -> str:
-    return str(s if s is not None else "").replace("|", "\\|").replace("\n", " ").strip()
+    return md_escape(s).replace("|", "\\|").replace("\n", " ").strip()
 
 
 def _sorted(rows: list[CheckResult]) -> list[CheckResult]:
@@ -72,35 +93,35 @@ def render_audit_report(results: list[CheckResult], diff: AuditDiff, *,
     for r in findings:
         n += 1
         trend = "new" if r.fingerprint in new_fps else "persisting"
-        L.append(f"| {n} | {r.severity} | {r.host} | `{r.check_id}` | {_cell(r.subject)} | {trend} | "
+        L.append(f"| {n} | {r.severity} | {_cell(r.host)} | `{r.check_id}` | {_cell(r.subject)} | {trend} | "
                  f"{weeks.get(r.fingerprint, 1)}w | {_cell(r.summary)} |")
     for p in diff.carried:
         n += 1
-        L.append(f"| {n} | {p.get('severity')} | {p.get('host')} | `{p.get('metric')}` | "
+        L.append(f"| {n} | {_cell(p.get('severity'))} | {_cell(p.get('host'))} | `{p.get('metric')}` | "
                  f"{_cell(str(p.get('fingerprint', '')).split('|')[-1])} | carried | "
                  f"{weeks.get(str(p.get('fingerprint')), 1)}w | {_cell(p.get('summary'))} (not re-verified) |")
     if n == 0:
         L.append("| – | – | – | – | – | – | – | none |")
 
     L += ["", "## Resolved since the previous audit", ""]
-    L += [f"- ✅ `{p.get('metric')}` on {p.get('host')} — {_cell(str(p.get('fingerprint', '')).split('|')[-1])}"
+    L += [f"- ✅ `{p.get('metric')}` on {_cell(p.get('host'))} — {_cell(str(p.get('fingerprint', '')).split('|')[-1])}"
           for p in diff.resolved] or ["- none"]
 
     L += ["", "## Details and recommendations", ""]
     for r in findings:
-        L += [f"### {r.host} · `{r.check_id}` · {_cell(r.subject)}", "", r.summary, ""]
+        L += [f"### {_cell(r.host)} · `{r.check_id}` · {_cell(r.subject)}", "", md_escape(r.summary), ""]
         if r.detail:
-            L += ["```", r.detail[:1500], "```", ""]
+            L += ["```", _fenced(r.detail[:1500]), "```", ""]
         if r.recommendation:
             L += [f"**Recommended (human action — this audit is read-only):** {r.recommendation}", ""]
     if not findings:
         L += ["(no findings)", ""]
 
     L += ["## Notes (informational, not findings)", ""]
-    L += [f"- {r.host} · `{r.check_id}` · {_cell(r.summary)}" for r in notes] or ["- none"]
+    L += [f"- {_cell(r.host)} · `{r.check_id}` · {_cell(r.summary)}" for r in notes] or ["- none"]
 
     L += ["", "## Coverage gaps", ""]
-    L += [f"- `{g.split(' — ')[0]}` — {g.split(' — ', 1)[1]}" for g in gaps] or ["- none — every check ran"]
+    L += [f"- `{g.split(' — ')[0]}` — {_cell(g.split(' — ', 1)[1])}" for g in gaps] or ["- none — every check ran"]
 
     L += ["", "## Passed checks", "", f"{len(passed)} checks passed: " + (", ".join(f"`{c}`" for c in passed) or "none"), ""]
     return "\n".join(L)
@@ -111,23 +132,28 @@ def brief_sections(results: list[CheckResult], diff: AuditDiff) -> dict[str, str
     new_fps = {r.fingerprint for r in diff.new}
     table = ["| severity | host | check | subject | status | summary |", "|---|---|---|---|---|---|"]
     for r in _sorted(diff.new) + _sorted(diff.persisting):
-        table.append(f"| {r.severity} | {r.host} | {r.check_id} | {_cell(r.subject)} | "
+        table.append(f"| {r.severity} | {_cell(r.host)} | {r.check_id} | {_cell(r.subject)} | "
                      f"{'new' if r.fingerprint in new_fps else 'persisting'} | {_cell(r.summary)} |")
     for p in diff.carried:
-        table.append(f"| {p.get('severity')} | {p.get('host')} | {p.get('metric')} | "
+        table.append(f"| {_cell(p.get('severity'))} | {_cell(p.get('host'))} | {p.get('metric')} | "
                      f"{_cell(str(p.get('fingerprint', '')).split('|')[-1])} | carried (unverified) | {_cell(p.get('summary'))} |")
     if len(table) == 2:
         table.append("| – | – | – | – | – | no findings |")
-    notes = [f"- {r.host} · {r.check_id} · {_cell(r.summary)}" for r in _sorted([r for r in results if r.status == "note"])] or ["- none"]
-    coverage = [f"- {g}" for g in coverage_gaps(results)] or ["- none"]
-    resolved = [f"- {p.get('metric')} on {p.get('host')} ({str(p.get('fingerprint', '')).split('|')[-1]})" for p in diff.resolved] or ["- none"]
+    notes = [f"- {_cell(r.host)} · {r.check_id} · {_cell(r.summary)}" for r in _sorted([r for r in results if r.status == "note"])] or ["- none"]
+    coverage = [f"- {g.split(' — ')[0]} — {_cell(g.split(' — ', 1)[1])}" for g in coverage_gaps(results)] or ["- none"]
+    resolved = [f"- {p.get('metric')} on {_cell(p.get('host'))} ({_cell(str(p.get('fingerprint', '')).split('|')[-1])})" for p in diff.resolved] or ["- none"]
     excerpts = []
     for r in _sorted(diff.new) + _sorted(diff.persisting):
         if r.detail:
-            excerpts.append(f"[{r.check_id} · {r.subject}]\n{r.detail[:600]}")
+            # fenced, so the model reads the evidence verbatim while the stored
+            # brief stays inert Markdown on the dashboard
+            excerpts.append(f"[{r.check_id} · {md_escape(r.subject)}]\n```\n{_fenced(r.detail[:600])}\n```")
     ex = "\n\n".join(excerpts)
+    clipped = ex[:EXCERPT_MAX]
+    if clipped.count("```") % 2:      # the clip cut a block open: close it
+        clipped += "\n```"
     return {"table": "\n".join(table), "notes": "\n".join(notes), "coverage": "\n".join(coverage),
-            "resolved": "\n".join(resolved), "excerpts": ex[:EXCERPT_MAX] + ("\n…" if len(ex) > EXCERPT_MAX else "") or "(none)"}
+            "resolved": "\n".join(resolved), "excerpts": clipped + ("\n…" if len(ex) > EXCERPT_MAX else "") or "(none)"}
 
 
 def telegram_digest(diff: AuditDiff, results: list[CheckResult], *, generated_at: str,
