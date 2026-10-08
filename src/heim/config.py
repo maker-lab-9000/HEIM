@@ -200,6 +200,23 @@ class SshCfg(BaseModel):
     def resolved_key_path(self) -> str:
         return os.path.expanduser(os.environ.get("HEIM_SSH_KEY", self.key_path))
 
+    def connect_kwargs(self) -> dict:
+        """``asyncssh.connect`` arguments — every SSH connection HEIM opens.
+
+        Everything comes from this config; nothing is read from ``$HOME``.
+        asyncssh otherwise probes ``~/.ssh/config``, ``~/.ssh/ca-bundle.crt``
+        and ``~/.ssh/crt`` on every connect, and the ``crt`` probe is a
+        ``Path.is_dir()`` that RAISES on EACCES: in the container the process
+        drops from root to uid 1000 with ``HOME`` still ``/root``, so every
+        connection failed with "Permission denied: '/root/.ssh/crt'" before
+        the key was ever read.
+        """
+        return {
+            "host": self.host, "port": self.port, "username": self.user,
+            "client_keys": [self.resolved_key_path()], "known_hosts": None,
+            "config": None, "x509_trusted_certs": None, "x509_trusted_cert_paths": None,
+        }
+
 
 class ApiCfg(BaseModel):
     url: str
