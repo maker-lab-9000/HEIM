@@ -136,3 +136,37 @@ def test_entrypoint_gives_the_heim_user_its_own_home():
     text = (Path(__file__).resolve().parent.parent / "docker-entrypoint.sh").read_text()
     assert "export HOME=/home/heim" in text
     assert text.index("export HOME=/home/heim") < text.index("exec setpriv")
+
+
+async def test_passphrase_protected_key_says_so(monkeypatch):
+    # live 2026-10-08, right after the $HOME fix: the key itself was encrypted
+    exc = asyncssh.KeyImportError("Passphrase must be specified to import encrypted private keys")
+    out = json.loads(await _tool(monkeypatch, exc).run({"command": "df -h"}))
+    msg = out["error"]
+    assert out["sshUnavailable"] is True
+    assert "without one" in msg and "Passphrase must be specified" in msg and "Do not retry SSH" in msg
+
+
+async def test_security_audit_reports_an_encrypted_key_instead_of_raising(monkeypatch):
+    from heim.pipelines import security_sources as src
+    from heim.security.types import SourceSpec
+    host = Host(name="ubuntu-server", role="guest",
+                ssh=SshCfg(host="10.0.0.10", port=22, user="agent", key_path="/keys/agent"))
+
+    async def _encrypted(*a, **k):
+        raise asyncssh.KeyImportError("Passphrase must be specified to import encrypted private keys")
+    monkeypatch.setattr(src.asyncssh, "connect", _encrypted)
+    out = await src.fetch_ssh(_Cfg(host), [SourceSpec("ssh.x", "ssh", "uptime")], ssh_host="ubuntu-server")
+    assert out[0].status == "error" and "without a passphrase" in out[0].detail
+
+
+
+def test_check_explains_why_a_key_cannot_be_used(tmp_path):
+    from heim.cli import ssh_key_problem
+    plain, locked = tmp_path / "plain", tmp_path / "locked"
+    k = asyncssh.generate_private_key("ssh-ed25519")
+    k.write_private_key(str(plain))
+    k.write_private_key(str(locked), format_name="pkcs8-pem", passphrase="secret")
+    assert ssh_key_problem(str(plain)) == ""
+    assert ssh_key_problem(str(tmp_path / "missing")) == "not found"
+    assert ssh_key_problem(str(locked)).startswith("cannot be loaded unattended")

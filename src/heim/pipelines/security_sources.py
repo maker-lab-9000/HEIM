@@ -181,6 +181,9 @@ async def fetch_ssh(cfg: Config, sources: list[SourceSpec], *, ssh_host: str) ->
         conn = await asyncio.wait_for(
             asyncssh.connect(**ssh.connect_kwargs()),
             SSH_CONNECT_TIMEOUT_S)
+    except asyncssh.KeyImportError as exc:   # a ValueError, not an asyncssh.Error
+        return _all(sources, "error", f"ssh unavailable: the private key cannot be loaded ({exc}) — "
+                                      f"HEIM runs unattended, so it needs a key without a passphrase")
     except (OSError, asyncssh.Error, asyncio.TimeoutError) as exc:
         return _all(sources, "error", f"ssh unavailable: {type(exc).__name__}: {exc}")
 

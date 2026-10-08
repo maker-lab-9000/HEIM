@@ -47,6 +47,28 @@ def _setup_logging(verbose: bool) -> None:
 # ---------------------------------------------------------------- commands
 
 
+def ssh_key_problem(key: str) -> str:
+    """Why HEIM could not use ``key`` unattended, or '' when it can.
+
+    Existing is not enough: the container runs as uid 1000, and a
+    passphrase-protected key cannot be loaded by a daemon with no one to
+    type the passphrase.
+    """
+    import os
+
+    import asyncssh
+
+    if not os.path.exists(key):
+        return "not found"
+    if not os.access(key, os.R_OK):
+        return f"not readable by uid {os.getuid()}"
+    try:
+        asyncssh.read_private_key(key)
+    except asyncssh.KeyImportError as exc:
+        return f"cannot be loaded unattended ({exc})"
+    return ""
+
+
 async def _cmd_check(args) -> int:
     import httpx
 
@@ -115,17 +137,11 @@ async def _cmd_check(args) -> int:
     if cfg.settings.email:
         line(bool(env("SMTP_USER") and env("SMTP_PASSWORD")), "SMTP credentials",
              "" if env("SMTP_PASSWORD") else "SMTP_USER/SMTP_PASSWORD not set — emails will fail")
-    import os
     for h in cfg.hosts.values():
         if h.ssh:
             key = h.ssh.resolved_key_path()
-            if not os.path.exists(key):
-                line(False, f"ssh key for {h.name}", f"{key} — not found")
-            else:
-                # existing is not enough: the container runs as uid 1000
-                readable = os.access(key, os.R_OK)
-                line(readable, f"ssh key for {h.name}",
-                     key if readable else f"{key} — not readable by uid {os.getuid()}")
+            problem = ssh_key_problem(key)
+            line(not problem, f"ssh key for {h.name}", f"{key} — {problem}" if problem else key)
     return 0 if ok else 1
 
 
