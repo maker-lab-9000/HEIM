@@ -490,7 +490,8 @@ def test_weight_budget_and_no_cdn():
     # §11's token chart adds ~0.4 KB of SVG styling (7 rules), so 17.5 -> 20 KB
     # §9's recommendations table adds 6 column rules, so 20 -> 20.25 KB
     # §5.1's model picker adds one rule (5 declarations), so 20.25 -> 20.5 KB
-    assert (static / "heim.css").stat().st_size <= 20_992
+    # /security (the audit by severity) adds 3 rules, so 20.5 -> 20.75 KB
+    assert (static / "heim.css").stat().st_size <= 21_248
     assert (static / "htmx.min.js").stat().st_size > 10_000
     templates = (Path(__file__).resolve().parent.parent
                  / "src/heim/dashboard/templates")

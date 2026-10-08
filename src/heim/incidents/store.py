@@ -724,6 +724,18 @@ class IncidentStore:
         params += [limit, offset]
         return [dict(r) for r in self._db.execute(sql, params).fetchall()]
 
+    def run(self, run_id: int) -> dict | None:
+        row = self._db.execute("SELECT * FROM runs WHERE id = ?", (int(run_id),)).fetchone()
+        return dict(row) if row is not None else None
+
+    def previous_run(self, run_id: int, kind: str) -> dict | None:
+        """The newest run of ``kind`` older than ``run_id``."""
+        row = self._db.execute(
+            "SELECT * FROM runs WHERE kind = ? AND id < ? ORDER BY id DESC LIMIT 1",
+            (str(kind), int(run_id)),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
     def insert_findings(
         self,
         run_id: int,
@@ -788,6 +800,31 @@ class IncidentStore:
             (str(fingerprint), str(source)),
         ).fetchone()
         return int(row["n"] or 0) if row is not None else 0
+
+    def finding_run_counts(self, fingerprints: list[str], source: str, *,
+                           up_to_run: int | None = None) -> dict[str, int]:
+        """``finding_run_count`` for many fingerprints in one query.
+        ``up_to_run`` counts only runs with that id or older, so a past run
+        reads the way it did that week."""
+        fps = sorted({str(f) for f in fingerprints if f})
+        if not fps:
+            return {}
+        sql = (f"SELECT fingerprint, COUNT(DISTINCT run_id) AS n FROM findings "
+               f"WHERE source = ? AND fingerprint IN ({','.join('?' * len(fps))})")
+        params: list = [str(source), *fps]
+        if up_to_run is not None:
+            sql += " AND run_id <= ?"
+            params.append(int(up_to_run))
+        sql += " GROUP BY fingerprint"
+        return {str(r["fingerprint"]): int(r["n"] or 0) for r in self._db.execute(sql, params).fetchall()}
+
+    def investigation_by_fingerprint(self, fingerprint: str) -> dict | None:
+        """The newest investigation recorded under ``fingerprint``."""
+        row = self._db.execute(
+            "SELECT * FROM investigations WHERE fingerprint = ? ORDER BY id DESC LIMIT 1",
+            (str(fingerprint),),
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     def finding(self, finding_id: int) -> dict | None:
         row = self._db.execute("SELECT * FROM findings WHERE id = ?", (finding_id,)).fetchone()

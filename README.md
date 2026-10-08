@@ -110,7 +110,7 @@ heim/
 │   └── provisioning/datasources/loki.yml
 ├── loki/                           # docker-compose + config for the AI event store
 ├── prometheus/                     # docker-compose, scrape config, and alerts.yml (fast-path rules)
-├── tests/                          # 997 tests, incl. faithful-port golden cases
+├── tests/                          # 1004 tests, incl. faithful-port golden cases
 └── docs/ARCHITECTURE.md            # design, data flow, n8n→module provenance map
 ```
 
@@ -198,6 +198,11 @@ The pages:
 - **Incidents** — the store with lifecycle, dispatch locks, and mute state.
 - **Findings** — full history as a per-run table: severity pills, color-coded host
   badges, in-row detail expanders, verdict actions.
+- **Security** — the weekly security audit by severity: critical and warning tiles,
+  one section per severity (new before persisting before carried, with how many weeks
+  each has been reported), what was resolved since the previous audit (marked when it
+  was muted rather than fixed), a link to the full report and AI assessment, and a
+  history table that opens any past audit. Dry runs never appear.
 - **Metrics** — everything the daily email shows, live: per-host, per-category tables
   with current/avg, 3-day trend and Δ, from the same aggregation the analyst sees
   (10-minute cache, REFRESH button).
