@@ -24,6 +24,9 @@ if [ "$(id -u)" = "0" ]; then
         echo "      Give the host directory to uid 1000, e.g.: sudo chown -R 1000:1000 ./data" >&2
         exit 1
     fi
+    # setpriv changes the uid, not the environment: without this HOME stays
+    # /root, which the heim user cannot even stat.
+    export HOME=/home/heim USER=heim LOGNAME=heim
     exec setpriv --reuid=heim --regid=heim --init-groups heim "$@"
 fi
 

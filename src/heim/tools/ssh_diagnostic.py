@@ -36,13 +36,7 @@ class SshDiagnosticTool(Tool):
             ssh = self._host().ssh
             key = ssh.resolved_key_path()
             try:
-                self._conn = await asyncssh.connect(
-                    ssh.host,
-                    port=ssh.port,
-                    username=ssh.user,
-                    client_keys=[key],
-                    known_hosts=None,
-                )
+                self._conn = await asyncssh.connect(**ssh.connect_kwargs())
             except (OSError, asyncssh.Error) as exc:
                 raise SshUnavailable(self._setup_hint(exc, ssh, key)) from exc
         return self._conn
@@ -60,6 +54,15 @@ class SshDiagnosticTool(Tool):
 
         who = f"uid {os.getuid()}"
         target = f"{ssh.user}@{ssh.host}:{ssh.port}"
+        if isinstance(exc, PermissionError) and getattr(exc, "filename", None) not in (None, key):
+            # not the key: some other path the process could not read — name it,
+            # rather than send the operator off to re-own a key that is fine
+            return (
+                f"SSH is unavailable: this process ({who}) cannot read {exc.filename!r}, "
+                f"which is not the configured key ({key!r}). Do not retry SSH; use the "
+                f"Prometheus and API tools, and say in your report that host access was "
+                f"unavailable because of a local file permission error."
+            )
         if isinstance(exc, PermissionError):
             return (
                 f"SSH is unavailable: the private key {key!r} cannot be read by this "

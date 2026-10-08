@@ -78,3 +78,61 @@ async def test_a_blocked_command_never_reaches_the_connection(monkeypatch):
 
 def test_hint_is_raised_as_SshUnavailable_not_a_bare_oserror():
     assert issubclass(SshUnavailable, RuntimeError)
+
+
+async def test_permission_error_on_another_path_is_not_blamed_on_the_key(monkeypatch):
+    # live 2026-10-08: asyncssh's ~/.ssh/crt probe under HOME=/root, key itself was fine
+    tool = _tool(monkeypatch, PermissionError(13, "Permission denied", "/root/.ssh/other"))
+    out = json.loads(await tool.run({"command": "df -h"}))
+    msg = out["error"]
+    assert "/root/.ssh/other" in msg and "not the configured key" in msg
+    assert "HEIM_SSH_KEY_FILE" not in msg and "Do not retry SSH" in msg
+
+
+def _no_home_probes(kwargs: dict) -> None:
+    """Every connect must be fully specified: nothing read from $HOME."""
+    assert kwargs["config"] is None
+    assert kwargs["x509_trusted_certs"] is None and kwargs["x509_trusted_cert_paths"] is None
+    assert kwargs["known_hosts"] is None and kwargs["client_keys"] == ["/keys/agent"]
+
+
+async def test_investigator_connect_reads_nothing_from_home(monkeypatch):
+    monkeypatch.delenv("HEIM_SSH_KEY", raising=False)
+    host = Host(name="ubuntu-server", role="guest",
+                ssh=SshCfg(host="10.0.0.10", port=22, user="agent", key_path="/keys/agent"))
+    cfg = ToolCfg(name="ssh_diagnostic", description="d",
+                  module="heim.tools.ssh_diagnostic:SshDiagnosticTool",
+                  args={}, required=[], options={"host": "ubuntu-server"})
+    tool = SshDiagnosticTool(cfg, ToolContext(config=_Cfg(host)))
+    seen = {}
+
+    async def _capture(*a, **k):
+        seen.update(k)
+        raise OSError("stop here")
+    monkeypatch.setattr("heim.tools.ssh_diagnostic.asyncssh.connect", _capture)
+    await tool.run({"command": "df -h"})
+    _no_home_probes(seen)
+
+
+async def test_security_audit_connect_reads_nothing_from_home(monkeypatch):
+    from heim.pipelines import security_sources as src
+    from heim.security.types import SourceSpec
+    monkeypatch.delenv("HEIM_SSH_KEY", raising=False)
+    host = Host(name="ubuntu-server", role="guest",
+                ssh=SshCfg(host="10.0.0.10", port=22, user="agent", key_path="/keys/agent"))
+    seen = {}
+
+    async def _capture(*a, **k):
+        seen.update(k)
+        raise OSError("stop here")
+    monkeypatch.setattr(src.asyncssh, "connect", _capture)
+    out = await src.fetch_ssh(_Cfg(host), [SourceSpec("ssh.x", "ssh", "uptime")], ssh_host="ubuntu-server")
+    assert out[0].status == "error"
+    _no_home_probes(seen)
+
+
+def test_entrypoint_gives_the_heim_user_its_own_home():
+    from pathlib import Path
+    text = (Path(__file__).resolve().parent.parent / "docker-entrypoint.sh").read_text()
+    assert "export HOME=/home/heim" in text
+    assert text.index("export HOME=/home/heim") < text.index("exec setpriv")

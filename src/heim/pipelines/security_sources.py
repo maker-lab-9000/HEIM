@@ -179,8 +179,7 @@ async def fetch_ssh(cfg: Config, sources: list[SourceSpec], *, ssh_host: str) ->
     ssh = host.ssh
     try:
         conn = await asyncio.wait_for(
-            asyncssh.connect(ssh.host, port=ssh.port, username=ssh.user,
-                             client_keys=[ssh.resolved_key_path()], known_hosts=None),
+            asyncssh.connect(**ssh.connect_kwargs()),
             SSH_CONNECT_TIMEOUT_S)
     except (OSError, asyncssh.Error, asyncio.TimeoutError) as exc:
         return _all(sources, "error", f"ssh unavailable: {type(exc).__name__}: {exc}")

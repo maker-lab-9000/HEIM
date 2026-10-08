@@ -119,7 +119,13 @@ async def _cmd_check(args) -> int:
     for h in cfg.hosts.values():
         if h.ssh:
             key = h.ssh.resolved_key_path()
-            line(os.path.exists(key), f"ssh key for {h.name}", key)
+            if not os.path.exists(key):
+                line(False, f"ssh key for {h.name}", f"{key} — not found")
+            else:
+                # existing is not enough: the container runs as uid 1000
+                readable = os.access(key, os.R_OK)
+                line(readable, f"ssh key for {h.name}",
+                     key if readable else f"{key} — not readable by uid {os.getuid()}")
     return 0 if ok else 1
 
 
