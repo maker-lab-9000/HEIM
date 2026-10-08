@@ -29,6 +29,9 @@ from heim.pipelines.daily import run_daily
 from heim.pipelines.investigate import rearm_pending_approvals, run_investigation
 from heim.pipelines.poller import run_poll
 from heim.pipelines.queue import request_from_payload
+from heim.pipelines.security_audit import run_security_audit
+from heim.config import parse_weekly
+from heim.security.catalogue import load_catalogue
 from heim.runtime import Runtime, build_runtime
 
 log = logging.getLogger(__name__)
@@ -40,6 +43,17 @@ QUEUE_POLL_SECONDS = 4.0
 #: the quiet hours, far from both daily report slots.
 BACKUP_HOUR = 3
 BACKUP_MINUTE = 30
+
+#: Grace for the weekly audit: a restart within the hour still runs it; later
+#: than that the week is skipped (the next Monday is soon enough for hygiene).
+AUDIT_MISFIRE_GRACE_S = 3600
+
+
+def weekly_trigger(spec: str, tz: str) -> CronTrigger:
+    """``"mon 06:00"`` → the APScheduler cron trigger for that weekly slot."""
+    day, hour, minute = parse_weekly(spec)
+    return CronTrigger(day_of_week=day, hour=hour, minute=minute, timezone=tz)
+
 
 #: Backup filename pattern — one snapshot per day, so a re-run overwrites
 #: rather than piling up, and plain name sort == chronological order.
@@ -65,6 +79,36 @@ async def _poll_job(rt: Runtime) -> None:
     # asserts "the scheduler is alive", not "an incident happened". A poll
     # that raised deliberately stays silent — that is the outage to report.
     await deadman.ping(rt.config.settings.deadman_url)
+
+
+async def _security_audit_job(rt: Runtime) -> None:
+    """Weekly read-only security audit. Same contract as _daily_job: never
+    raise into the scheduler; a failure is one Telegram line. Success is
+    silent here because the pipeline delivers its own digest."""
+    try:
+        result = await run_security_audit(rt)
+        log.info("security audit complete: %s", result)
+    except Exception as exc:
+        log.exception("security audit failed")
+        await rt.notify(f"🔴 HEIM weekly security audit FAILED: {type(exc).__name__}: {exc}")
+
+
+async def _check_audit_catalogue(rt: Runtime) -> bool:
+    """Validate config/security/checks.yaml at startup (Design §5: "at startup
+    and in heim check"). A bad catalogue costs only the weekly audit, so it is
+    logged and notified — never raised: like the other startup steps, it must
+    not take the daily reports and the poller down with it."""
+    try:
+        load_catalogue(rt.config.security_checks_path)
+        return True
+    except Exception as exc:
+        log.error("security audit catalogue %s is invalid: %s", rt.config.security_checks_path, exc)
+        try:
+            await rt.notify(f"🔴 HEIM security audit: checks.yaml is invalid — the weekly audit will fail "
+                            f"until it is fixed: {type(exc).__name__}: {exc}")
+        except Exception:
+            log.exception("notifying the invalid security catalogue failed")
+        return False
 
 
 # ------------------------------------------------ nightly backup + retention
@@ -199,6 +243,11 @@ async def run_daemon() -> None:
     scheduler.add_job(_backup_job,
                       CronTrigger(hour=BACKUP_HOUR, minute=BACKUP_MINUTE, timezone=tz),
                       args=[rt], name="nightly-backup", misfire_grace_time=3600)
+    audit_spec = rt.config.settings.schedules.security_audit
+    if audit_spec:
+        await _check_audit_catalogue(rt)
+        scheduler.add_job(_security_audit_job, weekly_trigger(audit_spec, tz), args=[rt],
+                          name="security-audit", misfire_grace_time=AUDIT_MISFIRE_GRACE_S)
 
     try:
         swept = rt.store.sweep_interrupted()
@@ -221,9 +270,11 @@ async def run_daemon() -> None:
     worker = asyncio.create_task(_queue_worker(rt), name="queue-worker")
     log.info(
         "HEIM daemon up — daily at %s (%s), poller every %d min, backup %02d:%02d, "
-        "%d hosts, telegram %s, dead-man %s, %d job(s) queued, %d approval(s) re-armed",
+        "security audit %s, %d hosts, telegram %s, dead-man %s, %d job(s) queued, "
+        "%d approval(s) re-armed",
         ", ".join(rt.config.settings.schedules.daily), tz,
         rt.config.settings.schedules.poll_minutes, BACKUP_HOUR, BACKUP_MINUTE,
+        audit_spec or "off",
         len(rt.config.hosts), "on" if rt.telegram else "off",
         "on" if rt.config.settings.deadman_url else "off", rt.store.queued_count(), rearmed,
     )

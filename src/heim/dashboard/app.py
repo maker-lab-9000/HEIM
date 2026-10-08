@@ -643,9 +643,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         return page(
             request, "investigation.html", page_title=f"investigations / #{inv_id}",
             inv=row, steps=steps, burn=fmt.burn_segments(steps),
-            report_html=_md_to_html(row.get("report_md") or "") if row.get("report_md") else "",
+            report_html=_md_to_html(row.get("report_md") or "", allow_raw_html=False) if row.get("report_md") else "",
             findings=_trigger_findings(row),
-            brief_html=_md_to_html(row.get("brief_md") or "") if row.get("brief_md") else "",
+            brief_html=_md_to_html(row.get("brief_md") or "", allow_raw_html=False) if row.get("brief_md") else "",
             outcome=_outcome_line(row),
             transcript=transcript, truncated=truncated,
         )
@@ -1007,7 +1007,7 @@ NAV = [
     {"href": "/hosts", "label": "hosts", "icon": "▢"},
 ]
 
-_TRIGGERS = ["daily", "poller", "manual"]
+_TRIGGERS = ["daily", "poller", "manual", "security_audit"]
 
 
 def _query(**params) -> str:

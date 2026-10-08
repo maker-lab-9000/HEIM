@@ -171,8 +171,21 @@ def extract_tool_feedback(report_md: str) -> list[tuple[str, str]]:
 
 # ---------------------------------------------------------------- html emails
 
-def _md_to_html(md: str) -> str:
-    return md_lib.markdown(md, extensions=["tables", "fenced_code", "sane_lists"])
+def _md_to_html(md: str, *, allow_raw_html: bool = True) -> str:
+    """Markdown -> HTML. ``allow_raw_html=False`` deregisters python-markdown's
+    raw-HTML passthrough (the ``html_block`` preprocessor and ``html`` inline
+    pattern), so any ``<...>`` in the source — e.g. finding text sourced from
+    HA states, ``ss``, docker names, journal lines, none of which are
+    HTML-sanitised — is emitted as escaped text rather than live markup.
+    Every HEIM HTML sink that renders stored Markdown (the investigation and
+    security-audit emails, the dashboard's investigation detail page) passes
+    ``allow_raw_html=False``: stored briefs and reports embed unsanitised
+    remote-origin strings, so raw HTML there is a stored-XSS vector."""
+    instance = md_lib.Markdown(extensions=["tables", "fenced_code", "sane_lists"])
+    if not allow_raw_html:
+        instance.preprocessors.deregister("html_block")
+        instance.inlinePatterns.deregister("html")
+    return instance.convert(md)
 
 
 def investigation_email(
@@ -192,7 +205,39 @@ def investigation_email(
         host=host,
         generated_at=generated_at.replace("T", " ")[:16],
         incomplete=report.incomplete,
-        body=_md_to_html(report.report_md),
+        body=_md_to_html(report.report_md, allow_raw_html=False),
+        n_steps=n_steps,
+        input_tokens=f"{input_tokens:,}",
+        output_tokens=f"{output_tokens:,}",
+    )
+    return subject, html
+
+
+def security_audit_email(
+    *,
+    report_md: str,
+    incomplete: bool,
+    generated_at: str,
+    n_findings: int,
+    n_new: int,
+    n_resolved: int,
+    n_steps: int,
+    input_tokens: int,
+    output_tokens: int,
+) -> tuple[str, str]:
+    """The weekly security-audit email. Reuses the investigation template: the
+    body is the deterministic report plus the model's appendix, and
+    ``incomplete`` means only that the appendix is missing."""
+    subject = (
+        f"🛡️ Weekly Security Audit — {n_findings} finding{'s' if n_findings != 1 else ''}, "
+        f"{n_new} new, {n_resolved} resolved — {generated_at[:10]}"
+        + (" (AI assessment unavailable)" if incomplete else "")
+    )
+    html = _env.get_template("investigation.html.j2").render(
+        host="homelab · all hosts",
+        generated_at=generated_at.replace("T", " ")[:16],
+        incomplete=incomplete,
+        body=_md_to_html(report_md, allow_raw_html=False),
         n_steps=n_steps,
         input_tokens=f"{input_tokens:,}",
         output_tokens=f"{output_tokens:,}",

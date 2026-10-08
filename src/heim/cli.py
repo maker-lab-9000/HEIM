@@ -15,6 +15,8 @@
     heim jobs [--limit N]              show the investigation job queue
     heim dashboard [--host] [--port]   serve the read-only web dashboard
     heim daemon                        run scheduler + poller + approvals
+    heim security-audit [--dry-run]    run the weekly read-only security audit once
+                        [--no-llm]     (collectors + deterministic report only, no model call)
 
 --dry-run keeps side effects local: emails become HTML files under out/,
 Telegram/Loki/HA writes become log lines, approvals auto-granted.
@@ -63,6 +65,14 @@ async def _cmd_check(args) -> int:
                f"{len(cfg.agents)} agents{' + analyst' if cfg.analyst else ''}")
     from heim.metrics.queries import load_queries
     line(True, f"queries: {len(load_queries(cfg.queries_path))} in {cfg.queries_path.name}")
+
+    from heim.security.catalogue import CatalogueError, load_catalogue
+    try:
+        cat = load_catalogue(cfg.security_checks_path)
+        line(True, f"security checks: {len(cat.checks)} checks over {len(cat.sources)} sources "
+                   f"in {cfg.security_checks_path.name}")
+    except (CatalogueError, OSError) as exc:
+        line(False, "security checks", str(exc))
 
     async with httpx.AsyncClient(timeout=10, verify=False) as client:
         try:
@@ -484,6 +494,16 @@ async def _cmd_daemon(args) -> int:
     return 0
 
 
+async def _cmd_security_audit(args) -> int:
+    from heim.pipelines.security_audit import run_security_audit
+    from heim.runtime import build_runtime
+
+    rt = build_runtime(dry_run=args.dry_run)
+    result = await run_security_audit(rt, llm=not args.no_llm)
+    print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="heim", description="HEIM — Homelab Event & Incident Monitor")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -545,6 +565,11 @@ def _build_parser() -> argparse.ArgumentParser:
     db.add_argument("--port", type=int, default=8300)
 
     sub.add_parser("daemon", help="run scheduler + poller + approval listener")
+
+    sa = sub.add_parser("security-audit", help="run the weekly read-only security audit once")
+    sa.add_argument("--dry-run", action="store_true")
+    sa.add_argument("--no-llm", action="store_true",
+                    help="collectors + deterministic report only — no model call, zero cost")
     return p
 
 
@@ -557,6 +582,7 @@ def main() -> None:
         "investigate": _cmd_investigate, "incidents": _cmd_incidents,
         "investigations": _cmd_investigations, "jobs": _cmd_jobs, "replay": _cmd_replay,
         "dashboard": _cmd_dashboard, "daemon": _cmd_daemon,
+        "security-audit": _cmd_security_audit,
     }[args.cmd]
     try:
         sys.exit(asyncio.run(handler(args)))

@@ -41,6 +41,26 @@ request {host, role, fingerprint, findings}
      investigated=False → re-surfaces next run
 ```
 
+### Weekly security audit (`heim security-audit`, Monday 06:00 in the daemon)
+```
+config/security/checks.yaml ─► security.catalogue (validates every read: guard_command, guard_ha_path, PVE_AUDIT_ALLOW)
+                           ─► pipelines.security_sources.collect_evidence (GET / PromQL / fixed SSH lines, bounded)
+                           ─► security.evaluate (pure; empty-list control rule; ok/fail/note/unavailable)
+                           ─► store.active_suppressions · security.diff (new/persisting/resolved/carried)
+                           ─► store.insert_run(kind=security_audit, or security_audit_dryrun) + insert_findings(source=security_audit)
+                           ─► security.report.render_audit_report ('## Summary' first, model-free)
+                           ─► agent.runner over agents/security_auditor.yaml (prometheus_query, discover_metrics, proxmox_api)
+                              → reports.salvage → '## AI assessment' appendix, or a one-line reason
+                           ─► email + Telegram digest (+ 🔴 for new criticals) + sensor.pam_security_audit + Loki finding/investigation/action
+```
+
+`schedules.security_audit` defaults to `"mon 06:00"` and runs even if a server's
+`config/settings.yaml` doesn't set the key; set it to `""` there to disable. A
+`--dry-run` is recorded separately (`runs.kind=security_audit_dryrun`) and never becomes the
+comparison baseline: the next real run still diffs against the previous *real* run.
+The first run is a triage run — see the plan's "## Owner-side steps" for what to fill in
+`config/security/checks.yaml` afterwards.
+
 ## n8n workflow → module provenance
 
 | n8n workflow / node | Here | Tests |
@@ -69,6 +89,8 @@ request {host, role, fingerprint, findings}
 | PAM 51 Compute State | `incidents/state.py` | test_state |
 | n8n Data Table `monitor_incidents` | `incidents/store.py` (SQLite, same row schema) | test_integration |
 | Schedule triggers | `daemon.py` (APScheduler) / cron / CLI | — |
+| — (new) Security audit catalogue/evaluators | `security/*` | test_security_* |
+| — (new) Security audit pipeline | `pipelines/security_audit.py`, `pipelines/security_sources.py` | test_security_pipeline, test_security_sources |
 
 The original Code-node JS sources were extracted to `reference/` (gitignored) during the
 port; the module docstrings name their source nodes and any deliberate divergence.

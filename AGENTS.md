@@ -27,7 +27,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (596 tests). Design
+covered by golden tests against the original JavaScript behavior (997 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -42,6 +42,7 @@ edges** (tools, channels, pipelines).
 | Human loop | Telegram inline-button approvals (long-poll, no inbound ports) raced against a store-written decision (dashboard/CLI, works with no Telegram at all) · decline/timeout → re-proposed next run · outcome confirm (Resolved / Needs human) |
 | Delivery | n8n-faithful HTML dashboard email · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
 | Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · crash-safe investigation job queue (`heim jobs`, restart sweep, re-trigger with `retry_of`) · dead-man's switch pinged after every completed poll · nightly WAL-safe SQLite backup (rotated) + retention prune · Docker/compose deployment (outbound-only, plus the optional dashboard port) · `.env` interpolation for all deployment identity |
+| Security audit | Weekly (Mon 06:00) read-only configuration-hygiene audit: 47 deterministic checks over the Proxmox API (audit-only token), Home Assistant REST, Prometheus and fixed guard-validated SSH lines · stable fingerprints `host\|check_id\|subject` · week-over-week new/persisting/resolved/carried · findings reuse the verdict/suppression machinery · one bounded Sonnet 5 pass (3 API tools, no SSH, cap 6) explains and prioritises, never detects · degradable: a refusal costs only the `## AI assessment` appendix · `heim security-audit [--dry-run] [--no-llm]` |
 | Dashboard | Web UI (`heim dashboard`, FastAPI + Jinja + vendored htmx): overview KPIs incl. queue depth + 24h cost, a health card (latest analysis + per-host strip) and a tool-usage card, investigations list/filters with queued ghost rows, the agent-transcript detail page with burn line, cost and the optional full transcript, incidents, findings history, metrics, host cards · actions (queue an investigation, re-run, approve/decline, finding verdicts, mute/unmute) as real forms enhanced by htmx · optional HTTP basic auth · `/telemetry` Prometheus exposition (auth-exempt, aggregates only) · one SQLite connection (WAL) that writes action rows only |
 
 ---
@@ -50,7 +51,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 596 tests, must stay green
+.venv/bin/pytest -q                    # 997 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -473,6 +474,35 @@ Tests: `tests/test_durable_approvals.py`.
   snapshot still holds what is about to be deleted; a failed backup skips the prune
   entirely, and neither failure can reach the scheduler (`log.exception`).
 
+### 5.9 Weekly security audit — ✅ implemented
+
+`pipelines/security_audit.py` + the pure `security/` package + `config/security/checks.yaml`.
+Detection is deterministic code; the model only explains. Collectors have their own GET-only
+PVE allowlist (`security.catalogue.PVE_AUDIT_ALLOW`) wider than the model's `proxmox_guard`;
+the model's guards are unchanged. Results live in `runs(kind=security_audit)`,
+`findings(source=security_audit)` and `investigations(agent_name=security_auditor)`. See the
+plan's owner-side steps for the checks that need a journal group or an apt collector.
+
+The audit is **on by default after deploy**: `schedules.security_audit` defaults to
+`"mon 06:00"`, and that default applies even when a server's own `config/settings.yaml`
+(gitignored) doesn't mention the key at all. Set `security_audit: ""` there explicitly to
+keep it off.
+
+`heim security-audit --dry-run` is recorded separately (`runs.kind=security_audit_dryrun`)
+and never becomes the comparison baseline: the next real run diffs against the previous
+*real* run, so a triage dry run before the first Monday cannot turn a new critical into
+"persisting" or silence the 🔴 new-critical Telegram line.
+
+The **first run is a triage run**: expect several warnings and one row per unexpected
+listening port until you list the reviewed ports in `HEIM_AUDIT_EXPECTED_PORTS` in `.env`
+(the host's port inventory is deployment identity, so it is not in git — `checks.yaml`
+reads it as `${HEIM_AUDIT_EXPECTED_PORTS}`, keeps only `:22` built in, and treats an unset
+variable as "flag everything") and `expected_failed` in `config/security/checks.yaml`, or
+mark the rows false-positive on `/findings`. A malformed port list fails at daemon startup
+and in `heim check`. See
+the plan's "## Owner-side steps" section (`docs/superpowers/plans/2026-09-30-weekly-security-audit.md`)
+for the specific steps.
+
 ### Non-goals
 
 Mutating remediation tools (restart/cleanup actions) without a dedicated approval &
@@ -483,7 +513,7 @@ rollback design; multi-tenant SaaS-ification; replacing Grafana for time-series 
 ## 6. Notes for AI agents working here
 
 - Read `docs/ARCHITECTURE.md` first; it maps every module to its n8n source node.
-- Run `.venv/bin/pytest -q` before and after your change; 596 must not regress.
+- Run `.venv/bin/pytest -q` before and after your change; 997 must not regress.
 - Ported modules (docstring names an n8n node) are behavior-frozen — see §2.
 - Never log, commit, or email secrets; deployment identity comes from `.env` via
   `${VAR}` interpolation and must stay out of the tree.
