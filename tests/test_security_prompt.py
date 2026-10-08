@@ -27,7 +27,7 @@ def rt(tmp_path):
 
 def test_agent_config_is_loaded_with_the_intended_budget_and_tools(rt):
     a = rt.config.agents[AGENT_NAME]
-    assert a.model == "claude-sonnet-5" and a.max_tokens == 8192
+    assert a.model == "claude-opus-5-5" and a.max_tokens == 16384
     assert a.soft_step_budget == 4 and a.hard_step_cap == 6
     assert set(a.tools) == {"prometheus_query", "discover_metrics", "proxmox_api"}
     assert "ssh_diagnostic" not in a.tools
@@ -65,3 +65,19 @@ def test_prompts_contain_no_attack_vocabulary(rt):
         assert term not in system, f"system prompt contains {term!r}"
         assert term not in brief, f"brief contains {term!r}"
     assert set(ATTACK_TERMS) >= {"exploit", "attack", "brute", "penetration", "pentest", "payload", "intrusion", "crack", "bypass"}
+
+
+def test_auditor_model_has_a_price_in_the_example_settings(rt):
+    # an unpriced model shows "no price" on /costs and costs 0 in the run summary
+    assert rt.config.agents[AGENT_NAME].model in rt.config.settings.model_prices
+
+
+def test_system_prompt_requires_the_audit_feedback_section(rt):
+    jenv = Environment(loader=FileSystemLoader(rt.config.prompts_dir))
+    text = build_audit_system_prompt(rt, jenv)
+    assert "'## Audit feedback'" in text
+    assert "'### Improve the audit'" in text and "'### What else to check'" in text
+    # proposals stay read-only and come after the required sections, before the optional one
+    assert "Never propose anything that writes" in text
+    out = text[text.index("[OUTPUT]"):]
+    assert out.index("'## Confidence'") < out.index("'## Audit feedback'") < out.index("'## Tooling feedback'")

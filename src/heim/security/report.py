@@ -68,6 +68,44 @@ def demote_headings(md: str) -> str:
     return re.sub(r"^(#{1,5}) ", r"#\1 ", md or "", flags=re.M)
 
 
+#: the auditor's own review of the audit (prompt: '## Audit feedback'), by subsection
+FEEDBACK_PARTS = {"improve": "Improve the audit", "check": "What else to check"}
+_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+
+
+def extract_audit_feedback(md: str) -> dict[str, str] | None:
+    """The model's ``Audit feedback`` section → ``{"improve": md, "check": md}``.
+
+    Works on the bare assessment (``## Audit feedback`` + ``###`` parts) and on
+    the stored report, where the assessment sits demoted one level under
+    ``## AI assessment``. A part the model left out is ``""``; text outside the
+    two named parts lands in ``"other"``. ``None`` when there is no section,
+    e.g. audits from before the section existed. Returns Markdown: the caller
+    renders it with raw HTML off — this is model output.
+    """
+    lines = (md or "").split("\n")
+    start = level = None
+    for i, line in enumerate(lines):
+        m = _HEADING.match(line)
+        if m and m.group(2).strip().lower() == "audit feedback":
+            start, level = i + 1, len(m.group(1))
+    if start is None:
+        return None
+    parts: dict[str, list[str]] = {"improve": [], "check": [], "other": []}
+    names = {v.lower(): k for k, v in FEEDBACK_PARTS.items()}
+    current = "other"
+    for line in lines[start:]:
+        m = _HEADING.match(line)
+        if m and len(m.group(1)) <= level:
+            break
+        if m and len(m.group(1)) == level + 1:
+            current = names.get(m.group(2).strip().rstrip(":").lower(), "other")
+            continue
+        parts[current].append(line)
+    out = {k: "\n".join(v).strip() for k, v in parts.items()}
+    return out if any(out.values()) else None
+
+
 def render_audit_report(results: list[CheckResult], diff: AuditDiff, *,
                         generated_at: str, weeks: dict[str, int]) -> str:
     findings = _sorted(diff.new) + _sorted(diff.persisting)

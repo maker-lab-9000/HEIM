@@ -27,7 +27,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (1004 tests). Design
+covered by golden tests against the original JavaScript behavior (1011 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -42,7 +42,7 @@ edges** (tools, channels, pipelines).
 | Human loop | Telegram inline-button approvals (long-poll, no inbound ports) raced against a store-written decision (dashboard/CLI, works with no Telegram at all) · decline/timeout → re-proposed next run · outcome confirm (Resolved / Needs human) |
 | Delivery | n8n-faithful HTML dashboard email · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
 | Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · crash-safe investigation job queue (`heim jobs`, restart sweep, re-trigger with `retry_of`) · dead-man's switch pinged after every completed poll · nightly WAL-safe SQLite backup (rotated) + retention prune · Docker/compose deployment (outbound-only, plus the optional dashboard port) · `.env` interpolation for all deployment identity |
-| Security audit | Weekly (Mon 06:00) read-only configuration-hygiene audit: 47 deterministic checks over the Proxmox API (audit-only token), Home Assistant REST, Prometheus and fixed guard-validated SSH lines · stable fingerprints `host\|check_id\|subject` · week-over-week new/persisting/resolved/carried · findings reuse the verdict/suppression machinery · one bounded Sonnet 5 pass (3 API tools, no SSH, cap 6) explains and prioritises, never detects · degradable: a refusal costs only the `## AI assessment` appendix · `heim security-audit [--dry-run] [--no-llm]` |
+| Security audit | Weekly (Mon 06:00) read-only configuration-hygiene audit: 47 deterministic checks over the Proxmox API (audit-only token), Home Assistant REST, Prometheus and fixed guard-validated SSH lines · stable fingerprints `host\|check_id\|subject` · week-over-week new/persisting/resolved/carried · findings reuse the verdict/suppression machinery · one bounded Opus 5.5 pass (3 API tools, no SSH, cap 6) explains and prioritises, never detects, and ends with `## Audit feedback` (improve the audit / what else to check — proposals only, shown on `/security`) · degradable: a refusal costs only the `## AI assessment` appendix · `heim security-audit [--dry-run] [--no-llm]` |
 | Dashboard | Web UI (`heim dashboard`, FastAPI + Jinja + vendored htmx): overview KPIs incl. queue depth + 24h cost, a health card (latest analysis + per-host strip) and a tool-usage card, investigations list/filters with queued ghost rows, the agent-transcript detail page with burn line, cost and the optional full transcript, incidents, findings history, metrics, host cards · actions (queue an investigation, re-run, approve/decline, finding verdicts, mute/unmute) as real forms enhanced by htmx · optional HTTP basic auth · `/telemetry` Prometheus exposition (auth-exempt, aggregates only) · one SQLite connection (WAL) that writes action rows only |
 
 ---
@@ -51,7 +51,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 1004 tests, must stay green
+.venv/bin/pytest -q                    # 1011 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -515,7 +515,7 @@ rollback design; multi-tenant SaaS-ification; replacing Grafana for time-series 
 ## 6. Notes for AI agents working here
 
 - Read `docs/ARCHITECTURE.md` first; it maps every module to its n8n source node.
-- Run `.venv/bin/pytest -q` before and after your change; 1004 must not regress.
+- Run `.venv/bin/pytest -q` before and after your change; 1011 must not regress.
 - Ported modules (docstring names an n8n node) are behavior-frozen — see §2.
 - Never log, commit, or email secrets; deployment identity comes from `.env` via
   `${VAR}` interpolation and must stay out of the tree.

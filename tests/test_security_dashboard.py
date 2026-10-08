@@ -149,7 +149,11 @@ def audit_client(tmp_path, monkeypatch):
                    created_at="2026-10-02T00:00:00")
     store.create_investigation(fingerprint=f"all|security_audit|run-{r2}", host="all", host_role="audit",
                                agent_name="security_auditor", model="claude-sonnet-5", trigger="security_audit",
-                               status="complete", started_at="2026-10-05T06:00:00", report_md="r",
+                               status="complete", started_at="2026-10-05T06:00:00",
+                               report_md="## Summary\n\nr\n\n## AI assessment\n\n### Summary\n\nx\n\n"
+                                         "### Audit feedback\n\n#### Improve the audit\n\n"
+                                         "- ssh.* — key unreadable <img src=x onerror=alert(1)> — fix ownership\n\n"
+                                         "#### What else to check\n\n- PVE token expiry — pve.tfa_missing — GET /access/users\n",
                                findings_json="[]", brief_md="b")
     store.close()
     with TestClient(create_app(cfg)) as c:
@@ -215,3 +219,17 @@ def test_security_page_before_the_first_audit(empty_client):
     r = empty_client.get("/security")
     assert r.status_code == 200
     assert "No security audit has run yet" in r.text
+
+
+def test_security_page_shows_the_auditor_feedback(audit_client):
+    c, _ = audit_client
+    page = c.get("/security").text
+    card = page[page.index('id="feedback"'):page.index('id="sev-critical"')]
+    assert "improve the audit" in card and "what else to check" in card
+    assert "key unreadable" in card and "PVE token expiry" in card
+    assert "<img" not in card and "&lt;img" in card  # model output, raw HTML off
+
+
+def test_security_page_without_feedback_shows_no_card(audit_client):
+    c, ids = audit_client
+    assert 'id="feedback"' not in c.get(f"/security?run={ids['r1']}").text

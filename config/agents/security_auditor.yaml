@@ -1,6 +1,6 @@
 name: security_auditor
-model: claude-sonnet-5
-max_tokens: 8192        # adaptive thinking counts toward max_tokens (same reason as the investigator)
+model: claude-opus-5-5
+max_tokens: 16384       # adaptive thinking counts toward max_tokens; Opus thinks longer and the report now ends with '## Audit feedback'
 soft_step_budget: 4     # the prompt says most weeks need no tool call at all
 hard_step_cap: 6        # verification only — every check was already run by deterministic code
 prompt: security_auditor.md.j2

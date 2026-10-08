@@ -1,7 +1,7 @@
 from heim.reports.render import salvage, security_audit_email
 from heim.security.diff import AuditDiff, finding_rows
 from heim.security.report import (
-    brief_sections, coverage_gaps, demote_headings, finding_events, ha_attributes, overall_of,
+    brief_sections, coverage_gaps, demote_headings, extract_audit_feedback, finding_events, ha_attributes, overall_of,
     render_audit_report, telegram_digest,
 )
 from heim.security.types import CheckResult
@@ -149,3 +149,34 @@ def test_fr2_brief_sections_escape_evidence():
     long = [res("ssh.world_writable", "h", f"/etc/{i}", detail="![t](http://x/p.png) " * 40) for i in range(10)]
     clipped = brief_sections(long, AuditDiff(new=long))["excerpts"]
     assert clipped.count("```") % 2 == 0                               # the clip never leaves a fence open
+
+
+FEEDBACK_MD = (
+    "## Summary\n\nok\n\n## Confidence\n\nhigh\n\n"
+    "## Audit feedback\n\n### Improve the audit\n\n- ssh.* — key unreadable — fix ownership\n\n"
+    "### What else to check\n\n- PVE token expiry — pve.tfa_missing — /access/users\n\n"
+    "## Tooling feedback\n\nproxmox_api: allow /access/tfa\n"
+)
+
+
+def test_audit_feedback_from_the_bare_assessment():
+    fb = extract_audit_feedback(FEEDBACK_MD)
+    assert fb["improve"] == "- ssh.* — key unreadable — fix ownership"
+    assert fb["check"] == "- PVE token expiry — pve.tfa_missing — /access/users"
+    assert "Tooling" not in fb["check"] and "proxmox_api" not in fb["check"]  # stops at the next section
+
+
+def test_audit_feedback_from_the_stored_report_where_it_is_demoted():
+    stored = "## Summary\n\ndeterministic\n\n## AI assessment\n\n" + demote_headings(FEEDBACK_MD)
+    fb = extract_audit_feedback(stored)
+    assert fb["improve"].startswith("- ssh.*") and fb["check"].startswith("- PVE token expiry")
+
+
+def test_audit_feedback_missing_part_and_absent_section():
+    only_improve = "## Audit feedback\n\n### Improve the audit\n\n- a — b — c\n"
+    fb = extract_audit_feedback(only_improve)
+    assert fb["improve"] == "- a — b — c" and fb["check"] == ""
+    assert extract_audit_feedback("## Summary\n\nno feedback here\n") is None
+    assert extract_audit_feedback("## Audit feedback\n\n## Tooling feedback\n\nx: y\n") is None
+    loose = extract_audit_feedback("## Audit feedback\n\n- unsorted note\n")
+    assert loose["other"] == "- unsorted note"

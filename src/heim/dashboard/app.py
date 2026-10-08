@@ -63,6 +63,7 @@ from heim.pipelines.queue import enqueue_investigation, enqueue_retry
 from heim.pipelines.security_audit import AUDIT_HOST, AUDIT_KIND
 from heim.pipelines.suppression import mark_false_positive, suppress_fingerprint
 from heim.reports.render import _md_to_html
+from heim.security.report import extract_audit_feedback
 
 log = logging.getLogger(__name__)
 
@@ -1127,7 +1128,7 @@ def _security_view(reader: StoreReader, runs: list[dict], wanted: int | None) ->
     run = (next((r for r in runs if int(r["id"]) == wanted), None) if wanted is not None
            else max(runs, key=lambda r: int(r["id"]), default=None))
     view = {"run": None, "groups": [], "resolved": [], "history": history[:SECURITY_HISTORY],
-            "counts": {}, "assessment": None, "previous": None}
+            "counts": {}, "assessment": None, "previous": None, "feedback": None}
     if run is None:
         return view
     run_id = int(run["id"])
@@ -1162,11 +1163,21 @@ def _security_view(reader: StoreReader, runs: list[dict], wanted: int | None) ->
         p["muted"] = fp in muted
     resolved.sort(key=lambda f: (_SEV_RANK.get(str(f.get("severity") or "").lower(), 3), str(f.get("host") or "")))
 
+    assessment = reader.read(lambda s: s.investigation_by_fingerprint(f"{AUDIT_HOST}|{AUDIT_KIND}|run-{run_id}"))
     view.update(
         run=run, groups=groups, resolved=resolved, previous=previous, counts=_counts(run),
-        assessment=reader.read(lambda s: s.investigation_by_fingerprint(f"{AUDIT_HOST}|{AUDIT_KIND}|run-{run_id}")),
+        assessment=assessment, feedback=_feedback_view((assessment or {}).get("report_md") or ""),
     )
     return view
+
+
+def _feedback_view(report_md: str) -> dict | None:
+    """The auditor's ``Audit feedback`` parts as HTML — model output, so
+    rendered with raw HTML off like every other stored report."""
+    parts = extract_audit_feedback(report_md)
+    if parts is None:
+        return None
+    return {k: _md_to_html(v, allow_raw_html=False) if v else "" for k, v in parts.items()}
 
 
 def _next_offset(rows: list[dict], offset: int) -> tuple[list[dict], int | None]:
