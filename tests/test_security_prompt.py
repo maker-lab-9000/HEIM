@@ -29,7 +29,7 @@ def test_agent_config_is_loaded_with_the_intended_budget_and_tools(rt):
     a = rt.config.agents[AGENT_NAME]
     assert a.model == "claude-opus-5-5" and a.max_tokens == 16384
     assert a.soft_step_budget == 4 and a.hard_step_cap == 6
-    assert set(a.tools) == {"prometheus_query", "discover_metrics", "proxmox_api"}
+    assert set(a.tools) == {"prometheus_query", "discover_metrics", "loki_query", "proxmox_api"}
     assert "ssh_diagnostic" not in a.tools
     assert a.model in rt.config.settings.model_prices          # priced, not an em dash
     assert AUDIT_KIND == "security_audit"

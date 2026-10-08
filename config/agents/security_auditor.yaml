@@ -7,6 +7,7 @@ prompt: security_auditor.md.j2
 tools:
   - prometheus_query
   - discover_metrics
+  - loki_query
   - proxmox_api
 # Deliberately NO ssh_diagnostic: the model never chooses a shell command in
 # the audit. Every SSH read is a fixed, guard-validated line in

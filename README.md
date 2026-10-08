@@ -49,6 +49,7 @@ heim/
 │   │   ├── ssh_diagnostic.yaml     #     guarded read-only shell on an SSH host
 │   │   ├── prometheus_query.yaml   #     instant + range PromQL, token-compact results
 │   │   ├── discover_metrics.yaml   #     metric-name/label-set discovery
+│   │   ├── loki_query.yaml         #     read-only LogQL: journal (homelab, ubuntu-server) + docker logs
 │   │   ├── ha_api.yaml             #     GET-allowlisted Home Assistant REST
 │   │   └── proxmox_api.yaml        #     GET-allowlisted Proxmox VE API
 │   ├── agents/
@@ -72,7 +73,7 @@ heim/
 │   │   └── cassette.py             #   recorded tool results from a stored transcript (replay)
 │   ├── tools/                      # tool framework + one module per tool
 │   │   ├── base.py                 #   Tool base class, ToolContext (feed/audit), registry
-│   │   └── ssh_diagnostic.py · prometheus_query.py · discover_metrics.py · ha_api.py · proxmox_api.py
+│   │   └── ssh_diagnostic.py · prometheus_query.py · discover_metrics.py · loki_query.py · ha_api.py · proxmox_api.py
 │   ├── guards/                     # safety guards (ported from n8n, 119 tests)
 │   │   ├── command_guard.py        #   segment-aware read-only shell-command gate
 │   │   ├── ha_guard.py · proxmox_guard.py   # GET path allowlists
@@ -110,7 +111,7 @@ heim/
 │   └── provisioning/datasources/loki.yml
 ├── loki/                           # docker-compose + config for the AI event store
 ├── prometheus/                     # docker-compose, scrape config, and alerts.yml (fast-path rules)
-├── tests/                          # 1011 tests, incl. faithful-port golden cases
+├── tests/                          # 1026 tests, incl. faithful-port golden cases
 └── docs/ARCHITECTURE.md            # design, data flow, n8n→module provenance map
 ```
 

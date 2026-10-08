@@ -81,7 +81,7 @@ def test_the_prompt_asks_for_the_optional_section():
     assert "## Tooling feedback" in text
     assert "OPTIONAL" in text and "0-3 lines" in text
     for tool in ("ssh_diagnostic", "prometheus_query", "discover_metrics",
-                 "ha_api", "proxmox_api"):
+                 "loki_query", "ha_api", "proxmox_api"):
         assert tool in text
     # the salvage contract is untouched: the report still starts with Summary
     assert "MUST begin with the line '## Summary'" in text

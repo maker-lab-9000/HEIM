@@ -61,7 +61,7 @@ def test_config_values_interpolated(cfg):
 
 def test_config_loads_and_routes(cfg):
     assert set(cfg.hosts) == {"ubuntu-server", "homelab", "home-assistant", "heim"}
-    assert set(cfg.tools) == {"ssh_diagnostic", "prometheus_query", "discover_metrics", "ha_api", "proxmox_api"}
+    assert set(cfg.tools) == {"ssh_diagnostic", "prometheus_query", "discover_metrics", "loki_query", "ha_api", "proxmox_api"}
     assert "investigator" in cfg.agents
     assert cfg.analyst is not None and cfg.analyst.fallback is not None
     r = cfg.routing()
