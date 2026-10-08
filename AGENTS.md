@@ -27,7 +27,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (1026 tests). Design
+covered by golden tests against the original JavaScript behavior (1029 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -51,7 +51,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 1026 tests, must stay green
+.venv/bin/pytest -q                    # 1029 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -106,7 +106,7 @@ Conventions:
 | Integration | Direction | Module | Auth |
 |---|---|---|---|
 | Prometheus | read (queries, alerts, catalog) | `metrics/`, `tools/prometheus_query`, `pipelines/poller` | none (LAN) |
-| Loki | write (AI events) + read (agent tool: journal of homelab/ubuntu-server, ubuntu-server docker logs) | `channels/loki`, `tools/loki_query` | none (LAN) |
+| Loki | write (AI events) + read (agent tool: journal of homelab/ubuntu-server/Home Assistant OS, ubuntu-server docker logs) | `channels/loki`, `tools/loki_query` | none (LAN) |
 | Grafana | indirect (reads Loki/Prometheus) | `grafana/` dashboards | n/a |
 | Telegram | bidirectional (notify, live feed, approvals) | `channels/telegram` | bot token |
 | SMTP / Gmail | write (reports) | `channels/email` | app password |
@@ -515,7 +515,7 @@ rollback design; multi-tenant SaaS-ification; replacing Grafana for time-series 
 ## 6. Notes for AI agents working here
 
 - Read `docs/ARCHITECTURE.md` first; it maps every module to its n8n source node.
-- Run `.venv/bin/pytest -q` before and after your change; 1026 must not regress.
+- Run `.venv/bin/pytest -q` before and after your change; 1029 must not regress.
 - Ported modules (docstring names an n8n node) are behavior-frozen — see §2.
 - Never log, commit, or email secrets; deployment identity comes from `.env` via
   `${VAR}` interpolation and must stay out of the tree.

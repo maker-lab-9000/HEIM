@@ -49,7 +49,7 @@ heim/
 │   │   ├── ssh_diagnostic.yaml     #     guarded read-only shell on an SSH host
 │   │   ├── prometheus_query.yaml   #     instant + range PromQL, token-compact results
 │   │   ├── discover_metrics.yaml   #     metric-name/label-set discovery
-│   │   ├── loki_query.yaml         #     read-only LogQL: journal (homelab, ubuntu-server) + docker logs
+│   │   ├── loki_query.yaml         #     read-only LogQL: journal (homelab, ubuntu-server, HA OS) + docker logs
 │   │   ├── ha_api.yaml             #     GET-allowlisted Home Assistant REST
 │   │   └── proxmox_api.yaml        #     GET-allowlisted Proxmox VE API
 │   ├── agents/
@@ -111,7 +111,7 @@ heim/
 │   └── provisioning/datasources/loki.yml
 ├── loki/                           # docker-compose + config for the AI event store
 ├── prometheus/                     # docker-compose, scrape config, and alerts.yml (fast-path rules)
-├── tests/                          # 1026 tests, incl. faithful-port golden cases
+├── tests/                          # 1029 tests, incl. faithful-port golden cases
 └── docs/ARCHITECTURE.md            # design, data flow, n8n→module provenance map
 ```
 

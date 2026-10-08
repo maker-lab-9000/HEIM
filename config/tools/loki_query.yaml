@@ -2,20 +2,28 @@ name: loki_query
 module: heim.tools.loki_query:LokiQueryTool
 description: >-
   Read-only LogQL against the homelab Loki: the systemd journal of homelab (the Proxmox
-  hypervisor) and ubuntu-server, plus the docker container logs of ubuntu-server. Use it
+  hypervisor), ubuntu-server and Home Assistant OS (HA core, Supervisor and every add-on),
+  plus the docker container logs of ubuntu-server. Use it
   to find WHAT was logged around a finding's onset time (pass 'end' = onset + a few
   minutes and a short lookback). A query starting with '{' returns log lines, newest
   first, with repeats collapsed to one line '×N first→last'; anything else
   (count_over_time, rate, sum by) is a metric query — start there to see WHERE errors
   are, then read lines from that one stream.
 
-  LABELS (exact). Journal: {job="systemd-journal", host="homelab"|"ubuntu-server",
+  LABELS (exact). Journal: {job="systemd-journal", host="homelab"|"ubuntu-server"|"homeassistant",
   unit="<name>.service"|"kernel"|"init.scope", level="error"|"warning"|"notice"|"info"|"debug"}.
   Docker (ubuntu-server only): {host="ubuntu-server", container_name="<name>"} with
   compose_project, compose_service and source="stdout"|"stderr" — docker lines have NO
   level label: filter their text with |~ "(?i)error|fatal|panic|exception|traceback".
   Container names = Prometheus' cAdvisor 'name' label (nextcloud-app-1, paperless-webserver-1,
   photoprism-photoprism-1, jellyfin, n8n, browserless, prometheus, loki, …).
+  Home Assistant: Loki's label is host="homeassistant" (NO hyphen — HEIM's host
+  'home-assistant'); unit="homeassistant" is HA core, unit="hassio_supervisor" the
+  Supervisor, unit="app_<slug>" an add-on (app_core_deconz, app_5c53de3b_esphome,
+  app_a0d7b954_adguard, app_a0d7b954_uptime-kuma, app_cebe7a76_hassio_google_drive_backup, …);
+  level= works there. Every HA line is also shipped a second time under
+  {hostname="homeassistant", container_name=…} — always select with host= to avoid the
+  copy (in a 'sum by (host)' it is the row with an empty host). HA writes LOCAL time (Europe/Berlin) inside its messages; the line timestamp is UTC.
 
   RECIPES. Where are errors (24h): sum by (host, unit) (count_over_time({job="systemd-journal",
   level=~"error|warning"}[24h])). Noisiest containers: sum by (container_name)
@@ -26,17 +34,25 @@ description: >-
   Proxmox services: {host="homelab", unit=~"pvedaemon.service|pveproxy.service|pvestatd.service|pve-daily-update.service"}.
   SSH: {host="ubuntu-server", unit="ssh.service"} |~ "Failed|Invalid user|Accepted".
   Docker daemon (container exits/restarts): {host="ubuntu-server", unit=~"docker.service|containerd.service"} |~ "(?i)die|exit|restart|oom".
+  HA core errors: {host="homeassistant", unit="homeassistant", level=~"error|warning"}.
+  One HA integration: {host="homeassistant", unit="homeassistant"} |= "[homeassistant.components.<domain>"
+  (custom ones log as [custom_components.<domain>). Add-on problems: {host="homeassistant",
+  unit=~"hassio_supervisor|app_.*", level=~"error|warning"}.
 
-  NOT IN LOKI: home-assistant (use ha_api /api/error_log), the 11 bitwarden-* containers
-  and portainer, and anything before 2026-10-08 (collection start; 90-day retention).
+  NOT IN LOKI: the 11 bitwarden-* containers and portainer on ubuntu-server, and anything
+  before 2026-10-08 (collection start; 90-day retention). For HA's current state, history
+  and logbook keep using ha_api — Loki has the log lines, not entity states.
   KNOWN NOISE — not a finding: homelab smartctl-exporter.service 'Device open failed …
   low-power mode' for /dev/sdb and /dev/sdc (the RAID1 Toshibas sleeping; ~16k lines/day —
   exclude with unit!="smartctl-exporter.service"); nextcloud-app-1 'GET /login … Uptime-Kuma'
   health probes; browserless 'Current period usage: {"error":0,…}' counters; the loki
   container echoing the text of queries it ran (level=info … query=…, so a word like
   'error' in someone's query matches — read its level= field); kernel veth/br- 'entered
-  forwarding state' lines (a container starting); job="homelab-ai-monitor" (HEIM's own
-  events). The journal 'level' is the syslog priority: docker.service and
+  forwarding state' lines (a container starting); app_core_deconz 'ZCL attribute report'
+  (~6k/hour of Zigbee chatter — exclude with unit!="app_core_deconz"); the grafana add-on
+  (app_a0d7b954_grafana) logging its own Loki queries; HA kernel audit lines with no unit
+  (PROCTITLE / SYSCALL / NETFILTER_CFG from docker's iptables); job="homelab-ai-monitor"
+  (HEIM's own events). The journal 'level' is the syslog priority: docker.service and
   smartctl-exporter write their own level=… inside an [info] line, so filter text there too.
 args:
   logql:

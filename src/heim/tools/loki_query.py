@@ -1,4 +1,4 @@
-"""Read-only LogQL tool over the homelab Loki (journal + docker logs).
+"""Read-only LogQL tool over the homelab Loki (journal + container logs).
 
 Two query shapes, told apart by the LogQL itself:
 
@@ -43,12 +43,16 @@ _VARIABLE = re.compile(
     r"|\d{4}-\d\d-\d\d[T ][\d:.,]+Z?|\b[0-9a-f]{12,}\b|\b0x[0-9a-f]+\b|\d+\.\d+|\d{4,}", re.I)
 
 
+#: terminal colour codes (HA core writes "\x1b[31m… \x1b[0m"; some shippers drop the ESC)
+_ANSI = re.compile(r"\x1b?\[[0-9;]{1,8}m")
+
+
 def _shape(text: str) -> str:
     return _VARIABLE.sub(lambda m: m.group("ip") or "#", text)
 
 
 EMPTY_HINT = (
-    "No lines matched. Before concluding 'nothing happened': (1) docker logs carry NO "
+    "No lines matched. Before concluding 'nothing happened': (1) ubuntu-server docker logs carry NO "
     "level label — filter their text with |~ \"(?i)error|fatal|panic|exception\" instead "
     "of level=; (2) journal and docker collection started on 2026-10-08, so earlier "
     "windows are empty by construction; (3) list what exists with a metric query, e.g. "
@@ -92,7 +96,7 @@ def _iso(ns: str | int) -> str:
 def _source(stream: dict) -> str:
     """``host/unit [level]`` or ``host/container (stderr)`` — who said it."""
     who = stream.get("container_name") or stream.get("unit") or stream.get("job") or "?"
-    tag = f"{stream.get('host', '?')}/{who}"
+    tag = f"{stream.get('host') or stream.get('hostname') or '?'}/{who}"
     if stream.get("level"):
         tag += f" [{stream['level']}]"
     elif stream.get("source") == "stderr":
@@ -111,8 +115,12 @@ def compact_streams(result: list[dict], limit: int) -> tuple[list[str], int]:
     entries.sort(key=lambda e: e[0], reverse=True)
     groups: dict[tuple[str, str], dict] = {}
     order: list[tuple[str, str]] = []
+    seen: set[tuple[int, str]] = set()
     for ts, src, line in entries:
-        text = " ".join(line.split())
+        text = " ".join(_ANSI.sub("", line).split())
+        if (ts, text) in seen:   # the same line shipped twice (two pipelines, two label sets)
+            continue
+        seen.add((ts, text))
         key = (src, _shape(text))
         g = groups.get(key)
         if g is None:
@@ -129,7 +137,7 @@ def compact_streams(result: list[dict], limit: int) -> tuple[list[str], int]:
         text = g["text"] if len(g["text"]) <= LINE_CHARS else g["text"][:LINE_CHARS] + "…"
         when = _iso(g["last"]) if g["n"] == 1 else f"×{g['n']} {_iso(g['first'])}→{_iso(g['last'])}"
         lines.append(f"{when}  {g['src']}  {text}")
-    return lines, len(entries)
+    return lines, len(seen)
 
 
 class LokiQueryTool(Tool):
@@ -188,6 +196,9 @@ class LokiQueryTool(Tool):
                    "rawLines": raw, "shown": len(lines), "lines": lines}
             if not lines:
                 out["hint"] = EMPTY_HINT
+                if 'host="home-assistant"' in logql.replace(" ", ""):
+                    out["hint"] = ('Loki labels this host host="homeassistant" (no hyphen) — HEIM\'s '
+                                   '"home-assistant" only appears on HEIM\'s own events. ' + EMPTY_HINT)
             elif raw >= int(params["limit"]):
                 out["hint"] = LIMIT_HINT
             n = f"{raw} lines → {len(lines)} distinct"

@@ -73,7 +73,8 @@ def test_limit_counts_distinct_lines_and_long_lines_are_clipped():
 def test_description_documents_labels_gaps_and_noise():
     text = " ".join(yaml.safe_load(open(_yaml()))["description"].split())
     for must in ('job="systemd-journal"', 'container_name="<name>"', "NO level label",
-                 "bitwarden-*", "portainer", "smartctl-exporter", "home-assistant", "2026-10-08"):
+                 "bitwarden-*", "portainer", "smartctl-exporter", 'host="homeassistant"',
+                 'unit="hassio_supervisor"', "app_core_deconz", "LOCAL time", "2026-10-08"):
         assert must in text, must
 
 
@@ -163,3 +164,30 @@ async def test_output_is_clipped_dropping_the_oldest_lines(monkeypatch):
     out = json.loads(text)
     assert len(text) <= 12000 and 0 < out["shown"] < 150
     assert out["lines"][0].startswith("2026-10-08T11:02:29Z")   # newest kept
+
+
+def test_ha_lines_lose_colour_codes_and_the_second_copy():
+    ha = {"host": "homeassistant", "unit": "homeassistant", "level": "error"}
+    copy = {"hostname": "homeassistant", "container_name": "homeassistant", "unit": "docker.service", "level": "error"}
+    line = "\x1b[31m2026-10-08 13:28:08.536 ERROR (MainThread) [homeassistant.components.rest.data] Cannot connect\x1b[0m"
+    bare = "[31m2026-10-08 13:28:09.536 ERROR (MainThread) [custom_components.x] boom[0m"   # ESC dropped by a shipper
+    lines, raw = lq.compact_streams([_stream(ha, (1, line), (2, bare)), _stream(copy, (1, line))], limit=10)
+    assert raw == 2 and len(lines) == 2                       # the copy at the same instant is dropped
+    assert not any("[31m" in l or "[0m" in l or "\x1b" in l for l in lines)
+    assert lines[1].endswith("[homeassistant.components.rest.data] Cannot connect")
+    assert lines[0].split("  ")[1] == "homeassistant/homeassistant [error]"
+
+
+def test_hostname_label_is_used_when_host_is_missing():
+    lines, _ = lq.compact_streams([_stream({"hostname": "homeassistant", "container_name": "app_core_deconz"},
+                                           (1, "ZCL attribute report"))], limit=5)
+    assert "homeassistant/app_core_deconz" in lines[0]
+
+
+async def test_heims_host_name_gets_lokis_label_in_the_hint(monkeypatch):
+    def handler(request):
+        return httpx.Response(200, json={"status": "success", "data": {"resultType": "streams", "result": []}})
+    tool, client = _tool(handler)
+    monkeypatch.setattr(lq.httpx, "AsyncClient", client)
+    out = json.loads(await tool.run({"logql": '{host = "home-assistant", unit="homeassistant"}'}))
+    assert 'host="homeassistant"' in out["hint"]
