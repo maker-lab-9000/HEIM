@@ -275,6 +275,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 .stbl .c-trend { width: 8em; }
 .tbl .trend.is-new { color: var(--ember); }
 .htbl tr.on td { background: var(--raised); }
+.fbgrid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 
 /* the recommendations table (§9): the advice absorbs the slack, the two
    actions stay on one line at the end of the row */

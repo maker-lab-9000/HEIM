@@ -110,7 +110,7 @@ heim/
 │   └── provisioning/datasources/loki.yml
 ├── loki/                           # docker-compose + config for the AI event store
 ├── prometheus/                     # docker-compose, scrape config, and alerts.yml (fast-path rules)
-├── tests/                          # 1004 tests, incl. faithful-port golden cases
+├── tests/                          # 1011 tests, incl. faithful-port golden cases
 └── docs/ARCHITECTURE.md            # design, data flow, n8n→module provenance map
 ```
 
@@ -202,7 +202,10 @@ The pages:
   one section per severity (new before persisting before carried, with how many weeks
   each has been reported), what was resolved since the previous audit (marked when it
   was muted rather than fixed), a link to the full report and AI assessment, and a
-  history table that opens any past audit. Dry runs never appear.
+  history table that opens any past audit. Dry runs never appear. Each run also gets an
+  **auditor feedback** card: the model's own review of the audit — what limited this
+  run and how to fix it, and which read-only checks this week's findings make worth
+  adding. Proposals only; nothing is added or changed automatically.
 - **Metrics** — everything the daily email shows, live: per-host, per-category tables
   with current/avg, 3-day trend and Δ, from the same aggregation the analyst sees
   (10-minute cache, REFRESH button).

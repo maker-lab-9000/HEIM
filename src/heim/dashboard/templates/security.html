@@ -36,6 +36,26 @@
     {%- if counts.carried %} · {{ counts.carried }} carried from last week (check could not run){% endif %}</p>
 </section>
 
+{#- the auditor's review of the audit itself (prompt: '## Audit feedback') -#}
+{%- if feedback %}
+<section class="card" id="feedback">
+  <h2 class="runline mono">auditor feedback · {{ assessment.model or 'model' }}</h2>
+  <div class="fbgrid">
+    <div>
+      <p class="eyebrow">improve the audit</p>
+      {%- if feedback.improve %}<div class="prose">{{ feedback.improve|safe }}</div>
+      {%- else %}{{ m.empty('No suggestions this run.') }}{% endif %}
+    </div>
+    <div>
+      <p class="eyebrow">what else to check</p>
+      {%- if feedback.check %}<div class="prose">{{ feedback.check|safe }}</div>
+      {%- else %}{{ m.empty('No new checks suggested this run.') }}{% endif %}
+    </div>
+  </div>
+  {%- if feedback.other %}<div class="prose">{{ feedback.other|safe }}</div>{% endif %}
+</section>
+{%- endif %}
+
 {%- for g in groups %}
 <section class="card" id="sev-{{ g.severity }}">
   <h2 class="runline mono">{{ m.sev(g.severity) }} · {{ g.findings|length }} finding{{ '' if g.findings|length == 1 else 's' }}
