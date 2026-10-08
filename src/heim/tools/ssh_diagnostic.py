@@ -37,7 +37,7 @@ class SshDiagnosticTool(Tool):
             key = ssh.resolved_key_path()
             try:
                 self._conn = await asyncssh.connect(**ssh.connect_kwargs())
-            except (OSError, asyncssh.Error) as exc:
+            except (OSError, asyncssh.Error, asyncssh.KeyImportError) as exc:
                 raise SshUnavailable(self._setup_hint(exc, ssh, key)) from exc
         return self._conn
 
@@ -54,6 +54,13 @@ class SshDiagnosticTool(Tool):
 
         who = f"uid {os.getuid()}"
         target = f"{ssh.user}@{ssh.host}:{ssh.port}"
+        if isinstance(exc, asyncssh.KeyImportError):
+            return (
+                f"SSH is unavailable: the private key {key!r} cannot be loaded ({exc}). "
+                f"HEIM runs unattended and has no passphrase to give, so it needs a "
+                f"dedicated key without one. Do not retry SSH; use the Prometheus and API "
+                f"tools, and say in your report that host access was unavailable."
+            )
         if isinstance(exc, PermissionError) and getattr(exc, "filename", None) not in (None, key):
             # not the key: some other path the process could not read — name it,
             # rather than send the operator off to re-own a key that is fine
