@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m with context %}
+{% block content %}
+
+{%- if run %}
+{#- one audit run: what it found, by severity, then what went away, then history -#}
+<p class="eyebrow subhead">weekly security audit · run #{{ run.id }} · {{ run.run_at|day }} {{ run.run_at|clock }}
+  {%- if history and run.id != history[0].id %} · <a class="qlink" href="/security">latest</a>{% endif %}</p>
+
+<section class="kpis" aria-label="Audit summary">
+  {%- for g in groups if g.severity in ('critical', 'warning') %}
+  <div class="stat">
+    <p class="eyebrow">{{ m.sev(g.severity) }}</p>
+    <a class="hero mono" href="#sev-{{ g.severity }}">{{ g.findings|length }}</a>
+    <p class="meta">{{ g.new }} new this week</p>
+  </div>
+  {%- endfor %}
+  <div class="stat">
+    <p class="eyebrow">resolved</p>
+    <a class="hero mono" href="#resolved">{{ resolved|length }}</a>
+    <p class="meta">{% if previous %}since {{ previous.run_at|day }}{% else %}first audit{% endif %}</p>
+  </div>
+  <div class="stat">
+    <p class="eyebrow">not verified</p>
+    <p class="hero mono">{{ counts.unavailable|default(0) }}</p>
+    <p class="meta">of {{ counts.checks|default(DASH) }} checks could not run</p>
+  </div>
+</section>
+
+<section class="card">
+  <p class="headline">{{ m.pill(run.overall) }} <span class="htext">{{ run.headline or 'weekly security audit' }}</span></p>
+  <p class="eyebrow ink3">
+    {%- if assessment %}<a class="qlink" href="/investigations/{{ assessment.id }}">full report &amp; AI assessment</a>
+    · {{ m.pill(assessment.status) }}{% if assessment.model %} · {{ assessment.model }}{% endif %}
+    {%- else %}no AI assessment for this run{% endif %}
+    {%- if counts.carried %} · {{ counts.carried }} carried from last week (check could not run){% endif %}</p>
+</section>
+
+{%- for g in groups %}
+<section class="card" id="sev-{{ g.severity }}">
+  <h2 class="runline mono">{{ m.sev(g.severity) }} · {{ g.findings|length }} finding{{ '' if g.findings|length == 1 else 's' }}
+    {%- if g.new %} · {{ g.new }} new{% endif %}</h2>
+  {%- if g.findings %}
+  <table class="tbl dense ftbl stbl">
+    <thead><tr>
+      <th scope="col" class="c-host">host</th>
+      <th scope="col" class="c-metric">check</th>
+      <th scope="col">finding</th>
+      <th scope="col" class="c-trend">seen</th>
+      <th scope="col" class="c-verdict">verdict</th>
+    </tr></thead>
+    <tbody>
+      {%- for f in g.findings %}
+      <tr>
+        <td class="c-host">{{ m.hostbadge(f.host) }}</td>
+        <td class="c-metric mono ink2">{{ f.metric or DASH }}
+          {%- if f.subject %}<br><span class="ink3">{{ f.subject }}</span>{% endif %}</td>
+        <td>
+          <span class="fsum">{{ f.summary }}</span>
+          {%- if f.detail or f.recommendation %}
+          <details>
+            <summary>detail &amp; recommendation</summary>
+            {%- if f.detail %}<p class="prose">{{ f.detail }}</p>{% endif %}
+            {%- if f.recommendation %}<p class="prose rec"><span class="eyebrow">recommendation</span> {{ f.recommendation }}</p>{% endif %}
+            {%- if f.fingerprint %}<p class="mono ink3">{{ f.fingerprint }}</p>{% endif %}
+          </details>
+          {%- endif %}
+        </td>
+        <td class="c-trend mono trend{{ ' is-new' if f.trend == 'new' }}">{{ f.trend or DASH }}
+          {%- if f.weeks > 1 %}<br><span class="ink3">{{ f.weeks }} weeks</span>{% endif %}</td>
+        <td class="c-verdict">{% include "partials/_verdict.html" %}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- else %}
+  {{ m.empty('No ' ~ g.severity ~ ' findings in this audit.') }}
+  {%- endif %}
+</section>
+{%- endfor %}
+
+<section class="card" id="resolved">
+  <h2 class="runline mono">{{ m.pill('resolved') }} · {{ resolved|length }} since the previous audit</h2>
+  {%- if resolved %}
+  <table class="tbl dense ftbl stbl">
+    <thead><tr>
+      <th scope="col" class="c-sev">was</th>
+      <th scope="col" class="c-host">host</th>
+      <th scope="col" class="c-metric">check</th>
+      <th scope="col">finding</th>
+    </tr></thead>
+    <tbody>
+      {%- for f in resolved %}
+      <tr>
+        <td class="c-sev">{{ m.sev(f.severity) }}</td>
+        <td class="c-host">{{ m.hostbadge(f.host) }}</td>
+        <td class="c-metric mono ink2">{{ f.metric or DASH }}
+          {%- if f.subject %}<br><span class="ink3">{{ f.subject }}</span>{% endif %}</td>
+        <td><span class="fsum">{{ f.summary }}</span>{% if f.muted %} <span class="ink3">· muted, not fixed</span>{% endif %}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- elif previous %}
+  {{ m.empty('Nothing from the previous audit went away.') }}
+  {%- else %}
+  {{ m.empty('This is the first audit — nothing to compare against yet.') }}
+  {%- endif %}
+</section>
+
+{%- if history|length > 1 or (history and history[0].id != run.id) %}
+<section class="card">
+  <h2 class="runline mono">history · last {{ history|length }} audits</h2>
+  <table class="tbl dense htbl">
+    <thead><tr>
+      <th scope="col">audit</th>
+      <th scope="col">overall</th>
+      <th scope="col" class="num">critical</th>
+      <th scope="col" class="num">warning</th>
+      <th scope="col" class="num">new</th>
+      <th scope="col" class="num">resolved</th>
+      <th scope="col" class="num">not verified</th>
+    </tr></thead>
+    <tbody>
+      {%- for h in history %}
+      <tr{% if h.id == run.id %} aria-current="true" class="on"{% endif %}>
+        <td class="mono">{% if h.id == run.id %}{{ h.run_at|day }}{% else %}<a href="/security?run={{ h.id }}">{{ h.run_at|day }}</a>{% endif %}</td>
+        <td>{{ m.pill(h.overall) }}</td>
+        <td class="num mono">{{ h.critical }}</td>
+        <td class="num mono">{{ h.warning }}</td>
+        <td class="num mono">{{ h.new }}</td>
+        <td class="num mono">{{ h.resolved }}</td>
+        <td class="num mono">{{ h.unavailable }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+</section>
+{%- endif %}
+
+{%- else %}
+<section class="card">
+  <p class="empty">No security audit has run yet. It runs every Monday at 06:00, or on demand with
+    <span class="mono">heim security-audit</span>.</p>
+</section>
+{%- endif %}
+{% endblock %}

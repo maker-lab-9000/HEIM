@@ -60,6 +60,7 @@ from heim.metrics.queries import build_window, load_queries
 # through the exact code path the email did, or the numbers would drift
 from heim.pipelines.daily import _fetch_query_ranges
 from heim.pipelines.queue import enqueue_investigation, enqueue_retry
+from heim.pipelines.security_audit import AUDIT_HOST, AUDIT_KIND
 from heim.pipelines.suppression import mark_false_positive, suppress_fingerprint
 from heim.reports.render import _md_to_html
 
@@ -709,6 +710,28 @@ def create_app(config: Config | None = None) -> FastAPI:
         return page(request, "findings.html", page_title="findings", groups=groups,
                     total=len(rows), offset=offset, next_offset=next_offset)
 
+    @app.get("/security", response_class=HTMLResponse)
+    async def security_page(request: Request, run: str = ""):
+        """The weekly security audit, one run at a time, grouped by severity.
+
+        Read-only: everything here is rows the audit already wrote. ``run``
+        picks a past audit from the history table; the default is the latest.
+        Dry runs are not shown — they never count as an audit.
+        """
+        runs = reader.read(lambda s: s.runs(limit=SECURITY_HISTORY, kind=AUDIT_KIND))
+        wanted = int(run) if run.strip().isdigit() else None
+        if wanted is not None and not any(int(r["id"]) == wanted for r in runs):
+            # an older audit than the history table reaches: still openable by link
+            older = reader.read(lambda s: s.run(wanted))
+            if older and older.get("kind") == AUDIT_KIND:
+                runs = [*runs, older]
+        view = _security_view(reader, runs, wanted)
+        if wanted is not None and view["run"] is None:
+            return page(request, "error.html", status=404, page_title="security",
+                        message=f"No security audit #{wanted}.",
+                        detail="The history table lists the audits that are kept.")
+        return page(request, "security.html", page_title="security", **view)
+
     @app.get("/recommendations", response_class=HTMLResponse)
     async def recommendations_page(request: Request):
         """The operator's to-do list (spec §9) — nothing here is new data.
@@ -1001,6 +1024,7 @@ NAV = [
     {"href": "/investigations", "label": "investigations", "icon": "▣"},
     {"href": "/incidents", "label": "incidents", "icon": "▲"},
     {"href": "/findings", "label": "findings", "icon": "▤"},
+    {"href": "/security", "label": "security", "icon": "⛨"},
     {"href": "/recommendations", "label": "recommendations", "icon": "✓"},
     {"href": "/metrics", "label": "metrics", "icon": "▥"},
     {"href": "/costs", "label": "costs", "icon": "◍"},
@@ -1069,6 +1093,80 @@ def _finding_window(rows: list[dict], offset: int) -> tuple[list[dict], int | No
         if whole:
             return whole, offset + len(whole)
     return window, offset + PAGE
+
+
+#: how many audits the /security history table lists (~ a quarter of Mondays)
+SECURITY_HISTORY = 12
+#: severity sections that always render, even empty — "no criticals" is news
+SECURITY_SEVERITIES = ("critical", "warning")
+_TREND_RANK = {"new": 0, "persisting": 1, "carried": 2}
+
+
+def _counts(run: dict) -> dict:
+    try:
+        counts = json.loads(run.get("counts_json") or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return counts if isinstance(counts, dict) else {}
+
+
+def _security_view(reader: StoreReader, runs: list[dict], wanted: int | None) -> dict:
+    """Everything /security shows for one audit run (``wanted`` or the latest).
+
+    Findings are grouped by severity, critical first; inside a group new comes
+    before persisting before carried (re-reported from last week because its
+    check could not run). Resolved = in the previous audit, gone from this one.
+    """
+    history = []
+    for r in runs:
+        c = _counts(r)
+        history.append({"id": int(r["id"]), "run_at": r.get("run_at", ""), "overall": r.get("overall", ""),
+                        **{k: int(c.get(k) or 0) for k in
+                           ("critical", "warning", "new", "resolved", "carried", "unavailable", "findings")}})
+    history.sort(key=lambda h: h["id"], reverse=True)
+    run = (next((r for r in runs if int(r["id"]) == wanted), None) if wanted is not None
+           else max(runs, key=lambda r: int(r["id"]), default=None))
+    view = {"run": None, "groups": [], "resolved": [], "history": history[:SECURITY_HISTORY],
+            "counts": {}, "assessment": None, "previous": None}
+    if run is None:
+        return view
+    run_id = int(run["id"])
+    rows = reader.read(lambda s: s.findings_for_run(run_id))
+    previous = reader.read(lambda s: s.previous_run(run_id, AUDIT_KIND))
+    prev_rows = reader.read(lambda s: s.findings_for_run(int(previous["id"]))) if previous else []
+    weeks = reader.read(lambda s: s.finding_run_counts(
+        [r.get("fingerprint", "") for r in rows], AUDIT_KIND, up_to_run=run_id))
+    for r in rows:
+        fp = str(r.get("fingerprint") or "")
+        r["subject"] = fp.split("|")[-1] if fp.count("|") >= 2 else ""
+        r["weeks"] = weeks.get(fp, 0)
+
+    by_sev: dict[str, list[dict]] = {s: [] for s in SECURITY_SEVERITIES}
+    for r in rows:
+        by_sev.setdefault(str(r.get("severity") or "").lower() or "info", []).append(r)
+    groups = []
+    for sev in sorted(by_sev, key=lambda s: _SEV_RANK.get(s, 3)):
+        items = sorted(by_sev[sev], key=lambda f: (_TREND_RANK.get(str(f.get("trend") or ""), 3),
+                                                    str(f.get("host") or ""), str(f.get("metric") or ""),
+                                                    str(f.get("subject") or "")))
+        groups.append({"severity": sev, "findings": items,
+                       "new": sum(1 for f in items if f.get("trend") == "new")})
+
+    current = {str(r.get("fingerprint") or "") for r in rows}
+    resolved = [p for p in prev_rows if str(p.get("fingerprint") or "") not in current]
+    muted = _suppressions(reader) if resolved else {}
+    for p in resolved:
+        fp = str(p.get("fingerprint") or "")
+        p["subject"] = fp.split("|")[-1] if fp.count("|") >= 2 else ""
+        # gone because the operator muted it, not because it was fixed
+        p["muted"] = fp in muted
+    resolved.sort(key=lambda f: (_SEV_RANK.get(str(f.get("severity") or "").lower(), 3), str(f.get("host") or "")))
+
+    view.update(
+        run=run, groups=groups, resolved=resolved, previous=previous, counts=_counts(run),
+        assessment=reader.read(lambda s: s.investigation_by_fingerprint(f"{AUDIT_HOST}|{AUDIT_KIND}|run-{run_id}")),
+    )
+    return view
 
 
 def _next_offset(rows: list[dict], offset: int) -> tuple[list[dict], int | None]:
