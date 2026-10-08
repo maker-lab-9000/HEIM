@@ -12,6 +12,7 @@ from pathlib import Path
 
 import yaml
 
+from heim.config import expand_env
 from heim.guards import guard_command, guard_ha_path
 from heim.security.types import SEVERITIES, CheckSpec, SourceSpec
 
@@ -109,9 +110,48 @@ class Catalogue:
         return [s for s in self.sources.values() if s.kind == kind]
 
 
+#: Check params that are port → label maps. Either a YAML mapping, or — so a
+#: deployment's port inventory can live in .env instead of git — a string
+#: "port[:label],port[:label],..." (typically filled from ${HEIM_*}).
+_PORT_MAP_PARAMS = ("expected_ports", "critical_ports")
+_PORT_ITEM_RE = re.compile(r"^(\d{1,5})(?::([A-Za-z0-9_.+\- ]*))?$")
+
+
+def parse_port_map(value, *, name: str) -> dict[str, str]:
+    """``port[:label]`` items (string or mapping) → ``{"port": "label"}``.
+
+    Validated here so a typo in .env fails at startup and in ``heim check``
+    instead of silently allowing — or failing to allow — a port on Monday.
+    An empty string is an empty map: with ``expected_ports`` that means every
+    wildcard listener is flagged, the safe direction for an unset variable.
+    """
+    if isinstance(value, dict):
+        items = [(str(k).strip(), "" if v is None else str(v).strip()) for k, v in value.items()]
+    elif isinstance(value, str):
+        items = []
+        for token in re.split(r"[,\n]", value):
+            token = token.strip()
+            if not token:
+                continue
+            m = _PORT_ITEM_RE.match(token)
+            if not m:
+                raise CatalogueError(f"{name}: {token!r} is not 'port' or 'port:label'")
+            items.append((m.group(1), (m.group(2) or "").strip()))
+    else:
+        raise CatalogueError(f"{name}: expected a mapping or a 'port[:label],...' string")
+    out: dict[str, str] = {}
+    for port, label in items:
+        if not port.isdigit() or not 1 <= int(port) <= 65535:
+            raise CatalogueError(f"{name}: {port!r} is not a TCP/UDP port (1-65535)")
+        out[str(int(port))] = label
+    return out
+
+
 def load_catalogue(path: Path) -> Catalogue:
+    # ${VAR} expansion, exactly like every other YAML under config/ — this is
+    # how deployment inventories (e.g. HEIM_AUDIT_EXPECTED_PORTS) stay in .env.
     with open(path) as fh:
-        data = yaml.safe_load(fh) or {}
+        data = yaml.safe_load(expand_env(fh.read(), source=str(path))) or {}
     sources: dict[str, SourceSpec] = {}
     for raw in data.get("sources") or []:
         key, kind = str(raw.get("key") or ""), str(raw.get("kind") or "")
@@ -143,9 +183,13 @@ def load_catalogue(path: Path) -> Catalogue:
         for s in srcs:
             if s not in sources:
                 raise CatalogueError(f"check {cid}: unknown source {s!r}")
+        params = dict(raw.get("params") or {})
+        for key in _PORT_MAP_PARAMS:
+            if key in params:
+                params[key] = parse_port_map(params[key], name=f"check {cid}: {key}")
         checks.append(CheckSpec(
             id=cid, title=str(raw.get("title") or cid), severity=sev, sources=srcs,
-            params=dict(raw.get("params") or {}), recommendation=str(raw.get("recommendation") or ""),
+            params=params, recommendation=str(raw.get("recommendation") or ""),
             compound=bool(raw.get("compound", False)),
         ))
     if not checks:

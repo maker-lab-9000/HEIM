@@ -111,3 +111,63 @@ def test_bundle_expanded_and_missing():
                               "pve.vm_config[103]": Evidence("pve.vm_config[103]", "ok", body={})})
     assert set(b.expanded("pve.vm_config")) == {"100", "103"}
     assert b.get("nope").status == "error" and not b.get("nope").usable
+
+
+# ---------------------------------------- expected ports come from .env, not git
+#
+# The port inventory is deployment identity: which services a host exposes.
+# Like IPs and chat ids it belongs in .env, so the catalogue reads it from
+# ${HEIM_AUDIT_EXPECTED_PORTS} and keeps only :22 built in (the audit itself
+# connects over SSH, and the check already needs :22 as proof `ss` answered).
+
+from heim.security.catalogue import parse_port_map  # noqa: E402
+
+
+def _listener_params(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("HEIM_AUDIT_EXPECTED_PORTS", raising=False)
+    else:
+        monkeypatch.setenv("HEIM_AUDIT_EXPECTED_PORTS", value)
+    cat = load_catalogue(CATALOGUE)
+    return next(c for c in cat.checks if c.id == "ssh.listeners_unexpected").params
+
+
+def test_expected_ports_are_read_from_the_environment(monkeypatch):
+    p = _listener_params(monkeypatch, "9090:prometheus, 7359:jellyfin-discovery,41641")
+    assert p["expected_ports"] == {"22": "sshd", "9090": "prometheus",
+                                   "7359": "jellyfin-discovery", "41641": ""}
+
+
+def test_unset_variable_expects_only_ssh(monkeypatch):
+    """Fail-safe: a missing variable must flag everything, never allow it."""
+    assert _listener_params(monkeypatch, None)["expected_ports"] == {"22": "sshd"}
+
+
+def test_critical_ports_stay_in_the_catalogue(monkeypatch):
+    p = _listener_params(monkeypatch, None)
+    assert p["critical_ports"]["2375"] == "Docker API without TLS"
+
+
+@pytest.mark.parametrize("bad", ["abc", "22:sshd,70000", "0", "-1", "22;sshd", "8080:"])
+def test_a_malformed_port_fails_at_load(monkeypatch, bad):
+    """A typo surfaces at startup / `heim check`, not as a silent allow."""
+    if bad == "8080:":
+        # an empty label is fine — it's the port that matters
+        assert _listener_params(monkeypatch, bad)["expected_ports"]["8080"] == ""
+        return
+    monkeypatch.setenv("HEIM_AUDIT_EXPECTED_PORTS", bad)
+    with pytest.raises(CatalogueError, match="expected_ports"):
+        load_catalogue(CATALOGUE)
+
+
+def test_parse_port_map_accepts_the_mapping_form_too():
+    """Backward compatible with a hand-written YAML mapping."""
+    assert parse_port_map({22: "sshd", "9090": "prometheus"}, name="expected_ports") == {
+        "22": "sshd", "9090": "prometheus"}
+    assert parse_port_map("", name="expected_ports") == {}
+    assert parse_port_map("22:sshd,,  ,9100", name="expected_ports") == {"22": "sshd", "9100": ""}
+
+
+def test_catalogue_now_expands_env_like_every_other_config_file(monkeypatch):
+    monkeypatch.setenv("HEIM_AUDIT_EXPECTED_PORTS", "8096:jellyfin")
+    assert "8096" in _listener_params(monkeypatch, "8096:jellyfin")["expected_ports"]

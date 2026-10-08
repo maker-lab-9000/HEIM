@@ -36,8 +36,14 @@ SS = ("tcp LISTEN 0 4096 0.0.0.0:22 0.0.0.0:* users:((\"sshd\",pid=1,fd=3))\n"
       "tcp LISTEN 0 4096 [::]:8096 [::]:* users:((\"jellyfin\",pid=5,fd=4))\n")
 
 
-def test_listeners_expected_unexpected_critical_and_control():
-    rows = {r.subject: r for r in rows_for("ssh.listeners_unexpected", ssh("ssh.listeners", SS))}
+def test_listeners_expected_unexpected_critical_and_control(monkeypatch):
+    # The reviewed port inventory comes from .env (HEIM_AUDIT_EXPECTED_PORTS);
+    # give this test its own so it doesn't depend on any real deployment.
+    monkeypatch.setenv("HEIM_AUDIT_EXPECTED_PORTS", "8081:cadvisor")
+    cat = load_catalogue(Path(__file__).resolve().parent.parent / "config" / "security" / "checks.yaml")
+    e = ssh("ssh.listeners", SS)
+    b = EvidenceBundle(items={e.key: e})
+    rows = {r.subject: r for r in evaluate(cat, b, EvalContext(**CTX)) if r.check_id == "ssh.listeners_unexpected"}
     assert rows["22/sshd"].status == "ok" and rows["8081/docker-proxy"].status == "ok"
     assert rows["2375/dockerd"].severity == "critical"
     assert rows["8096/jellyfin"].status == "fail" and rows["8096/jellyfin"].severity == "warning"

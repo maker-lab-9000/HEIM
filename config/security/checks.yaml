@@ -247,7 +247,12 @@ checks:
     severity: warning
     sources: [ssh.listeners]
     params:
-      expected_ports: {"22": sshd, "9090": prometheus, "9100": node_exporter, "3100": loki, "8081": cadvisor}
+      # Your host's reviewed port inventory lives in .env, not git:
+      #   HEIM_AUDIT_EXPECTED_PORTS=9090:prometheus,9100:node_exporter,...
+      # "port[:label]" items, comma-separated; matched by port (TCP and UDP).
+      # :22 stays built in — the audit itself connects over SSH. Unset = only
+      # :22 is expected, so every other all-interfaces listener is flagged.
+      expected_ports: "22:sshd,${HEIM_AUDIT_EXPECTED_PORTS:-}"
       critical_ports: {"2375": "Docker API without TLS", "2376": "Docker API", "23": telnet, "3389": rdp, "5900": vnc}
     recommendation: Bind the service to 127.0.0.1 or a Docker-internal network, or add it to expected_ports once reviewed.
   - id: ssh.sshd_password_auth

@@ -1,9 +1,17 @@
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+# A deployment's reviewed port inventory (config/security/checks.yaml reads it
+# from ${HEIM_AUDIT_EXPECTED_PORTS}) must never leak from the shell that runs
+# the suite into it. Cleared at import time, before collection, because some
+# test modules load the catalogue at module level; tests that need an
+# inventory set their own with monkeypatch.
+os.environ.pop("HEIM_AUDIT_EXPECTED_PORTS", None)
 
 #: Deployment-identity vars that `config/` references as `${VAR}`. Any test
 #: that loads config/settings.example.yaml needs every one of them set, or

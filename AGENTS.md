@@ -27,7 +27,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (986 tests). Design
+covered by golden tests against the original JavaScript behavior (997 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -51,7 +51,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 986 tests, must stay green
+.venv/bin/pytest -q                    # 997 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -494,8 +494,12 @@ and never becomes the comparison baseline: the next real run diffs against the p
 "persisting" or silence the 🔴 new-critical Telegram line.
 
 The **first run is a triage run**: expect several warnings and one row per unexpected
-listening port until `expected_ports` / `expected_failed` are filled in
-`config/security/checks.yaml`, or the rows are marked false-positive on `/findings`. See
+listening port until you list the reviewed ports in `HEIM_AUDIT_EXPECTED_PORTS` in `.env`
+(the host's port inventory is deployment identity, so it is not in git — `checks.yaml`
+reads it as `${HEIM_AUDIT_EXPECTED_PORTS}`, keeps only `:22` built in, and treats an unset
+variable as "flag everything") and `expected_failed` in `config/security/checks.yaml`, or
+mark the rows false-positive on `/findings`. A malformed port list fails at daemon startup
+and in `heim check`. See
 the plan's "## Owner-side steps" section (`docs/superpowers/plans/2026-09-30-weekly-security-audit.md`)
 for the specific steps.
 
@@ -509,7 +513,7 @@ rollback design; multi-tenant SaaS-ification; replacing Grafana for time-series 
 ## 6. Notes for AI agents working here
 
 - Read `docs/ARCHITECTURE.md` first; it maps every module to its n8n source node.
-- Run `.venv/bin/pytest -q` before and after your change; 986 must not regress.
+- Run `.venv/bin/pytest -q` before and after your change; 997 must not regress.
 - Ported modules (docstring names an n8n node) are behavior-frozen — see §2.
 - Never log, commit, or email secrets; deployment identity comes from `.env` via
   `${VAR}` interpolation and must stay out of the tree.
