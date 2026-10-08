@@ -250,6 +250,7 @@ _COMMAND_KEYS = {
     "ha_api": ("path",),
     "proxmox_api": ("path",),
     "discover_metrics": ("pattern",),
+    "loki_query": ("logql",),
 }
 
 
@@ -271,7 +272,7 @@ def command_of(step: dict) -> str:
         val = args.get(key)
         if val:
             return str(val).strip()
-    for key in ("command", "promql", "query", "path", "pattern"):
+    for key in ("command", "promql", "logql", "query", "path", "pattern"):
         if args.get(key):
             return str(args[key]).strip()
     return json.dumps(args, separators=(", ", ": ")) if args else DASH

@@ -12,5 +12,6 @@ tools:
   - ssh_diagnostic
   - prometheus_query
   - discover_metrics
+  - loki_query
   - ha_api
   - proxmox_api
