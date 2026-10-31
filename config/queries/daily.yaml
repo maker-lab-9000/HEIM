@@ -321,6 +321,9 @@ queries:
 # `scalar()` on the sum keeps the node series' labels, so the row is attributed
 # to homelab rather than to "unknown".
 #
+# Templates are left out: a template can never start, so its memory is never
+# committed (the k8s template, VM 9000, alone inflated the figure by ~5 points).
+#
 # `dir: info` on purpose — informational, never flags. Overcommit above 100% is
 # a deliberate, healthy configuration when ballooning is on, so we do not yet
 # know where the line is on this hardware. warn/crit below are unused while
@@ -333,7 +336,7 @@ queries:
   dir: info
   warn: 100
   crit: 125
-  promql: 100 * scalar(sum(pve_memory_size_bytes{id=~"qemu/.*"})) / pve_memory_size_bytes{id="node/homelab"}
+  promql: 100 * scalar(sum(pve_memory_size_bytes{id=~"qemu/.*"} unless on(id) pve_guest_info{template="1"})) / pve_memory_size_bytes{id="node/homelab"}
 - qid: pve_vm_up
   category: Proxmox
   label: VM status
