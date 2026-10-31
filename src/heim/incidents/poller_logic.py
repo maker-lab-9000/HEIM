@@ -32,6 +32,17 @@ Parameterization vs the JS (documented judgment calls):
   (deterministic since frozensets are unordered), falling back to
   ``'unknown'`` when there is none. With a single SSH host — the original
   deployment — this is exactly the JS behavior.
+
+Extension beyond the JS (deliberate, 2026-10-31):
+
+- the alert rules now live only in the ansible-homelab repo
+  (``stacks/ubuntu-server/prometheus/alerts.yml``), whose SMART alerts carry
+  qids the n8n original never had (``smart_selftest``, ``ssd_life``,
+  ``nvme_spare`` …). They are categorised ``diskHealth`` and named after the
+  disk's role, like the JS's own disk qids — otherwise each fell to
+  ``'other'`` (never investigated) with an empty name, so every disk firing
+  the same alert collapsed into one incident. The JS's qids keep their JS
+  category and name.
 """
 from __future__ import annotations
 
@@ -50,8 +61,29 @@ _DISK_HEALTH_QIDS = (
     "ssd_wear",
     "disk_crc",
     "disk_identity",
+    # beyond the JS: ansible-homelab's newer SMART alerts (module docstring)
+    "smart_selftest",
+    "smart_at_thresh",
+    "smart_near_thresh",
+    "smart_bad_sectors",
+    "smart_bad_sectors_growing",
+    "smart_realloc",
+    "smart_err_counters",
+    "smart_err_log",
+    "nvme_crit",
+    "nvme_spare",
+    "ssd_life",
+    "ssd_spare",
 )
 _DISK_QIDS = ("fs_used", "inodes_used", "pve_pool_used")
+#: Per-disk alerts, named after the disk's role. The JS named the first five;
+#: the rest are ansible-homelab's newer SMART alerts (module docstring).
+_DISK_NAMED_QIDS = (
+    "drive_temp", "smart_status", "media_err", "disk_crc", "disk_identity",
+    "smart_selftest", "smart_at_thresh", "smart_near_thresh", "smart_bad_sectors",
+    "smart_bad_sectors_growing", "smart_realloc", "smart_err_counters", "smart_err_log",
+    "nvme_crit", "nvme_wear", "nvme_spare", "ssd_life", "ssd_spare",
+)
 _NETWORK_QIDS = ("net_err", "n8n_net_spike")
 
 
@@ -91,7 +123,7 @@ def _name_for(qid: str, labels: dict) -> str:
         return (
             (labels.get("device") or "") + " " + (labels.get("mountpoint") or "")
         ).strip()
-    if qid in ("drive_temp", "smart_status", "media_err", "disk_crc", "disk_identity"):
+    if qid in _DISK_NAMED_QIDS:
         # A physical disk's role (serial-keyed, from homelab:disk_role:info)
         # wins over its kernel name, which USB re-enumeration reshuffles.
         # Same rule as aggregate.series_name, so both paths agree.

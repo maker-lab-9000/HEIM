@@ -122,7 +122,7 @@ instance_host_map:
 host_color_order: [home-assistant, homelab, ubuntu-server, heim]
 
 # Open incidents from metric thresholds (config/queries/daily.yaml warn/crit),
-# not just from prometheus/alerts.yml rules. Evaluated on the poller's cadence.
+# not just from the Prometheus alert rules. Evaluated on the poller's cadence.
 threshold_detection: true
 threshold_severity: crit        # crit | warn  (warn also includes crit)
 threshold_consecutive: 2        # consecutive polls above threshold before opening

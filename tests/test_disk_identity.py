@@ -11,6 +11,12 @@ fix keys identity on the disk's SERIAL: one Prometheus recording rule
 (``homelab:disk_role:info``) attaches a stable ``disk`` role label, every
 disk-scoped query and alert joins on it, and HEIM names a disk series after
 that role so a reshuffle cannot mint a new fingerprint for the same drive.
+
+The rule and the alerts live in the ansible-homelab repo
+(``stacks/ubuntu-server/prometheus/alerts.yml``), and that repo tests them:
+``make guards`` holds the mapping's shape and the "no sdX in a rule" ban,
+``make alerts`` runs promtool over the mapping and every disk alert. This
+file covers HEIM's half: the catalogue's queries and how HEIM names a disk.
 """
 from __future__ import annotations
 
@@ -24,22 +30,19 @@ from heim.incidents.poller_logic import _category_of_qid, _name_for
 from heim.metrics.aggregate import series_name
 
 ROOT = Path(__file__).resolve().parent.parent
-ALERTS = ROOT / "prometheus" / "alerts.yml"
 CATALOGUE = ROOT / "config" / "queries" / "daily.yaml"
 
 #: a selector that pins a kernel disk name — the bug, in one regex
 _KERNEL_DISK = re.compile(r'device\s*=~?\s*"(sd[a-z]|nvme\d)')
 
-
-def _rules():
-    doc = yaml.safe_load(ALERTS.read_text())
-    return [r for g in doc["groups"] for r in g["rules"]]
-
-
-def _role_rule():
-    rules = [r for r in _rules() if r.get("record") == "homelab:disk_role:info"]
-    assert len(rules) == 1, "exactly one recording rule owns disk identity"
-    return rules[0]
+#: The qid of every per-disk alert in ansible-homelab's alerts.yml — the
+#: contract with that repo. Each carries the `disk` role label.
+DISK_ALERT_QIDS = (
+    "smart_status", "smart_selftest", "smart_at_thresh", "smart_near_thresh",
+    "smart_bad_sectors", "smart_bad_sectors_growing", "smart_realloc",
+    "smart_err_counters", "smart_err_log", "disk_crc", "media_err", "nvme_crit",
+    "nvme_wear", "nvme_spare", "ssd_life", "ssd_spare", "drive_temp",
+)
 
 
 # ------------------------------------------------------------ naming (HEIM)
@@ -56,14 +59,23 @@ def test_daily_path_is_unchanged_without_a_role():
     assert series_name({"device": "vda"}, {}) == "vda"
 
 
-@pytest.mark.parametrize("qid", ["drive_temp", "smart_status", "media_err", "disk_crc"])
+@pytest.mark.parametrize("qid", DISK_ALERT_QIDS)
 def test_poller_names_a_disk_alert_by_its_role(qid):
     labels = {"device": "sdd", "disk": "jellymedia"}
     assert _name_for(qid, labels) == "jellymedia"
 
 
+@pytest.mark.parametrize("qid", DISK_ALERT_QIDS)
+def test_two_disks_firing_one_alert_stay_two_incidents(qid):
+    """An empty name would give both disks the fingerprint homelab|qid| —
+    one incident for two failing drives, resolved when either recovers."""
+    assert _name_for(qid, {"device": "sda", "disk": "photos"}) != \
+        _name_for(qid, {"device": "sdd", "disk": "jellymedia"})
+
+
 def test_poller_falls_back_to_the_device_without_a_role():
     assert _name_for("drive_temp", {"device": "sdx"}) == "sdx"
+    assert _name_for("ssd_spare", {"device": "sdx"}) == "sdx"
 
 
 def test_disk_identity_alert_names_the_role_or_the_unmapped_device():
@@ -71,9 +83,14 @@ def test_disk_identity_alert_names_the_role_or_the_unmapped_device():
     assert _name_for("disk_identity", {"device": "sdf"}) == "sdf"               # disk unmapped
 
 
-@pytest.mark.parametrize("qid", ["disk_crc", "ssd_wear", "disk_identity"])
+@pytest.mark.parametrize("qid", [q for q in DISK_ALERT_QIDS if q != "drive_temp"] + ["ssd_wear", "disk_identity"])
 def test_disk_qids_are_disk_health(qid):
+    """diskHealth is an investigable hypervisor category; 'other' never is."""
     assert _category_of_qid(qid) == "diskHealth"
+
+
+def test_drive_temperature_stays_a_temperature():
+    assert _category_of_qid("drive_temp") == "temperature"
 
 
 def test_a_reshuffle_does_not_change_the_fingerprint_name():
@@ -84,46 +101,7 @@ def test_a_reshuffle_does_not_change_the_fingerprint_name():
     assert _name_for("disk_crc", before) == _name_for("disk_crc", after)
 
 
-# -------------------------------------------- the mapping (Prometheus rule)
-
-
-def test_every_role_maps_to_exactly_one_serial():
-    expr = _role_rule()["expr"]
-    pairs = re.findall(r'serial="([^"]+)"\}\s*,\s*"disk",\s*"([^"]+)"', expr)
-    assert {role for _serial, role in pairs} == {
-        "photos", "jellymedia", "raid1-a", "raid1-b", "backup", "system"}
-    # The two directions of "exactly one". The nvme serial appears twice in the
-    # rule on purpose (node_exporter's nvme0n1 + smartctl's nvme0), but always
-    # under the same role — so compare as sets, not as list lengths.
-    roles_of = {}
-    serials_of = {}
-    for serial, role in pairs:
-        roles_of.setdefault(serial, set()).add(role)
-        serials_of.setdefault(role, set()).add(serial)
-    assert all(len(r) == 1 for r in roles_of.values()), f"a serial claimed by two roles: {roles_of}"
-    assert all(len(s) == 1 for s in serials_of.values()), f"a role with two serials: {serials_of}"
-
-
-def test_the_mapping_reads_the_kernel_view_not_smart():
-    """node_disk_info exists for a sleeping disk; SMART does not. Keying the
-    mapping on SMART would make every spun-down Toshiba look 'missing'."""
-    expr = _role_rule()["expr"]
-    assert "node_disk_info" in expr
-    assert "smartctl" not in expr
-
-
-def test_the_nvme_role_matches_both_exporters_device_names():
-    expr = _role_rule()["expr"]
-    assert '"(nvme[0-9]+)n[0-9]+"' in expr      # rewrites nvme0n1 -> nvme0 for smartctl
-
-
 # --------------------------------------------------- nothing pins sdX again
-
-
-def test_no_alert_rule_selects_a_disk_by_kernel_name():
-    offenders = [r.get("alert") or r.get("record") for r in _rules()
-                 if _KERNEL_DISK.search(r.get("expr", ""))]
-    assert offenders == []
 
 
 def test_no_catalogue_query_selects_a_disk_by_kernel_name():
@@ -132,18 +110,9 @@ def test_no_catalogue_query_selects_a_disk_by_kernel_name():
     assert offenders == []
 
 
-def test_disk_alerts_carry_the_role_label():
-    """Every per-disk SMART alert joins on the role, so its fingerprint is
-    the role and its summary names the drive a person recognises."""
-    for r in _rules():
-        expr = r.get("expr", "")
-        if r.get("alert") and "smartctl_device" in expr:
-            assert "homelab:disk_role:info" in expr, r["alert"]
-
-
-def test_stale_mapping_is_alerted_both_ways():
-    names = {r.get("alert") for r in _rules()}
-    assert {"DiskRoleUnresolved", "DiskUnmapped"} <= names
-    unresolved = next(r for r in _rules() if r.get("alert") == "DiskRoleUnresolved")
-    # a dead exporter must not page as six missing disks
-    assert 'up{job="proxmox-host-node-exporter"}' in unresolved["expr"]
+def test_disk_scoped_catalogue_queries_join_the_role():
+    """The hypervisor's SMART rows reach HEIM only through the role join, so
+    a missing homelab:disk_role:info rule shows up as no disk-health rows."""
+    queries = {q["qid"]: q for q in yaml.safe_load(CATALOGUE.read_text())["queries"]}
+    for qid in ("smart_status", "ssd_wear", "disk_crc"):
+        assert "homelab:disk_role:info" in queries[qid]["promql"], qid

@@ -124,7 +124,8 @@ port; the module docstrings name their source nodes and any deliberate divergenc
   `agents/investigator.yaml:tools`. Guards live in `heim/guards/`; give every new tool a
   guard or a hard-scoped client.
 - **New query** → append to `queries/daily.yaml` with a stable `qid`; add a matching
-  alert rule (same `qid` label) if you want fast-path detection.
+  alert rule (same `qid` label) if you want fast-path detection — in the ansible-homelab
+  repo (`stacks/ubuntu-server/prometheus/alerts.yml`), which owns the rules.
 - **Different models** → edit `agents/*.yaml`. The investigator loop is Anthropic-native;
   the analyst accepts any OpenRouter (OpenAI-compatible) model.
 - **New delivery channel** → add `channels/<x>.py`, expose it on `Runtime` with

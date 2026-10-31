@@ -73,8 +73,9 @@ Conventions:
 ### Invariants (do not break casually)
 
 1. **Fingerprint stability** — `host|qid|name`, anchored to deterministic metric rows,
-   never LLM wording. `qid`s in `config/queries/daily.yaml` must match the `qid` labels
-   in `prometheus/alerts.yml`.
+   never LLM wording. Where an alert rule watches the same signal as a query in
+   `config/queries/daily.yaml`, its `qid` label must be that query's qid. The rules live
+   in the ansible-homelab repo, not here (§3, "Prometheus & Loki configuration").
 2. **Dispatch lock** — `investigated=true` is set when an investigation is *queued*;
    only decline / needs-human / timeout reset it.
 3. **Poller ownership** — the poller resolves only `[alert] `-prefixed incidents.
@@ -91,11 +92,13 @@ Conventions:
 8. **Physical disks by role, never by kernel name** — the hypervisor's USB disks
    re-enumerate at boot, so `sda`/`sdb`/… move between drives. A disk's identity is its
    serial, mapped to a role (`photos`, `jellymedia`, `raid1-a`, …) in ONE place: the
-   `homelab:disk_role:info` recording rule in `prometheus/alerts.yml`. Queries and alerts
-   join on it (`* on(device) group_left(disk) homelab:disk_role:info`) and HEIM names a
-   disk series after its `disk` label. Never write `device="sdX"` in a rule or query —
-   `tests/test_disk_identity.py` fails if you do. Replacing a drive means editing its
-   serial there; `DiskRoleUnresolved` / `DiskUnmapped` fire until you do.
+   `homelab:disk_role:info` recording rule in ansible-homelab's
+   `stacks/ubuntu-server/prometheus/alerts.yml`. Queries and alerts join on it
+   (`* on(device) group_left(disk) homelab:disk_role:info`) and HEIM names a disk series
+   after its `disk` label. Never write `device="sdX"` in a query or rule —
+   `tests/test_disk_identity.py` fails for a query here, ansible-homelab's `make guards`
+   for a rule there. Replacing a drive means editing its serial there;
+   `DiskRoleUnresolved` / `DiskUnmapped` fire until you do.
 
 ---
 
@@ -129,6 +132,32 @@ Conventions:
   Proxmox guest the host name MUST equal the PVE guest name, or its `node_*` and
   `pve_*` series resolve to two different hosts (`config/hosts/heim.yaml` is the
   worked example).
+
+### Prometheus & Loki configuration (owned by ansible-homelab)
+
+HEIM reads Prometheus and writes Loki but no longer carries their configuration. The
+ansible-homelab repo deploys both stacks to ubuntu-server and holds the only copy of
+their compose files, `prometheus.yml`, `loki-config.yml` and the alert rules
+(`stacks/ubuntu-server/prometheus/alerts.yml`). Until 2026-10-31 this repo had its own
+`prometheus/` and `loki/` directories. They drifted: the disk-role rule committed here
+on 2026-10-05 never reached the live Prometheus, and the daily report silently lost its
+SMART rows for weeks. So the directories were removed rather than synced.
+
+HEIM's contract with those rules (ansible-homelab's README, "Prometheus alert rules",
+says the same from its side, and its `make guards` / `make alerts` enforce it):
+
+- every alert carries `severity` and `qid`; a rule watching the same signal as a daily
+  query reuses its qid (invariant 1);
+- a qid HEIM has never seen needs a category and naming rule in
+  `incidents/poller_logic.py` (`_DISK_HEALTH_QIDS`, `_DISK_NAMED_QIDS`, …), or the
+  poller files it under `other` with an empty name;
+- `homelab:disk_role:info` exists, and every per-disk alert carries its `disk` label
+  (invariant 8). HEIM's disk queries join the same rule, so a missing or undeployed
+  rule shows up as a daily report with no disk-health rows.
+
+So a change that needs a new alert, a new qid on an alert, or a disk-role change is two
+changes: the rule in ansible-homelab (then `make apply`) and, for a new qid, the poller
+here. Before trusting that a rule is live, check Prometheus' `/api/v1/rules`.
 
 ---
 
@@ -349,8 +378,9 @@ incident row, and threads `retry_of` through `InvestigationRequest` into the new
   fresh install cannot read as "just ran". All gauges: the store prunes history
   (§5.7), so even the totals can go down. Auth-exempt like `/healthz` (Prometheus
   cannot carry the basic-auth password, and the payload is aggregates only — no
-  hostnames, fingerprints or report text). `prometheus/prometheus.yml` carries the
-  scrape job, commented out.
+  hostnames, fingerprints or report text). ansible-homelab's
+  `stacks/ubuntu-server/prometheus/prometheus.yml` carries the scrape job, commented
+  out; the README shows it.
 - **Eval / replay harness** — ✅ implemented. `heim replay <id> [--model M]
   [--prompt-file F]` re-runs a stored investigation **offline**: same brief, same system
   prompt (rebuilt through `investigate.build_system_prompt`, or a candidate file put

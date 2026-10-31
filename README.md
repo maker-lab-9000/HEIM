@@ -109,8 +109,6 @@ heim/
 ├── grafana/                        # the "Homelab AI Operations" dashboard + Loki datasource
 │   ├── dashboards/homelab-ai-operations.json · loki-alerts-findings.json
 │   └── provisioning/datasources/loki.yml
-├── loki/                           # docker-compose + config for the AI event store
-├── prometheus/                     # docker-compose, scrape config, and alerts.yml (fast-path rules)
 ├── tests/                          # 1029 tests, incl. faithful-port golden cases
 └── docs/ARCHITECTURE.md            # design, data flow, n8n→module provenance map
 ```
@@ -214,7 +212,16 @@ The pages:
 
 Dark, dense, resource-light: system fonts, ~17 KB of CSS, vendored htmx, no build
 step, no chart library. `/telemetry` exposes HEIM's own counters in Prometheus text
-format so your existing Prometheus/Grafana can watch the watcher.
+format so your existing Prometheus/Grafana can watch the watcher. Scrape it with a job
+like this (this homelab's copy sits commented out in the ansible-homelab repo's
+`stacks/ubuntu-server/prometheus/prometheus.yml`):
+
+```yaml
+- job_name: 'heim'
+  metrics_path: /telemetry
+  static_configs:
+    - targets: ['<heim-host>:8300']
+```
 
 It also *acts*, through plain forms (htmx is only an enhancement): queue an
 investigation from a host card or an incident, re-run one with fresh evidence,
@@ -347,7 +354,7 @@ Four knobs are worth setting deliberately:
 |---|---|
 | `model_prices` + `currency` | model id → `{input, output}` price **per million tokens**. Ships commented out with placeholder numbers — fill in your provider's current pricing and investigations, runs and the 24h tile start showing money. A model with no entry stays *unpriced*: the UI shows an em dash, never a made-up `$0.00`. |
 | `investigator_models` | exact model ids offered when *triggering* an investigation — a compact select next to every `INVESTIGATE` button and `heim investigate --model X`. Empty (the default) renders no select and every run uses the investigator agent's own model. The chosen model overrides that agent for **that run only** and is recorded on the investigation row, so costs and tool usage segment by it. List only ids you also priced in `model_prices`. |
-| `threshold_detection` + `threshold_severity` + `threshold_consecutive` | open incidents from the **metric catalog's own** `warn`/`crit` bounds, not just from `prometheus/alerts.yml` rules and the daily LLM's findings. Evaluated inside the existing poll cycle, so the approval gate, the concurrency cap and false-positive mutes all apply unchanged. `threshold_consecutive` is the hysteresis: a series must be over its bound on that many **consecutive** polls before an incident opens (streaks survive a daemon restart), which is what keeps a single-scrape spike from burning an agent run. These incidents are marked `[metric] ` and this path resolves only its own. |
+| `threshold_detection` + `threshold_severity` + `threshold_consecutive` | open incidents from the **metric catalog's own** `warn`/`crit` bounds, not just from the Prometheus alert rules and the daily LLM's findings. Evaluated inside the existing poll cycle, so the approval gate, the concurrency cap and false-positive mutes all apply unchanged. `threshold_consecutive` is the hysteresis: a series must be over its bound on that many **consecutive** polls before an incident opens (streaks survive a daemon restart), which is what keeps a single-scrape spike from burning an agent run. These incidents are marked `[metric] ` and this path resolves only its own. |
 | `store_transcripts` | keep each agent's full message history with its investigation (capped at 512 KB, oldest turns dropped) for post-morteming a wrong root cause, and the prerequisite for `heim replay` (the transcript is the cassette). Off by default — it is large. |
 
 ### `config/hosts/*.yaml` — add a host, add a file
@@ -390,14 +397,18 @@ told to write the report), prompt template, tool list. The **analyst**
 The 49-query catalog (qid, category, label, unit, direction, warn/crit thresholds,
 verbatim PromQL) + the 3-day/3h window. Add or trim queries freely — `qid` is the stable
 identity used in incident fingerprints and alert-rule labels, so keep qids stable and
-matching your `prometheus/alerts.yml` labels.
+matching the `qid` labels of the Prometheus alert rules (in the ansible-homelab repo, see
+[Observability stack](#observability-stack-grafana--loki--prometheus)).
 
 ---
 
 ## Observability stack (Grafana / Loki / Prometheus)
 
-The repo ships the full self-hosted observability layer HEIM plugs into — deploy notes in
-[`grafana/README.md`](grafana/README.md) and [`prometheus/README.md`](prometheus/README.md):
+This repo ships the Grafana dashboards (deploy notes in
+[`grafana/README.md`](grafana/README.md)). Prometheus and Loki — their compose files,
+`prometheus.yml`, `loki-config.yml` and the alert rules — are configured and deployed by
+the **ansible-homelab** repo (`stacks/ubuntu-server/prometheus/` and `…/loki/`), which
+holds the only copy:
 
 - **`grafana/dashboards/homelab-ai-operations.json`** — the AI-operations dashboard
   (agent status, incidents, investigations, risk, infra trends & forecasts; 42 panels).
@@ -407,12 +418,25 @@ The repo ships the full self-hosted observability layer HEIM plugs into — depl
   stack interchangeably — including while running both side by side.
 - **`grafana/dashboards/loki-alerts-findings.json`** — a second, Loki-only view of alerts
   and LLM findings.
-- **`loki/`** — single-binary Loki with filesystem storage and 90-day retention.
-- **`prometheus/`** — scrape config and **`alerts.yml`**, the fast-path alert rules. This
-  one is functionally coupled to HEIM: each rule carries a `qid` label matching
-  [`config/queries/daily.yaml`](config/queries/daily.yaml), which is how the poller builds
-  the same `host|qid|name` incident fingerprints as the daily reconcile (no duplicate
-  incidents across the two paths). If you add rules, give them a `qid`.
+- **Loki** (ansible-homelab: `stacks/ubuntu-server/loki/`) — single-binary Loki with
+  filesystem storage and 90-day retention.
+- **Prometheus alert rules** (ansible-homelab: `stacks/ubuntu-server/prometheus/alerts.yml`)
+  — the fast-path rules HEIM's poller turns into incidents. They are functionally coupled
+  to HEIM, and that repo's README ("Prometheus alert rules") and `make guards` hold the
+  contract:
+  - every rule carries a `qid` label; where it watches the same signal as a query in
+    [`config/queries/daily.yaml`](config/queries/daily.yaml) it reuses that qid, which is
+    how the poller builds the same `host|qid|name` fingerprints as the daily reconcile (no
+    duplicate incidents across the two paths). A brand-new qid also needs a category and
+    naming rule in `src/heim/incidents/poller_logic.py`, or the poller files it under
+    "other" and never investigates it;
+  - the `homelab:disk_role:info` recording rule maps each hypervisor disk's serial to a role,
+    and every per-disk alert carries that role as a `disk` label. HEIM's disk queries join
+    the same rule, so if it is missing (or not deployed), HEIM's daily report has no
+    SMART, SSD-wear or CRC rows.
+
+  Changing a rule therefore means an ansible-homelab change (`make alerts`, `make guards`,
+  then `make apply`), not a HEIM one.
 
 ### Where each piece runs (this deployment)
 
