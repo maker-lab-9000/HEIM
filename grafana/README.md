@@ -25,15 +25,16 @@ Two datasources feed one dashboard:
 
 ## 1. Deploy Loki (on the ubuntu-server VM, data on `/docker-data`)
 
+The ansible-homelab repo deploys Loki (`stacks/ubuntu-server/loki/`, to `/opt/loki/`) —
+its compose file and `loki-config.yml` are not in this repo. Once it is up:
+
 ```bash
-sudo install -d -o 10001 -g 10001 /docker-data/loki   # Loki runs as uid 10001
-cd loki && docker compose up -d
 curl -s http://localhost:3100/ready                    # -> ready
 ```
 
 Loki listens on `:3100`, published on all interfaces so both n8n (same VM, outside Loki's
 docker network) and Grafana (different VM) can reach it at `http://YOUR_SERVER_IP:3100`.
-Config: single-binary, filesystem storage, **90-day retention** (`loki/loki-config.yml`).
+Config: single-binary, filesystem storage, **90-day retention** (`loki-config.yml` in ansible-homelab).
 
 > **Auth:** `auth_enabled: false` + published port = readable/writable by anyone on the
 > LAN/tailnet. For a homelab this is usually fine; to lock it down, firewall `:3100` to the
@@ -84,7 +85,8 @@ one value per stream. The stat/donut queries therefore extract a single field
 
 ## Files
 
-- `loki/docker-compose.yml`, `loki/loki-config.yml` — Loki service (deploy on ubuntu-server).
+- Loki's compose file and `loki-config.yml` — in the ansible-homelab repo
+  (`stacks/ubuntu-server/loki/`), which deploys them to ubuntu-server.
 - `grafana/provisioning/datasources/loki.yml` — Grafana Loki datasource.
 - `grafana/dashboards/homelab-ai-operations.json` — the dashboard model.
 - `grafana/dashboards/loki-alerts-findings.json` — standalone **Alerts & Findings** dashboard (Loki-only): incident stream + severity trends, fast-path `[alert]`-born incidents, LLM findings/recommendations, category status, **AI investigation reports** (root cause + remediation from `investigation` events, agent phase timeline), raw event logs. Import the same way; map only `DS_LOKI`.

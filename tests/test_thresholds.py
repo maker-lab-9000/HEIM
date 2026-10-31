@@ -295,7 +295,7 @@ def _range(qdef: QueryDef, metric: dict, values: list[float]) -> dict:
 
 
 #: The three-way parity cases. Every qid here exists in BOTH
-#: ``config/queries/daily.yaml`` and ``prometheus/alerts.yml``, so all three
+#: ``config/queries/daily.yaml`` and the alert rules (ansible-homelab), so all three
 #: paths can genuinely see the same underlying event and MUST name it
 #: identically. The label sets are the ones the shipped PromQL produces.
 NODE_INSTANCE = "10.0.0.10:9100"

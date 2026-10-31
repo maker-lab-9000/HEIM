@@ -5,7 +5,7 @@ Why this exists
 ``config/queries/daily.yaml`` carries a ``warn``/``crit`` bound for every
 query, and ``/metrics`` paints ``ok|warn|crit|na`` pills from them — but until
 now those flags were *presentational only*. The two paths that could open an
-incident were the alert poller (only rules written in ``prometheus/alerts.yml``)
+incident were the alert poller (only rules written in Prometheus' ``alerts.yml``)
 and the twice-daily LLM analysis (only findings the model chose to raise). So a
 metric could sit at crit on the dashboard indefinitely with nothing happening.
 Observed live: ``pve_vm_cpu`` on ``qemu/100`` read 102.5% against ``crit: 95``

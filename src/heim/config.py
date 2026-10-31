@@ -176,7 +176,7 @@ class Settings(BaseModel):
     #: out follow in config order (alphabetical by filename).
     host_color_order: list[str] = []
     # Open incidents from metric thresholds (config/queries/daily.yaml
-    # warn/crit), not just from prometheus/alerts.yml rules. Evaluated on the
+    # warn/crit), not just from the Prometheus alert rules. Evaluated on the
     # poller's cadence, inside the same cycle.
     threshold_detection: bool = True
     # Which flag counts as "over threshold": `crit` only, or `warn` (which

@@ -725,13 +725,14 @@ def test_exposition_never_uses_exponent_notation():
     assert "e+" not in text and "e-" not in text
 
 
-def test_prometheus_config_documents_the_scrape_job():
-    text = (ROOT / "prometheus/prometheus.yml").read_text()
-    assert "# - job_name: 'heim'" in text
-    assert "#   metrics_path: /telemetry" in text
-    # commented out: enabling it is the operator's decision, and the target is
-    # a placeholder rather than somebody's real address
-    assert "\n  - job_name: 'heim'" not in text
+def test_readme_documents_the_scrape_job():
+    """The Prometheus config lives in the ansible-homelab repo now (commented
+    out there: enabling it is the operator's decision), so the README is
+    where a HEIM reader finds the job — with a placeholder target rather than
+    somebody's real address."""
+    text = (ROOT / "README.md").read_text()
+    assert "- job_name: 'heim'" in text
+    assert "metrics_path: /telemetry" in text
     assert "<heim-host>:8300" in text
 
 
