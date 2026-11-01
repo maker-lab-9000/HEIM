@@ -320,3 +320,16 @@ async def test_daily_run_leaves_uptime_incidents_alone(rt, monkeypatch):
     row = next(r for r in rt.store.all_rows() if r["fingerprint"] == fp)
     assert row["status"] == "open"
     assert row["missedRuns"] == 1
+
+
+def test_check_lines_reports_monitors_and_report_only_targets(rt):
+    text = _metrics(("web", "10.0.0.10", 1), ("k8s-w1", "10.0.0.24", 1))
+    assert uptime.check_lines(text, rt.config) == [
+        (True, "uptime kuma", "2 active monitors"),
+        (None, "uptime kuma",
+         "1 monitor(s) map to no HEIM host (report only): k8s-w1"),
+    ]
+    assert uptime.check_lines(None, rt.config) == [
+        (False, "uptime kuma",
+         "unreachable, or no monitors in /metrics (check UPTIME_KUMA)")]
+    assert uptime.check_lines("", rt.config)[0][0] is False

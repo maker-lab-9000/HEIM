@@ -335,6 +335,8 @@ email recipients — therefore lives in `.env` next to the secrets:
 | `HEIM_SSH_USER` | the read-only SSH user (default `monitoring-agent`) |
 | `HEIM_TELEGRAM_CHAT_ID` | approval/report chat |
 | `HEIM_EMAIL_TO` / `HEIM_EMAIL_FROM` | report delivery |
+| `HEIM_UPTIME_KUMA_URL` | Uptime Kuma base URL (`uptime_kuma.url`); empty = the source is off |
+| `UPTIME_KUMA` | Uptime Kuma API key (Settings → API Keys); HEIM reads `/metrics` with HTTP basic auth, empty username |
 
 `config/settings.yaml` can be copied from the example **unchanged**; a reference
 without a default that is unset fails at startup naming the variable and file. In
@@ -437,6 +439,24 @@ holds the only copy:
 
   Changing a rule therefore means an ansible-homelab change (`make alerts`, `make guards`,
   then `make apply`), not a HEIM one.
+
+### Uptime Kuma (service outages)
+
+When `HEIM_UPTIME_KUMA_URL` and `UPTIME_KUMA` are set, the 5-minute poll also reads
+Uptime Kuma's `/metrics`. Every unpaused monitor is expected up; a down monitor opens an
+`[uptime] ` incident and sends **one Telegram message per host**. Hosts HEIM can
+investigate (ubuntu-server via SSH, home-assistant, and homelab for the `availability`
+category) get an approval-gated investigation; **heim and any address that is not a HEIM
+host (e.g. the k8s nodes) are report-only**. A recovery message follows after 2 up polls.
+A monitor that goes down again within an hour of recovering reopens quietly, with at most
+one line an hour ("keeps flapping (N outages since HH:MM)") and a "stable again" line after
+an hour up. After 2 failed polls HEIM says "Can't reach Uptime Kuma" instead of guessing.
+`heim check` reports the monitor count and any monitor that maps to no HEIM host.
+
+To silence a flapping or irrelevant monitor, use the dashboard's **mute** on its incident
+(a suppression, like any false positive). The daily email does **not** list `[uptime] `
+incidents (the daily run ignores them, so it cannot close an outage Uptime Kuma couldn't
+report on); Telegram and the dashboard are where they show.
 
 ### Where each piece runs (this deployment)
 

@@ -32,6 +32,7 @@ from heim.incidents.uptime_logic import (
     is_uptime_row,
     map_host,
     parse_metrics,
+    unmapped_monitors,
 )
 from heim.pipelines.investigate import dispatch_all, extend_pending_investigation
 from heim.runtime import Runtime
@@ -59,6 +60,22 @@ async def fetch_metrics(url: str, api_key: str | None, *,
     except Exception as exc:
         log.warning("Uptime Kuma fetch failed: %s", exc.__class__.__name__)
         return None
+
+
+def check_lines(text: str | None, cfg: Config) -> list[tuple[bool | None, str, str]]:
+    """``heim check`` lines for Uptime Kuma, from a fetched ``/metrics`` body."""
+    monitors = parse_metrics(text) if text else []
+    if not monitors:
+        return [(False, "uptime kuma",
+                 "unreachable, or no monitors in /metrics (check UPTIME_KUMA)")]
+    out: list[tuple[bool | None, str, str]] = [
+        (True, "uptime kuma", f"{len(monitors)} active monitors")]
+    stray = unmapped_monitors(monitors, cfg.settings.instance_host_map, cfg.hosts)
+    if stray:
+        names = ", ".join(m.name for m in stray)
+        out.append((None, "uptime kuma",
+                    f"{len(stray)} monitor(s) map to no HEIM host (report only): {names}"))
+    return out
 
 
 def pending_uptime_investigations(store) -> dict[str, int]:

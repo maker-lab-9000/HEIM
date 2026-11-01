@@ -35,7 +35,7 @@ edges** (tools, channels, pipelines).
 
 | Area | Features |
 |---|---|
-| Detection | 49-query trend catalog · per-day averages, change %, warn/crit flags · Prometheus alert rules with `qid` labels (fast path) · anti-flap hysteresis (2 clear polls / 2 missed runs) |
+| Detection | 49-query trend catalog · per-day averages, change %, warn/crit flags · Prometheus alert rules with `qid` labels (fast path) · anti-flap hysteresis (2 clear polls / 2 missed runs) · Uptime Kuma poll half (`[uptime]` incidents, one Telegram message per host, flap-quiet reopen; report-only for non-investigable hosts) |
 | Incidents | SQLite store · deterministic fingerprints (`host\|qid\|name`) · open/clearing/resolved lifecycle · warn→crit escalation · per-fingerprint dispatch lock · poller-vs-daily ownership split (`[alert]` prefix) · false-positive verdicts + timed/forever suppression (pipeline-level, analyst hint) |
 | Agent | Anthropic-native tool loop · soft prompt budget + hard in-loop step cap · retries · real token accounting (run total **and** per-turn attribution per step) · per-run cost from a config price table · optional size-capped full transcript · output salvage (`## Summary` contract, leaked-tool-call detection) · offline replay of a stored run against another model/prompt from its recorded tool results (`heim replay`) · agent-written tooling feedback indexed per tool |
 | Tools | Guarded read-only SSH · PromQL instant/range with token-compact encoding · metric discovery · GET-allowlisted HA and Proxmox APIs · per-call Telegram live feed + local `audit.jsonl` |
@@ -78,7 +78,7 @@ Conventions:
    in the ansible-homelab repo, not here (§3, "Prometheus & Loki configuration").
 2. **Dispatch lock** — `investigated=true` is set when an investigation is *queued*;
    only decline / needs-human / timeout reset it.
-3. **Poller ownership** — the poller resolves only `[alert] `-prefixed incidents.
+3. **Poller ownership** — the poller resolves only `[alert] `, threshold detection only `[metric] `, the Uptime Kuma half only `[uptime] `-prefixed incidents.
 4. **Read-only agent** — every tool is read-only by guard *and* by OS/API privilege.
    Never add a mutating tool without a separate approval design.
 5. **Loki schema compatibility** — `job=homelab-ai-monitor`, low-cardinality labels,
@@ -113,6 +113,7 @@ Conventions:
 | Grafana | indirect (reads Loki/Prometheus) | `grafana/` dashboards | n/a |
 | Telegram | bidirectional (notify, live feed, approvals) | `channels/telegram` | bot token |
 | SMTP / Gmail | write (reports) | `channels/email` | app password |
+| Uptime Kuma | read (/metrics) | `pipelines/uptime`, `incidents/uptime_logic` | API key (basic auth) |
 | Home Assistant | read (agent tool) + write (report sensors) | `tools/ha_api`, `channels/ha` | non-admin LLAT |
 | Proxmox VE | read (agent tool) | `tools/proxmox_api` | auditor-role API token |
 | SSH (target hosts) | read-only diagnostics | `tools/ssh_diagnostic` | dedicated key + scoped sudoers |

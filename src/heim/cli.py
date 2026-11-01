@@ -2,7 +2,7 @@
 
     heim check                         validate config + connectivity
     heim daily [--dry-run]             run the daily analysis pipeline once
-    heim poll [--dry-run]              run one poll cycle (alerts + thresholds)
+    heim poll [--dry-run]              run one poll cycle (alerts + thresholds + uptime)
     heim thresholds [--all]            current value, flag and streak per query
     heim investigate --host H ...      run one investigation
     heim investigate --fingerprint FP  ... rebuilt from the stored incident
@@ -119,6 +119,11 @@ async def _cmd_check(args) -> int:
                     line(False, "home assistant API", str(exc))
             else:
                 line(None, "home assistant API", "HA_TOKEN not set — pushes will be skipped")
+        if cfg.settings.uptime_kuma.url:
+            from heim.pipelines.uptime import check_lines, fetch_metrics
+            body = await fetch_metrics(cfg.settings.uptime_kuma.url, env("UPTIME_KUMA"))
+            for status, label, detail in check_lines(body, cfg):
+                line(status, label, detail)
         if cfg.settings.telegram:
             token = env("TELEGRAM_BOT_TOKEN")
             if token:
@@ -536,7 +541,7 @@ def _build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("daily", help="run the daily analysis pipeline once")
     d.add_argument("--dry-run", action="store_true")
 
-    pl = sub.add_parser("poll", help="run one alert-poller cycle")
+    pl = sub.add_parser("poll", help="run one poll cycle (alerts, thresholds, Uptime Kuma)")
     pl.add_argument("--dry-run", action="store_true")
 
     th = sub.add_parser("thresholds",

@@ -1,6 +1,6 @@
 """The fast-path poll cycle (port of n8n PAM 11, plus threshold detection).
 
-Two independent halves ride the same 5-minute cadence:
+Three independent halves ride the same 5-minute cadence:
 
 1. the **alert** half — polls Prometheus ``/api/v1/alerts``, diffs firing
    alerts against open incidents (pure logic in ``heim.incidents.poller_logic``)
@@ -9,13 +9,16 @@ Two independent halves ride the same 5-minute cadence:
 2. the **threshold** half — evaluates the metric catalog's own ``warn``/``crit``
    bounds (pure logic in ``heim.pipelines.thresholds``) so a metric sitting at
    crit can open an incident on its own, which until now only an
-   ``alerts.yml`` rule or the daily LLM could do.
+   ``alerts.yml`` rule or the daily LLM could do;
+3. the **uptime** half — reads Uptime Kuma's ``/metrics`` (``heim.pipelines.uptime``,
+   pure logic in ``heim.incidents.uptime_logic``): a down monitor opens an
+   ``[uptime] `` incident, one Telegram message per host.
 
 They share everything downstream — the store, ``rt.notify``, Loki, the
 suppression filters and ``dispatch_all`` — so the approval gate, the
 concurrency cap and the false-positive mutes apply to both unchanged. They are
 deliberately *independent*: a failure in one half never aborts the other, and
-the summary carries both sets of counters.
+the summary carries every half's counters.
 """
 from __future__ import annotations
 
