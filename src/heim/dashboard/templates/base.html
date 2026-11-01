@@ -7,7 +7,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="HEIM, the homelab event and incident monitor: open incidents, agent heartbeats and investigations, read at a glance.">
-<title>{{ page_title|capitalize }} · HEIM</title>
+<title>{{ page_title|ucfirst }} · HEIM</title>
 <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/heim.css">
 <script src="/static/htmx.min.js" defer></script>
@@ -54,7 +54,7 @@
 <div class="console">
 <header class="topbar">
   <div>
-    <h1 class="ptitle">{{ page_title|capitalize }}</h1>
+    <h1 class="ptitle">{{ page_title|ucfirst }}</h1>
     {%- if date_line %}
     <p class="date">{{ date_line }}</p>
     {%- endif %}

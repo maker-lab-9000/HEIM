@@ -400,6 +400,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         fp=fmt.fingerprint, pill=fmt.status_pill, tool_key=fmt.tool_key,
         command=fmt.command_of,
     )
+    templates.env.filters["ucfirst"] = lambda v: str(v)[:1].upper() + str(v)[1:]
     templates.env.filters.update(mval=fmt.value, mtrend=fmt.trend,
                                  mdelta=fmt.delta)
     # host badge colors are handed out by position, so the filter is bound to
@@ -713,11 +714,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         by_agent, invs, running, now_iso = _agent_inputs()
         row = next(r for r in _agent_rows(cfg, by_agent, invs, running, now_iso)
                    if r["key"] == key)
-        return page(request, "agent.html", page_title=f"agents / {row['name'].lower()}",
+        return page(request, "agent.html", page_title=f"agents / {row['name']}",
                     agent=row, cadence=_cadence_text(cfg, key),
                     evidence=_AGENT_EVIDENCE.get(key),
-                    backup_file=str(((by_agent.get("backup") or [{}])[0].get("detail") or {})
-                                    .get("backup_file") or "") if key == "backup" else "",
+                    backup_file=_last_backup_file(by_agent.get("backup", []))
+                    if key == "backup" else "",
                     runs=(_investigator_runs(_own_runs(invs)) if key == "investigator"
                           else _agent_run_table(by_agent.get(key, []), row["cadence_s"], now_iso)),
                     has_invs=key == "investigator")
@@ -1621,6 +1622,12 @@ _AGENT_EVIDENCE = {
     "investigator": ("/investigations", "Investigations"),
     "security": ("/security", "Security audit"),
 }
+
+
+def _last_backup_file(runs: list[dict]) -> str:
+    """The file the newest *successful* backup run wrote (runs newest first)."""
+    ok = next((r for r in runs if r.get("ok")), None)
+    return str(((ok or {}).get("detail") or {}).get("backup_file") or "")
 
 
 def _cadence_text(cfg: Config, key: str) -> str:

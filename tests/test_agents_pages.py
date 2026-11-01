@@ -38,7 +38,7 @@ def test_agent_detail_shows_runs_strip_and_evidence_link(tmp_path, monkeypatch):
 
     client = _client(tmp_path, monkeypatch, seed)
     html = client.get("/agents/alert_poller").text
-    assert "<title>Agents / alert poller" in html
+    assert "<title>Agents / Alert poller" in html
     assert "every 5 min" in html
     assert 'href="/incidents"' in html
     assert "Prometheus unreachable" in html
@@ -99,3 +99,17 @@ def test_rail_marks_agents_current(tmp_path, monkeypatch):
         html = client.get(path).text
         assert re.search(r'<a href="/agents" class="on" aria-current="page">', html), path
         assert not re.search(r'<a href="/" class="on"', html)
+
+
+def test_title_keeps_case_and_backup_file_is_newest_successful(tmp_path, monkeypatch):
+    def seed(s):
+        _beat(s, "backup", 90, detail={"backup_file": "heim-20261031.sqlite3"})
+        _beat(s, "backup", 30, ok=False, error="disk full")
+
+    client = _client(tmp_path, monkeypatch, seed)
+    html = client.get("/agents/backup").text
+    assert "<title>Agents / Backup verifier" in html
+    assert '<h1 class="ptitle">Agents / Backup verifier</h1>' in html
+    assert "heim-20261031.sqlite3" in html
+    assert 'class="ihost"><span class="lamp red"' in html
+    assert "<title>Overview" in client.get("/").text
