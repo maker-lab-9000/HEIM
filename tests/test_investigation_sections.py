@@ -254,8 +254,17 @@ def test_waiting_age_and_replay_of_still_shown(tmp_path, monkeypatch):
     assert re.search(r'<span class="lamp orange" aria-hidden="true"></span>waiting 2h 0[45]m', meta)
     assert "No report yet" in _section(pending, "interpretation", "proposed")
     assert pending.count('<section class="panel kind"') == 4
-    # the approve / decline pair still lands on the page, after the brief
-    assert pending.index("Brief sent to the agent") < pending.index('value="approve"')
+    # ruling 18: a pending run puts the decision first, in the header card,
+    # once; the brief follows further down
+    assert pending.index('class="card head"') < pending.index('value="approve"') \
+        < pending.index('id="h-observations"') < pending.index("Brief sent to the agent")
+    assert pending.count('value="approve"') == 1 and pending.count('class="acts"') == 1
+    assert '<h3 class="label">your decision</h3>' in pending
+
+    # a finished run keeps its keys at the end, after the brief
+    done = client.get("/investigations/2").text
+    assert done.index('id="h-completed"') < done.index('class="acts"')
+    assert done.count('class="acts"') == 1 and "your decision" not in done
 
     replay = client.get("/investigations/3").text
     assert 'href="/investigations/2">replay of #2</a>' in replay

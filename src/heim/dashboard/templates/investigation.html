@@ -45,6 +45,16 @@
       </tr>
     </tbody>
   </table>
+  {#- a run that waits on the operator puts the decision first (ruling 18):
+      the overview sends them here to decide; every other run keeps its keys
+      at the end of the page -#}
+  {%- set decide_first = inv.status in ('pending_approval', 'needs_human') %}
+  {%- if decide_first %}
+  <div class="decide">
+    <h3 class="label">{{ 'your decision' if inv.status == 'pending_approval' else 'next step' }}</h3>
+    {% include "partials/_inv_acts.html" %}
+  </div>
+  {%- endif %}
   {%- if inv.retry_of %}
   <p class="headline"><span class="eyebrow">lineage</span>
     <a class="mono" href="/investigations/{{ inv.retry_of }}">re-run of #{{ inv.retry_of }}</a></p>
@@ -159,9 +169,11 @@
 
 {#- the operator's keys, after the brief they act on: approve or decline
     the ask, or re-run it with fresh evidence -#}
+{%- if not decide_first %}
 <section class="card runacts" aria-label="Actions on this run">
   {% include "partials/_inv_acts.html" %}
 </section>
+{%- endif %}
 
 {% if outcome %}
 <p class="outcome {{ outcome.cls }}"><span class="dot" aria-hidden="true"></span>{{ outcome.text }}</p>

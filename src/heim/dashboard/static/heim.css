@@ -349,7 +349,8 @@ footer.foot { display: flex; justify-content: space-between; gap: 16px; padding-
 .imeta .c-agent, .imeta .c-fp { width: 19%; }
 .ihost { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0; }
 .imeta .lamp { margin-right: 8px; }
-.trig { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.decide .acts { margin-top: 8px; }
+.decide, .trig { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
 .kind .prose + .prose { margin-top: 16px; }
 .runacts .acts { margin: 0; }
 .transcript { margin: 0; padding: 0; list-style: none; }
