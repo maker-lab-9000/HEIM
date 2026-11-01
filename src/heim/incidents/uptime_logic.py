@@ -248,6 +248,31 @@ def _resolved_row(r: dict, now_iso: str) -> dict:
     }
 
 
+def _age_s(iso: str, now_iso: str) -> float | None:
+    a, b = _parse(iso or ""), _parse(now_iso)
+    return None if a is None or b is None else (b - a).total_seconds()
+
+
+def _flap_reopen(prior: dict, st: dict, name: str, host: str, now_iso: str,
+                 ) -> tuple[dict, dict, str | None]:
+    """A new outage inside the flap window: the SAME row, quietly open again.
+
+    Returns ``(row, state_changes, flap_line_or_None)``; the line goes out at
+    most once per hour per monitor."""
+    n = max(_int(st.get("flap_outages")), 1) + 1
+    row = {**_resolved_row(prior, now_iso), "status": "open",
+           "firstSeen": str(prior.get("firstSeen") or now_iso),
+           "lastSeen": now_iso, "resolvedAt": "",
+           "timesSeen": _int(prior.get("timesSeen")) + 1}
+    changes: dict = {"up_polls": 0, "absent_polls": 0, "flap_outages": n}
+    age = _age_s(st.get("flap_msg_at") or "", now_iso)
+    line = None
+    if age is None or age >= FLAP_WINDOW_S:
+        changes["flap_msg_at"] = now_iso
+        line = f"🔁 {name} on {host} keeps flapping ({n} outages in the last hour)"
+    return row, changes, line
+
+
 def _group_for(host: str, rows: list[dict], mons: list[Monitor], mapped: bool,
                investigable: bool, pending_id: int | None, now_iso: str,
                tz: str) -> DownGroup:
@@ -301,8 +326,13 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
     ``monitors=None`` is a failed poll: nothing about monitors is written or
     resolved, only the failure counter moves.
     """
+    # a resolved row is only a candidate for a quiet flap reopen, never "open"
     open_by_fp = {str(r["fingerprint"]): r for r in open_rows
-                  if r and r.get("fingerprint") and is_uptime_row(r)}
+                  if r and r.get("fingerprint") and is_uptime_row(r)
+                  and r.get("status") != "resolved"}
+    prior_by_fp = {str(r["fingerprint"]): r for r in open_rows
+                   if r and r.get("fingerprint") and is_uptime_row(r)
+                   and r.get("status") == "resolved"}
     foreign = {str(r["fingerprint"]) for r in open_rows
                if r and r.get("fingerprint") and not is_uptime_row(r)}
     if monitors is None:
@@ -369,8 +399,16 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
                 if st.get("up_polls") or st.get("absent_polls"):
                     put(fp, up_polls=0, absent_polls=0)
                 continue
+            age = _age_s(st.get("last_recovered_at") or "", now_iso)
+            if fp in prior_by_fp and age is not None and 0 <= age < FLAP_WINDOW_S:
+                row, changes, line = _flap_reopen(prior_by_fp[fp], st, m.name, host, now_iso)
+                d.rows_to_upsert.append(row)
+                put(fp, **changes)
+                if line:
+                    d.messages.append(line)
+                d.state_changed = True
+                continue
             investigable = mapped_host is not None and is_investigable_host(mapped_host, ctx.routing)
-            pending = ctx.pending_by_host.get(host) if investigable else None
             row = {
                 "fingerprint": fp, "host": host, "metric": m.name,
                 "severity": "critical", "status": "open", "firstSeen": now_iso,
@@ -390,13 +428,21 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
                 put(fp, up_polls=0, absent_polls=0)
         elif m.status == UP:
             if r is None:
+                if (_int(st.get("flap_outages")) > 0
+                        and (_age_s(st.get("last_recovered_at") or "", now_iso) or 0) >= FLAP_WINDOW_S):
+                    d.messages.append(f"✅ {m.name} on {host} stable again after "
+                                      f"{_int(st.get('flap_outages'))} outages")
+                    clears.append(fp)
+                    writes.pop(fp, None)
+                    d.state_changed = True
                 continue
             ups = _int(st.get("up_polls")) + 1
             if ups >= RESOLVE_AFTER:
                 row = resolve(fp, r)
                 put(fp, up_polls=0, absent_polls=0, last_recovered_at=now_iso)
-                recoveries.setdefault(row["host"], []).append((
-                    row["firstSeen"], f"{row['metric']} (down {_down_minutes(row['firstSeen'], now_iso)} min)"))
+                if not _int(st.get("flap_outages")):  # flapping recoveries are silent
+                    recoveries.setdefault(row["host"], []).append((
+                        row["firstSeen"], f"{row['metric']} (down {_down_minutes(row['firstSeen'], now_iso)} min)"))
             else:
                 put(fp, up_polls=ups, absent_polls=0)
         else:  # pending / maintenance: no change, but the monitor is present
