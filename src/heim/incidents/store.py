@@ -195,6 +195,23 @@ CREATE TABLE IF NOT EXISTS threshold_streaks (
     last_seen   TEXT NOT NULL DEFAULT ''
 );
 
+-- Uptime Kuma source: per-monitor hysteresis/flap state, and the count of
+-- consecutive failed polls of Kuma itself. Persisted so a daemon restart
+-- cannot reset a recovery streak, a flap window or the unreachable counter.
+CREATE TABLE IF NOT EXISTS uptime_monitors (
+    fingerprint       TEXT PRIMARY KEY,
+    up_polls          INTEGER NOT NULL DEFAULT 0,
+    absent_polls      INTEGER NOT NULL DEFAULT 0,
+    last_recovered_at TEXT NOT NULL DEFAULT '',
+    flap_outages      INTEGER NOT NULL DEFAULT 0,
+    flap_msg_at       TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS uptime_source (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    fail_polls  INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_steps_investigation ON investigation_steps (investigation_id, seq);
 CREATE INDEX IF NOT EXISTS idx_tool_feedback_tool ON tool_feedback (tool, id);
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings (run_id);
@@ -1037,6 +1054,72 @@ class IncidentStore:
             ).rowcount
         self._db.commit()
         return int(n)
+
+    # ------------------------------------------------ Uptime Kuma state
+
+    def uptime_states(self) -> dict[str, dict]:
+        """``fingerprint -> {fingerprint, up_polls, absent_polls,
+        last_recovered_at, flap_outages, flap_msg_at}`` for every tracked monitor."""
+        cur = self._db.execute(
+            "SELECT fingerprint, up_polls, absent_polls, last_recovered_at,"
+            " flap_outages, flap_msg_at FROM uptime_monitors"
+        )
+        return {str(r["fingerprint"]): {
+                    "fingerprint": str(r["fingerprint"]),
+                    "up_polls": int(r["up_polls"] or 0),
+                    "absent_polls": int(r["absent_polls"] or 0),
+                    "last_recovered_at": str(r["last_recovered_at"] or ""),
+                    "flap_outages": int(r["flap_outages"] or 0),
+                    "flap_msg_at": str(r["flap_msg_at"] or "")}
+                for r in cur.fetchall()}
+
+    def save_uptime_states(self, rows: list[dict]) -> None:
+        """Upsert monitor-state rows (the keys of :meth:`uptime_states`)."""
+        for row in rows or []:
+            self._db.execute(
+                """INSERT INTO uptime_monitors (fingerprint, up_polls, absent_polls,
+                       last_recovered_at, flap_outages, flap_msg_at)
+                   VALUES (:fingerprint, :up_polls, :absent_polls,
+                       :last_recovered_at, :flap_outages, :flap_msg_at)
+                   ON CONFLICT(fingerprint) DO UPDATE SET
+                     up_polls = excluded.up_polls,
+                     absent_polls = excluded.absent_polls,
+                     last_recovered_at = excluded.last_recovered_at,
+                     flap_outages = excluded.flap_outages,
+                     flap_msg_at = excluded.flap_msg_at""",
+                {"fingerprint": str(row.get("fingerprint") or ""),
+                 "up_polls": int(row.get("up_polls") or 0),
+                 "absent_polls": int(row.get("absent_polls") or 0),
+                 "last_recovered_at": str(row.get("last_recovered_at") or ""),
+                 "flap_outages": int(row.get("flap_outages") or 0),
+                 "flap_msg_at": str(row.get("flap_msg_at") or "")},
+            )
+        self._db.commit()
+
+    def clear_uptime_states(self, fingerprints) -> int:
+        """Forget monitors that no longer need tracking; returns rows deleted."""
+        n = 0
+        for fp in fingerprints or []:
+            n += self._db.execute(
+                "DELETE FROM uptime_monitors WHERE fingerprint = ?", (str(fp),)
+            ).rowcount
+        self._db.commit()
+        return int(n)
+
+    def uptime_fail_polls(self) -> int:
+        """Consecutive failed polls of Uptime Kuma itself (0 when unset)."""
+        r = self._db.execute(
+            "SELECT fail_polls FROM uptime_source WHERE id = 1"
+        ).fetchone()
+        return int(r["fail_polls"] or 0) if r else 0
+
+    def set_uptime_fail_polls(self, n: int) -> None:
+        self._db.execute(
+            """INSERT INTO uptime_source (id, fail_polls) VALUES (1, ?)
+               ON CONFLICT(id) DO UPDATE SET fail_polls = excluded.fail_polls""",
+            (int(n),),
+        )
+        self._db.commit()
 
     # -------------------------------------------- backup & retention (§5.7)
 

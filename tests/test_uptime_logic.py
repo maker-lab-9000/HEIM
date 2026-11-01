@@ -1,3 +1,4 @@
+from heim.incidents.store import IncidentStore
 from heim.incidents.types import HostRouting
 from heim.incidents.uptime_logic import (
     Monitor,
@@ -83,3 +84,39 @@ def test_unmapped_monitors_lists_report_only_targets():
     a = Monitor("1", "a", "http", "http://10.0.0.10", "10.0.0.10", 1)
     b = Monitor("2", "b", "http", "http://10.0.0.24", "10.0.0.24", 1)
     assert unmapped_monitors([a, b], m, {"ubuntu-server"}) == [b]
+
+
+# ------------------------------------------------------------------ store
+
+
+def _row(fp, **kw):
+    base = {"fingerprint": fp, "up_polls": 0, "absent_polls": 0,
+            "last_recovered_at": "", "flap_outages": 0, "flap_msg_at": ""}
+    base.update(kw)
+    return base
+
+
+def test_uptime_states_round_trip_and_survive_reopen(tmp_path):
+    path = tmp_path / "u.sqlite3"
+    store = IncidentStore(path)
+    a, b = "h|uptime_down|a", "h|uptime_down|b"
+    store.save_uptime_states([_row(a, up_polls=1), _row(b, flap_outages=2)])
+    store.save_uptime_states([_row(a, up_polls=2, absent_polls=1,
+                                   last_recovered_at="2026-01-01T00:00:00Z",
+                                   flap_msg_at="2026-01-01T01:00:00Z")])
+    got = IncidentStore(path).uptime_states()
+    assert set(got) == {a, b}
+    assert got[a] == _row(a, up_polls=2, absent_polls=1,
+                          last_recovered_at="2026-01-01T00:00:00Z",
+                          flap_msg_at="2026-01-01T01:00:00Z")
+    assert got[b]["flap_outages"] == 2
+    assert store.clear_uptime_states([a]) == 1
+    assert set(IncidentStore(path).uptime_states()) == {b}
+
+
+def test_fail_polls_default_and_persist(tmp_path):
+    path = tmp_path / "f.sqlite3"
+    store = IncidentStore(path)
+    assert store.uptime_fail_polls() == 0
+    store.set_uptime_fail_polls(2)
+    assert IncidentStore(path).uptime_fail_polls() == 2
