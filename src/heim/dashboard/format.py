@@ -470,17 +470,21 @@ def bar_chart(points: list[dict], *, value_key: str = "tokens",
     fmt_exact = fmt_exact or _exact
     points = list(points or [])
     span = CHART_BASELINE - CHART_TOP
+    # a null observation is a gap, never a zero: it keeps its slot, draws no
+    # bar, and says "no data"; a real 0 is still the stub mark
+    gaps = [p.get(value_key) is None for p in points]
     values = [max(float(p.get(value_key) or 0), 0.0) for p in points]
     top = max(values) if values else 0.0
     peak = values.index(top) if values and top > 0 else -1
     bars = []
-    for i, (point, value) in enumerate(zip(points, values)):
+    for i, (point, value, gap) in enumerate(zip(points, values, gaps)):
         h = max(round(span * value / top), CHART_STUB) if top > 0 else CHART_STUB
-        amount = fmt_exact(value)
+        amount = "no data" if gap else fmt_exact(value)
         bars.append({
             "date": str(point.get("date") or ""),
             "weekday": str(point.get("weekday") or ""),
             "value": value,
+            "gap": gap,
             "x": i * CHART_SLOT + CHART_GAP // 2,
             "w": CHART_SLOT - CHART_GAP,
             "y": CHART_BASELINE - h,
@@ -489,7 +493,8 @@ def bar_chart(points: list[dict], *, value_key: str = "tokens",
             "mid": i * CHART_SLOT + CHART_SLOT // 2,
             "is_max": i == peak,
             "label": fmt_label(value) if i == peak else "",
-            "title": f"{point.get('date') or ''} · {amount} {unit}".rstrip(),
+            "title": f"{point.get('date') or ''} · {amount}"
+                     f"{'' if gap else ' ' + unit}".rstrip(),
         })
     return {
         "bars": bars,
@@ -502,6 +507,92 @@ def bar_chart(points: list[dict], *, value_key: str = "tokens",
         "max": int(top) if float(top).is_integer() else top,
         "total": int(sum(values)) if all(float(v).is_integer() for v in values) else sum(values),
         "busiest": bars[peak] if peak >= 0 else None,
+        "n": len(bars) - sum(gaps),      # observations behind the chart
+        "gaps": sum(gaps),
+    }
+
+
+# ------------------------------------------------- metrics row: 3-day trend
+
+#: the label's own question, keyed on the catalog label (lower-cased). Anything
+#: not listed gets the honest default rather than a guess.
+_QUESTIONS = {
+    "filesystem used": "Is the disk filling?",
+    "inodes used": "Are inodes running out?",
+    "memory used": "Is memory running out?",
+    "swap used": "Is swap growing?",
+    "cpu busy": "Is the CPU saturated?",
+    "drive temp": "Is the drive running hot?",
+    "max sensor temp": "Is anything running hot?",
+    "nvme wear": "How worn is the drive?",
+    "disk i/o util": "Is the disk saturated?",
+    "pool used": "Is the pool filling?",
+}
+
+
+def chart_question(label: str | None) -> str:
+    """The one-line question a metric row's trend answers."""
+    text = str(label or "").strip()
+    return _QUESTIONS.get(text.lower()) or f"How is {text or 'this metric'} trending?"
+
+
+TREND_SLOT = 24
+TREND_GAP = 4
+TREND_TOP = 4
+TREND_BASELINE = 40
+TREND_HEIGHT = 44
+TREND_LABEL_H = 12       # least vertical room between two threshold labels
+
+
+def trend_chart(day3d: list | None, unit: object = None, *, direction: str = "",
+                warn: float | None = None, crit: float | None = None,
+                label: str | None = None, window: str = "3 days") -> dict:
+    """Geometry for a metrics row's small trend: one bar per day average.
+
+    Pure. A ``None`` day is a gap (no bar, ``gap`` True), a real 0 keeps the
+    ``CHART_STUB`` mark. The catalog's ``warn``/``crit`` become labelled
+    hairlines only when ``direction`` is ``high`` or ``low`` (the other
+    directions have no numeric line to draw), and the axis stretches to hold
+    them so a line is never clipped off the chart.
+    """
+    days = list(day3d or [])
+    obs = [None if v is None else float(v) for v in days]
+    present = [v for v in obs if v is not None]
+    lines = []
+    if direction in ("high", "low"):
+        lines = [{"kind": k, "value": float(v)}
+                 for k, v in (("warn", warn), ("crit", crit)) if v is not None]
+    axis = max([abs(v) for v in present] + [abs(ln["value"]) for ln in lines] + [0.0])
+    span = TREND_BASELINE - TREND_TOP
+    bars = []
+    for i, v in enumerate(obs):
+        gap = v is None
+        h = TREND_BASELINE - TREND_TOP if gap else (
+            max(round(span * max(v, 0.0) / axis), CHART_STUB) if axis > 0 else CHART_STUB)
+        bars.append({
+            "gap": gap, "x": i * TREND_SLOT, "w": TREND_SLOT - TREND_GAP,
+            "y": TREND_BASELINE - h, "h": h,
+            "title": f"day {i + 1} of {len(obs)} · "
+                     + ("no data" if gap else value(v, unit)),
+        })
+    for ln in lines:
+        ln["y"] = TREND_BASELINE - round(span * max(ln["value"], 0.0) / axis) if axis > 0 \
+            else TREND_BASELINE
+        ln["title"] = f"{ln['kind']} at {value(ln['value'], unit)}"
+    # text sits beside the hairline; two labels that would collide are pushed apart
+    last = None
+    for ln in sorted(lines, key=lambda x: x["y"]):
+        ty = ln["y"] + 4
+        if last is not None and ty - last < TREND_LABEL_H:
+            ty = last + TREND_LABEL_H
+        ln["ty"] = last = min(ty, TREND_HEIGHT - 2)
+    width = len(bars) * TREND_SLOT
+    return {
+        "bars": bars, "lines": lines, "n": len(present), "gaps": len(obs) - len(present),
+        "width": width, "full_width": width + 32 if lines else width,
+        "height": TREND_HEIGHT, "baseline": TREND_BASELINE,
+        "question": chart_question(label), "unit": str(unit or "") or "value",
+        "window": window,
     }
 
 

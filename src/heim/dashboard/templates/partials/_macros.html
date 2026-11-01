@@ -93,6 +93,14 @@
     day — share it, which is why `id` is a parameter: the clip path is
     document-scoped. Bars are drawn CHART_RADIUS too tall and clipped at the
     baseline, so the corner radius rounds the top only. -#}
+{#- the one caption every chart wears: the question it answers, then its unit,
+    window and the observations behind it (and how many of them were gaps) -#}
+{% macro chart_caption(question, unit, window, n, gaps=0) -%}
+<p class="ccap"><span class="cq">{{ question }}</span>
+  <span class="mono ink3">{{ unit }} · {{ window }} · {{ n }} observation{{ '' if n == 1 else 's' }}
+  {%- if gaps %} · {{ gaps }} no data{% endif %}</span></p>
+{%- endmacro %}
+
 {% macro daychart(c, aria, id='tchart') -%}
 <svg class="tchart" width="{{ c.width }}" height="{{ c.height }}"
      viewBox="0 0 {{ c.width }} {{ c.height }}" role="img" aria-label="{{ aria }}">
@@ -100,8 +108,14 @@
     width="{{ c.width }}" height="{{ c.baseline }}"/></clipPath></defs>
   <g clip-path="url(#{{ id }}-clip)">
     {%- for b in c.bars %}
-    <rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.rh }}"
+    {%- if b.gap %}
+    <rect class="gap" x="{{ b.x }}" y="{{ c.baseline - c.span }}" width="{{ b.w }}"
+          height="{{ c.span }}"><title>{{ b.title }}</title></rect>
+    {%- else %}
+    {#- fill stays the legacy token on the attribute; .tchart .bar paints it --ink -#}
+    <rect class="bar" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.rh }}"
           rx="{{ c.radius }}" fill="var(--ember)"><title>{{ b.title }}</title></rect>
+    {%- endif %}
     {%- endfor %}
   </g>
   <line class="base" x1="0" y1="{{ c.baseline + 0.5 }}"

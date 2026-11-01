@@ -910,6 +910,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         chart = fmt.bar_chart(
             reader.read(lambda s: s.cost_by_day(14, now.isoformat())),
             value_key="cost", unit="", fmt_label=money, fmt_exact=money)
+        chart["unit"] = f"{currency} per day"
         return page(request, "costs.html", page_title="costs", window=key,
                     windows=list(COST_WINDOWS), cost_chart=chart, **view)
 
@@ -2137,6 +2138,17 @@ def _metrics_view(payload: dict | None, cfg: Config, host: str, category: str,
             by_host.setdefault(str(row.get("host") or ""), {}) \
                    .setdefault(cat, []).append(row)
 
+    catalog = {q.qid: q for q in load_queries(cfg.queries_path)}
+
+    def charted(row: dict) -> dict:
+        # the catalog owns direction and thresholds; the (cached) payload row
+        # does not carry them, so the chart is a copy, never a mutation
+        q = catalog.get(str(row.get("qid") or ""))
+        return {**row, "chart": fmt.trend_chart(
+            row.get("day3d"), row.get("unit"), label=row.get("label"),
+            direction=q.dir if q else "", warn=q.warn if q else None,
+            crit=q.crit if q else None)}
+
     sections, total = [], 0
     for name in _host_order(cfg, by_host):
         groups = by_host[name]
@@ -2147,7 +2159,7 @@ def _metrics_view(payload: dict | None, cfg: Config, host: str, category: str,
         sections.append({
             "name": name,
             "flag": _FLAG_BY_RANK[worst],
-            "cats": [{"name": c, "rows": sorted(groups[c], key=_row_key)}
+            "cats": [{"name": c, "rows": [charted(r) for r in sorted(groups[c], key=_row_key)]}
                      for c in order if c in groups],
         })
     counts = payload.get("counts") or {}

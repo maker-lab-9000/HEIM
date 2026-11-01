@@ -457,16 +457,28 @@ details > summary:hover { color: var(--ink); }
 .mtbl { table-layout: fixed; }
 .mtbl .c-flag { width: 11%; }
 .mtbl .c-cur, .mtbl .c-avg { width: 12%; }
-.mtbl .c-trend { width: 20%; }
+.mtbl .c-trend { width: 28%; }
 .mtbl .c-delta { width: 10%; }
 .mtbl .c-mname { overflow-wrap: anywhere; }
-.mtbl .c-trend, .mtbl .c-cur, .mtbl .c-avg { overflow: hidden; text-overflow: ellipsis; }
+.mtbl .c-cur, .mtbl .c-avg { overflow: hidden; text-overflow: ellipsis; }
+.mtbl .c-trend { overflow: hidden; }
 
 /* the day charts: server-rendered SVG */
 .tchart { display: block; max-width: 100%; height: auto; margin: 4px 0 8px; }
 .tchart text { font-family: var(--mono); font-size: 11px; fill: var(--ink-3); }
 .tchart .val { fill: var(--ink-2); }
 .tchart .base { stroke: var(--line); stroke-width: 1; }
+.tchart .bar { fill: var(--ink); }
+.tchart .gap { fill: none; stroke: var(--grille); stroke-width: 1; stroke-dasharray: 2 2; }
+.tchart .thr { stroke-width: 1; }
+.tchart line.warn { stroke: var(--warn); }
+.tchart line.crit { stroke: var(--crit); }
+.tchart.sm { margin: 4px 0 2px; }
+.tchart.sm text { font-size: 10px; }
+.rchart { margin: 0; white-space: normal; }
+.ccap { margin: 0 0 4px; font-size: var(--text-13); line-height: 1.3; }
+.ccap .cq { display: block; font-weight: 600; color: var(--ink); }
+.rchart .ccap { margin: 0; font-size: 11px; }
 .tsum { font-size: var(--text-13); color: var(--ink-3); }
 
 /* phones: the rail becomes a wrapped row of lamp-chips above the page */

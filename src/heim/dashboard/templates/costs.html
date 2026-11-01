@@ -83,6 +83,8 @@
 <section class="card">
   <h2 class="eyebrow">spend by day</h2>
   {%- if cost_chart.total %}
+  {{ m.chart_caption("What did the agents cost?", cost_chart.unit, "14 days",
+                     cost_chart.n, cost_chart.gaps) }}
   {{ m.daychart(cost_chart, "Money spent per day over the last 14 days, most "
                             "expensive day " ~ cost_chart.busiest.date, "cchart") }}
   <p class="tsum mono">14d: {{ cost_chart.total|money }} · busiest

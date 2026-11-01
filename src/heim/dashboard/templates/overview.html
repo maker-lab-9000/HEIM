@@ -242,6 +242,8 @@
 <section class="card">
   <h2 class="eyebrow">token usage</h2>
   {%- if token_chart.total %}
+  {{ m.chart_caption("Is agent spend steady?", "tokens per day", "14 days",
+                     token_chart.n, token_chart.gaps) }}
   {{ m.daychart(token_chart, "Tokens spent per day over the last 14 days, busiest day "
                              ~ token_chart.busiest.date) }}
   <p class="tsum mono">14d: {{ token_chart.total|tokens }} · busiest {{ token_chart.busiest.weekday }}
