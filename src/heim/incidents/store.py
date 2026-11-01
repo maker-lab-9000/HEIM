@@ -679,6 +679,54 @@ class IncidentStore:
                  "tokens": int(r["tokens"] or 0)}
                 for r in cur.fetchall()]
 
+    def tool_calls(self, agent_names: list[str], limit: int = 50,
+                   since: str | None = None) -> list[dict]:
+        """The newest tool calls of the investigations run by ``agent_names``.
+
+        Steps carry no clock of their own, so a call is dated by its
+        investigation's ``started_at`` (``since`` filters on it). Newest
+        first; ties break on the step id so the order is stable.
+        """
+        if not agent_names:
+            return []
+        marks = ",".join("?" * len(agent_names))
+        sql = f"""SELECT s.id AS id, s.investigation_id AS investigation_id, s.seq AS seq,
+                         s.tool AS tool, s.args_json AS args_json,
+                         s.blocked AS blocked, s.duration_ms AS duration_ms,
+                         i.started_at AS at, i.agent_name AS agent_name
+                  FROM investigation_steps s
+                  JOIN investigations i ON i.id = s.investigation_id
+                  WHERE i.agent_name IN ({marks})"""
+        params: list = list(agent_names)
+        if since:
+            sql += " AND i.started_at >= ?"
+            params.append(since)
+        sql += " ORDER BY i.started_at DESC, s.id DESC LIMIT ?"
+        params.append(int(limit))
+        return [{"id": int(r["id"]), "investigation_id": int(r["investigation_id"] or 0),
+                 "seq": int(r["seq"] or 0), "tool": str(r["tool"] or ""),
+                 "args_json": str(r["args_json"] or ""), "blocked": bool(r["blocked"]),
+                 "duration_ms": int(r["duration_ms"] or 0), "at": str(r["at"] or ""),
+                 "agent_name": str(r["agent_name"] or "")}
+                for r in self._db.execute(sql, params).fetchall()]
+
+    def tool_call_counts(self, agent_names: list[str], since: str | None = None) -> dict:
+        """``{"calls": n, "blocked": n}`` over the same rows ``tool_calls``
+        reads (blocked calls are calls)."""
+        if not agent_names:
+            return {"calls": 0, "blocked": 0}
+        marks = ",".join("?" * len(agent_names))
+        sql = f"""SELECT COUNT(*) AS calls, COALESCE(SUM(s.blocked), 0) AS blocked
+                  FROM investigation_steps s
+                  JOIN investigations i ON i.id = s.investigation_id
+                  WHERE i.agent_name IN ({marks})"""
+        params: list = list(agent_names)
+        if since:
+            sql += " AND i.started_at >= ?"
+            params.append(since)
+        r = self._db.execute(sql, params).fetchone()
+        return {"calls": int(r["calls"] or 0), "blocked": int(r["blocked"] or 0)}
+
     # ------------------------------------------------------- tool feedback
 
     def add_tool_feedback(self, investigation_id: int, tool: str, suggestion: str,

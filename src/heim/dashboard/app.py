@@ -54,12 +54,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from heim.agents import (
     AGENT_KEYS,
     BACKUP_TIME,
+    TOOL_AGENTS,
+    TOOL_HISTORY_LIMIT,
     Tick,
     bucket_runs,
     agent_specs,
     investigable_hosts,
     investigator_status,
     overall_condition,
+    short_args,
+    tool_summary,
     run_strip,
     status_of,
 )
@@ -652,6 +656,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         first_seen = _first_seen(reader, window_s)
         agent_rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s, window_runs,
                                  first_seen)
+        _add_tool_counts(reader, agent_rows, window_s, now_iso)
         needs_you = _needs_you(pending, troubled)
         attention_rows = _attention_rows(open_incidents, troubled, invs,
                                          set(investigable_hosts(cfg)))
@@ -710,6 +715,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s,
                            _window_runs(reader, window_s, now_iso),
                            _first_seen(reader, window_s))
+        _add_tool_counts(reader, rows, window_s, now_iso)
         return page(request, "agents.html", page_title="agents", window=window,
                     **_agents_panel(rows, request.query_params.get("agents", "")),
                     base_href="/agents")
@@ -723,7 +729,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         by_agent, invs, running, now_iso = _agent_inputs()
         row = next(r for r in _agent_rows(cfg, by_agent, invs, running, now_iso)
                    if r["key"] == key)
+        calls = (reader.read(lambda s: s.tool_calls(TOOL_AGENTS[key], TOOL_HISTORY_LIMIT))
+                 if key in TOOL_AGENTS else None)
+        history = None if calls is None else [
+            {**c, "short": (a := short_args(c["tool"], c["args_json"]))[0], "full": a[1]}
+            for c in calls]
         return page(request, "agent.html", page_title=f"agents / {row['name']}",
+                    tool_history=history, tool_stats=tool_summary(calls or []),
                     agent=row, cadence=_cadence_text(cfg, key),
                     evidence=_AGENT_EVIDENCE.get(key),
                     backup_file=_last_backup_file(by_agent.get("backup", []))
@@ -1659,6 +1671,18 @@ def _strip_label(strip: list[Tick]) -> str:
     parts += [f"{missed} missed"] if missed else []
     parts += ["the latest not received"] if strip[-1].state == "open" else []
     return ", ".join(parts if len(parts) > 1 else parts + ["all succeeded"])
+
+
+def _add_tool_counts(reader, rows: list[dict], window_s: int | None, now_iso: str) -> None:
+    """Give each agent row its ``tools`` figure: ``None`` for an agent that
+    never calls tools, else ``{"calls", "blocked"}`` in the window (live
+    counts the last 24 h). A step is dated by its investigation's start."""
+    since = (datetime.fromisoformat(now_iso)
+             - timedelta(seconds=window_s or WINDOWS["24h"])).isoformat()
+    for r in rows:
+        names = TOOL_AGENTS.get(r["key"])
+        r["tools"] = (reader.read(lambda s, n=names: s.tool_call_counts(n, since))
+                      if names else None)
 
 
 def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],

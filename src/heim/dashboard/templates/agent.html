@@ -72,4 +72,50 @@
   <p class="empty">No runs recorded yet.</p>
   {%- endif %}
 </section>
+
+<section class="panel" aria-labelledby="h-tools">
+  <div class="panel-head"><h2 id="h-tools">Tool history</h2></div>
+  {%- if tool_history is none %}
+  <p class="empty">This agent does not call tools.</p>
+  {%- elif tool_history %}
+  <div class="inc"><table class="tbl dense">
+    <caption class="label">Last {{ tool_history|length }} calls by tool</caption>
+    <thead><tr>
+      <th scope="col">Tool</th><th scope="col" class="num">Calls</th>
+      <th scope="col" class="num">Blocked</th><th scope="col" class="num">Avg duration</th>
+    </tr></thead>
+    <tbody>
+      {%- for t in tool_stats %}
+      <tr>
+        <td>{{ m.tool(t.tool) }}</td>
+        <td class="num">{{ t.calls }}</td>
+        <td class="num">{{ t.blocked or DASH }}</td>
+        <td class="num">{{ '%.0f'|format(t.avg_ms) }} ms</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  <div class="inc"><table class="tbl dense">
+    <caption class="label">Calls, newest first</caption>
+    <thead><tr>
+      <th scope="col">Time</th><th scope="col">Tool</th><th scope="col">Args</th>
+      <th scope="col" class="num">Duration</th><th scope="col">Blocked</th><th scope="col">Investigation</th>
+    </tr></thead>
+    <tbody>
+      {%- for c in tool_history %}
+      <tr>
+        <td>{{ m.when(c.at) }}</td>
+        <td>{{ m.tool(c.tool) }}</td>
+        <td class="mono" title="{{ c.full }}">{{ c.short }}</td>
+        <td class="num">{{ c.duration_ms }} ms</td>
+        <td>{% if c.blocked %}<span class="word crit">blocked</span>{% else %}{{ DASH }}{% endif %}</td>
+        <td><a href="/investigations/{{ c.investigation_id }}">#{{ c.investigation_id }}</a></td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table></div>
+  {%- else %}
+  <p class="empty">No tool calls recorded yet.</p>
+  {%- endif %}
+</section>
 {% endblock %}

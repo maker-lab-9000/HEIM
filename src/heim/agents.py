@@ -14,6 +14,58 @@ from datetime import datetime, timezone
 
 AGENT_KEYS = ("alert_poller", "thresholds", "uptime", "investigator", "daily", "security", "backup")
 
+#: agent key -> the ``investigations.agent_name`` values whose steps are that
+#: agent's tool calls. The other agents never call tools.
+TOOL_AGENTS = {"investigator": ["investigator"], "security": ["security_auditor"]}
+
+#: calls shown in a tool history, and the width of its args column
+TOOL_HISTORY_LIMIT = 50
+ARGS_WIDTH = 80
+
+#: the args field each query-like tool is best summarised by (the keys the
+#: tools' YAML declare: command / promql / logql)
+_ARG_KEYS = {"ssh_diagnostic": "command", "prometheus_query": "promql", "loki_query": "logql"}
+
+
+def short_args(tool: str, args_json: str, width: int = ARGS_WIDTH) -> tuple[str, str]:
+    """``(short, full)`` text for a step's stored args.
+
+    The command for ``ssh_diagnostic``, the query for ``prometheus_query`` and
+    ``loki_query``, else a compact ``key=value`` line. ``short`` is cut to
+    ``width`` characters with an ellipsis; ``full`` is the untruncated text.
+    Unparseable args are shown verbatim, never dropped.
+    """
+    import json
+    try:
+        args = json.loads(args_json) if args_json else {}
+    except (TypeError, ValueError):
+        args = None
+    if isinstance(args, dict):
+        key = _ARG_KEYS.get(tool)
+        if key and args.get(key):
+            full = str(args[key])
+        else:
+            full = " ".join(f"{k}={v}" for k, v in args.items())
+    else:
+        full = str(args_json or "") if args is None else str(args)
+    full = " ".join(full.split())
+    short = full if len(full) <= width else full[: width - 1].rstrip() + "\u2026"
+    return short, full
+
+
+def tool_summary(calls: list[dict]) -> list[dict]:
+    """Per-tool calls, blocked and average duration (ms) over ``calls``,
+    busiest tool first."""
+    acc: dict[str, list[int]] = {}
+    for c in calls:
+        a = acc.setdefault(str(c.get("tool") or ""), [0, 0, 0])
+        a[0] += 1
+        a[1] += 1 if c.get("blocked") else 0
+        a[2] += int(c.get("duration_ms") or 0)
+    rows = [{"tool": t, "calls": n, "blocked": b, "avg_ms": d / n} for t, (n, b, d) in acc.items()]
+    return sorted(rows, key=lambda r: (-r["calls"], r["tool"]))
+
+
 #: The nightly backup slot (hour, minute); the daemon schedules from this too.
 BACKUP_TIME = (3, 30)
 

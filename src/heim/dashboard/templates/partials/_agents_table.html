@@ -24,7 +24,8 @@
   <table class="tbl flg">
     <thead><tr>
       <th scope="col" colspan="2">Agent / scope</th><th scope="col">Execution state</th>
-      <th scope="col">Last success</th><th scope="col" colspan="2">{{ {"24h": "Last 24 h", "7d": "Last 7 d"}.get(window, "Last 24 runs") }}</th>
+      <th scope="col">Last success</th><th scope="col" class="num">Tool calls</th>
+      <th scope="col" colspan="2">{{ {"24h": "Last 24 h", "7d": "Last 7 d"}.get(window, "Last 24 runs") }}</th>
     </tr></thead>
     <tbody>
       {%- for a in agents %}
@@ -33,6 +34,11 @@
         <td class="scope">{{ a.scope }}</td>
         <td><span class="state">{{ m.lamp(a.status.state|lamp) }}{{ a.status.word }}</span></td>
         <td class="when">{% if a.last_ok %}{{ m.when(a.last_ok) }}{% else %}{{ DASH }}{% endif %}</td>
+        {%- if a.tools is none %}
+        <td class="num ink3" title="this agent does not call tools">{{ DASH }}</td>
+        {%- else %}
+        <td class="num">{{ a.tools.calls }}{% if a.tools.blocked %}<span class="ink3"> · {{ a.tools.blocked }} blocked</span>{% endif %}</td>
+        {%- endif %}
         <td>{% if a.strip %}<span class="runs" role="img" aria-label="{{ a.strip_label }}">
           {%- for t in a.strip %}<i{% if t.state != 'ok' %} class="{{ t.state }}"{% endif %}></i>{% endfor -%}
           </span>{% else %}{{ DASH }}{% endif %}</td>

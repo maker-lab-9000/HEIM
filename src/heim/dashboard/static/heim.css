@@ -246,6 +246,8 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: var(--text-13); }
 .tbl tr.flag td { background: var(--flag-bg); }
 .tbl tr.flag td:first-child { box-shadow: inset 4px 0 0 var(--signal); }
 .tbl.ftbl th:first-child, .tbl.ftbl td:first-child, .tbl.flg th:first-child, .tbl.flg td:first-child { padding-left: 12px; }
+.tbl caption { padding: 4px 0 10px; text-align: left; }
+.panel .inc + .inc { margin-top: 28px; }
 .tbl .c-id { width: 4.5em; }
 .loadmore, .loadmore td { margin: 12px 0; text-align: center; }
 .ghost td { color: var(--ink-3); }
