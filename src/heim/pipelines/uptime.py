@@ -9,7 +9,10 @@ Rules this edge owns:
 
 * a failed fetch AND a body with no monitors are both ``monitors=None`` — an
   empty list would count as a successful poll and could falsely close outages;
-* in dry-run nothing at all is written (no incidents, state or fail counter).
+* in dry-run nothing at all is written (no incidents, state or fail counter);
+* rows and state are written first, so every later step (each host group,
+  the messages, the Loki events, the dispatches) is isolated: one failing
+  never drops the rest, and the dispatches go last.
 """
 from __future__ import annotations
 
@@ -154,6 +157,7 @@ async def run_uptime(rt: Runtime, run_at: str, *, dispatch_concurrently: bool) -
         "uptime_monitors": len(monitors or []),
         "uptime_upserts": len(dec.rows_to_upsert),
         "uptime_groups": len(dec.groups),
+        # what WOULD be dispatched; a live poll recounts what actually was
         "uptime_dispatches": sum(1 for g in dec.groups
                                  if g.investigable and g.pending_investigation_id is None),
         "uptime_messages": len(dec.messages),
@@ -175,32 +179,72 @@ async def run_uptime(rt: Runtime, run_at: str, *, dispatch_concurrently: bool) -
     if dec.rows_to_upsert:
         store.upsert(dec.rows_to_upsert)
 
+    # Rows and state are already written, so nothing below may be skipped by
+    # one failing step: a group, message or event lost here is never re-sent.
+    # Each group is isolated, and the dispatches go LAST — sequential dispatch
+    # (CLI poll) waits on approvals, which must not hold back the messages.
     routing = cfg.routing()
+    items: list[dict] = []
     for g in dec.groups:
-        if g.pending_investigation_id is not None:
-            if extend_pending_investigation(rt, g.pending_investigation_id, g.findings):
-                await rt.notify(g.headline)
-                continue
-            # It left pending_approval meanwhile: this is a fresh outage again.
-            g.headline = down_headline(g.host, g.items, True, True, None,
-                                       run_at, cfg.settings.timezone)
-            g.pending_investigation_id = None
-        if g.investigable:
-            item = {**g.rows[0],
-                    "hostRole": host_role_for(g.host, routing),
-                    "sshHost": ssh_host_for(g.host, routing),
-                    "findings": g.findings, "headline": g.headline}
-            await dispatch_all(rt, [item], concurrent=dispatch_concurrently,
-                               trigger=TRIGGER)
-        else:
-            await rt.notify(g.headline)
+        try:
+            item = await _handle_group(rt, g, routing, run_at)
+            if item is not None:
+                items.append(item)
+        except Exception:
+            log.exception("uptime: handling the new outages on %s failed", g.host)
 
     for m in dec.messages:
-        await rt.notify(m)
-    if dec.loki_events:
-        await rt.emit_loki(dec.loki_events)
-    if dec.state_changed:
-        await rt.emit_loki([compute_state(store.open_rows(), routing=routing,
-                                          trigger=TRIGGER,
-                                          last_run_ms=int(time.time() * 1000))])
+        try:
+            await rt.notify(m)
+        except Exception:
+            log.exception("uptime: notify failed")
+    try:
+        if dec.loki_events:
+            await rt.emit_loki(dec.loki_events)
+        if dec.state_changed:
+            await rt.emit_loki([compute_state(store.open_rows(), routing=routing,
+                                              trigger=TRIGGER,
+                                              last_run_ms=int(time.time() * 1000))])
+    except Exception:
+        log.exception("uptime: Loki events failed")
+
+    dispatched = 0
+    if items:
+        try:
+            await dispatch_all(rt, items, concurrent=dispatch_concurrently,
+                               trigger=TRIGGER)
+            dispatched = len(items)
+        except Exception:
+            log.exception("uptime: dispatching %d investigation(s) failed", len(items))
+    counters["uptime_dispatches"] = dispatched
     return counters
+
+
+async def _handle_group(rt: Runtime, g, routing, run_at: str) -> dict | None:
+    """Announce one host's new outages; returns its dispatch item, if any.
+
+    A group that joins a pending investigation is announced here and needs no
+    dispatch. If folding in fails (or the investigation left
+    ``pending_approval``), the group is a fresh outage with its own prompt."""
+    if g.pending_investigation_id is not None:
+        try:
+            joined = extend_pending_investigation(rt, g.pending_investigation_id,
+                                                  g.findings)
+        except Exception:
+            log.exception("uptime: folding %s into pending investigation #%s "
+                          "failed — dispatching fresh", g.host,
+                          g.pending_investigation_id)
+            joined = False
+        if joined:
+            await rt.notify(g.headline)
+            return None
+        g.headline = down_headline(g.host, g.items, True, True, None,
+                                   run_at, rt.config.settings.timezone)
+        g.pending_investigation_id = None
+    if not g.investigable:
+        await rt.notify(g.headline)
+        return None
+    return {**g.rows[0],
+            "hostRole": host_role_for(g.host, routing),
+            "sshHost": ssh_host_for(g.host, routing),
+            "findings": g.findings, "headline": g.headline}

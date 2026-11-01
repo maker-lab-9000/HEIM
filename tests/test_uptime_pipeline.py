@@ -235,8 +235,8 @@ async def test_a_pending_investigation_that_left_pending_gets_a_new_dispatch(
         return False
 
     monkeypatch.setattr(uptime, "extend_pending_investigation", left)
-    await rig.poll(_metrics(("n8n", "10.0.0.10", 0)))
-    assert len(rig.dispatched) == 1
+    out = await rig.poll(_metrics(("n8n", "10.0.0.10", 0)))
+    assert len(rig.dispatched) == 1 and out["uptime_dispatches"] == 1
     head = rig.dispatched[0][1][0]["headline"]
     assert head.startswith("🔴 Down on ubuntu-server: n8n (")
     assert "Also down" not in head and f"#{iid}" not in head
@@ -404,3 +404,79 @@ async def test_same_name_checks_never_fake_a_recovery_or_a_flap(rt, rig, monkeyp
     assert [n for n in rig.notes if "Back up" in n] == [
         "✅ Back up on ubuntu-server: Web (down 35 min)"]
     assert rt.store.open_rows() == []
+
+
+async def test_one_raising_group_never_drops_the_rest_of_the_poll(rt, rig, monkeypatch):
+    """Rows and state are written before the groups are handled, so a group
+    that raises must not swallow the other groups, the recovery messages or
+    the Loki events: they would never be sent again."""
+    order: list[str] = []
+    loki: list[dict] = []
+
+    async def emit(events):
+        loki.extend(events)
+
+    monkeypatch.setattr(rt, "emit_loki", emit)
+    t = lambda m: f"2026-11-01T10:{m:02d}:00.000+01:00"  # noqa: E731
+    for m, st in ((0, 0), (5, 1)):
+        _at(rt, monkeypatch, t(m))
+        await rig.poll(_metrics(("old", "10.0.0.4", st)), t(m))
+    rig.notes.clear(); rig.dispatched.clear(); loki.clear()
+
+    real_role = uptime.host_role_for
+
+    def role(host, routing):
+        if host == "ubuntu-server":
+            raise RuntimeError("boom")
+        return real_role(host, routing)
+
+    monkeypatch.setattr(uptime, "host_role_for", role)
+    real_notify, real_dispatch = rt.notify, uptime.dispatch_all
+
+    async def notify(text):
+        order.append("notify")
+        await real_notify(text)
+
+    async def dispatch(rt_, items, **kw):
+        order.append("dispatch")
+        await real_dispatch(rt_, items, **kw)
+
+    monkeypatch.setattr(rt, "notify", notify)
+    monkeypatch.setattr(uptime, "dispatch_all", dispatch)
+    _at(rt, monkeypatch, t(10))
+    out = await rig.poll(_metrics(("n8n", "10.0.0.10", 0), ("ha", "10.0.0.3", 0),
+                                  ("old", "10.0.0.4", 1)), t(10))
+
+    assert [i["host"] for _, items in rig.dispatched for i in items] == ["home-assistant"]
+    assert out["uptime_dispatches"] == 1
+    assert any(n.startswith("✅ Back up on heim: old") for n in rig.notes), rig.notes
+    assert {e["fields"]["fingerprint"] for e in loki if e.get("event") == "incident"} >= {
+        "ubuntu-server|uptime_down|n8n", "home-assistant|uptime_down|ha",
+        "heim|uptime_down|old"}
+    assert any(e.get("event") == "state" for e in loki)
+    assert order[-1] == "dispatch" and order.count("dispatch") == 1
+
+
+async def test_a_raising_fold_in_falls_back_to_a_fresh_dispatch(rt, rig, monkeypatch):
+    iid = rt.store.create_investigation(
+        host="ubuntu-server", trigger="uptime", status="pending_approval",
+        findings_json="[]", brief_md="x")
+
+    def broken(_rt, _id, _f):
+        raise RuntimeError("store locked")
+
+    monkeypatch.setattr(uptime, "extend_pending_investigation", broken)
+    out = await rig.poll(_metrics(("n8n", "10.0.0.10", 0)))
+    assert len(rig.dispatched) == 1 and out["uptime_dispatches"] == 1
+    head = rig.dispatched[0][1][0]["headline"]
+    assert head.startswith("🔴 Down on ubuntu-server: n8n (")
+    assert f"#{iid}" not in head and rig.notes == []
+
+
+async def test_dispatches_count_only_what_was_dispatched(rt, rig):
+    rt.store.create_investigation(
+        host="ubuntu-server", trigger="uptime", status="pending_approval",
+        findings_json="[]", brief_md="x")
+    out = await rig.poll(_metrics(("n8n", "10.0.0.10", 0), ("ha", "10.0.0.3", 0)))
+    assert out["uptime_dispatches"] == 1      # n8n folded in, ha dispatched
+    assert [i["host"] for _, items in rig.dispatched for i in items] == ["home-assistant"]
