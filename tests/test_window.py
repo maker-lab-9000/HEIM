@@ -27,6 +27,10 @@ def test_bucket_runs_marks_fail_miss_and_open():
     assert ticks[13].state == "ok"
     assert [i for i, t in enumerate(ticks) if t.state == "ok"] == [13, 23]
     assert all(t.state == "miss" for i, t in enumerate(ticks) if i not in (13, 18, 23))
+    # boundaries: a run at exactly now - window_s is slot 0, one at now is slot 23
+    edge = bucket_runs([_run(24.0), _run(0.0, ok=False)], HOUR, 24 * HOUR, NOW)
+    assert edge[0].state == "ok" and edge[23].state == "fail"
+    assert [i for i, t in enumerate(edge) if t.state != "miss"] == [0, 23]
     # the newest slot is only "open" while it is still short of a cadence
     open_ticks = bucket_runs([_run(5.5)], 2 * HOUR, 24 * HOUR, NOW)
     assert open_ticks[23].state == "open"
@@ -55,13 +59,25 @@ def test_window_param_switches_strips_and_marks_segment(tmp_path, monkeypatch):
     seven = re.search(r"<a[^>]*>.*?7 d</a>", switch, re.S).group(0)
     assert 'aria-current="true"' in seven and switch.count('aria-current="true"') == 1
     assert "agents=all" in switch                    # other params survive
-    row = _rows(_agents(html))[0]
-    assert 'class="none"' in row or 'class="miss"' in row
+    rows = _rows(_agents(html))
+    row = rows[0]
+    # alert poller beat only inside the newest 7 h slot: 1 ok, 23 slots a 5-min
+    # cadence should have filled
+    assert "Alert poller" in row
+    assert row.count('class="miss"') == 23 and row.count("<i") == 24
+    assert 'class="none"' not in row
+    # the investigator has no cadence: its empty slots are dots, never misses
+    inv = next(r for r in rows if "Investigator" in r)
+    assert 'class="miss"' not in inv and inv.count('class="none"') >= 22
+    assert "Last 7 d" in _agents(html) and "Last 24 runs" not in _agents(html)
+    assert "Last 24 h" in _agents(agents) and "Last 24 runs" not in _agents(agents)
+    assert "Last 24 runs" in _agents(live)
     assert re.search(r'role="img" aria-label="\d+ polls?, ', html)
     day = _switch(agents)
     assert 'aria-current="true"' in re.search(r"<a[^>]*>.*?24 h</a>", day, re.S).group(0)
     assert _rows(_agents(agents))
-    assert _rows(_agents(live))[0] != row
+    live_row = _rows(_agents(live))[0]
+    assert live_row.count("<i") == 5 and 'class="miss"' not in live_row   # five real beats
 
 
 def test_bad_window_falls_back_to_live(tmp_path, monkeypatch):

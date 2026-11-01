@@ -24,7 +24,7 @@
   <table class="tbl">
     <thead><tr>
       <th scope="col" colspan="2">Agent / scope</th><th scope="col">Execution state</th>
-      <th scope="col">Last success</th><th scope="col" colspan="2">Last 24 runs</th>
+      <th scope="col">Last success</th><th scope="col" colspan="2">{{ {"24h": "Last 24 h", "7d": "Last 7 d"}.get(window, "Last 24 runs") }}</th>
     </tr></thead>
     <tbody>
       {%- for a in agents %}
