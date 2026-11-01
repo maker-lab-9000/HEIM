@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m %}
+{% block content %}
+
+<nav class="crumb" aria-label="Breadcrumb">
+  <a href="/agents">agents</a> <span aria-hidden="true">/</span>
+  <span>{{ agent.name }}</span>
+</nav>
+
+<section class="card head" aria-labelledby="h-agent">
+  <h2 class="ihost" id="h-agent">{{ agent.name }}</h2>
+  <table class="tbl dense">
+    <tbody>
+      <tr><th scope="row">State</th>
+        <td><span class="ihost">{{ m.lamp(agent.status.lamp) }}{{ agent.status.word }}</span></td></tr>
+      <tr><th scope="row">Scope</th><td>{{ agent.scope }}</td></tr>
+      <tr><th scope="row">Runs</th><td>{{ cadence }}</td></tr>
+      <tr><th scope="row">Last success</th>
+        <td>{% if agent.last_ok %}{{ m.when(agent.last_ok) }}{% else %}{{ DASH }}{% endif %}</td></tr>
+      <tr><th scope="row">Last error</th>
+        <td>{% if agent.status.last_error %}{{ agent.status.last_error }}
+          <span class="ink3">{{ m.when(agent.status.last_error_at) }}</span>{% else %}{{ DASH }}{% endif %}</td></tr>
+      <tr><th scope="row">{{ 'Last backup' if agent.key == 'backup' else 'Evidence' }}</th>
+        <td>{% if evidence %}<a href="{{ evidence[0] }}">{{ evidence[1] }}</a>
+          {%- elif backup_file %}<span class="mono">{{ backup_file }}</span>
+          {%- else %}{{ DASH }}{% endif %}</td></tr>
+      {%- if agent.strip %}
+      <tr><th scope="row">Last 24 runs</th>
+        <td><span class="runs" role="img" aria-label="{{ agent.strip_label }}">
+          {%- for t in agent.strip %}<i{% if t.state != 'ok' %} class="{{ t.state }}"{% endif %}></i>{% endfor -%}
+        </span></td></tr>
+      {%- endif %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel" aria-labelledby="h-runs">
+  <div class="panel-head"><h2 id="h-runs">Runs</h2></div>
+  {%- if runs and has_invs %}
+  <table class="tbl dense">
+    <thead><tr>
+      <th scope="col">Started / host</th><th scope="col">Result</th><th scope="col">Steps / tokens</th>
+    </tr></thead>
+    <tbody>
+      {%- for r in runs %}
+      <tr>
+        <td><a href="/investigations/{{ r.id }}">{{ m.when(r.at) }}</a> {{ m.hostbadge(r.host) }}</td>
+        <td>{{ m.pill(r.status) }}</td>
+        <td class="mono">{{ r.steps }} / {{ r.tokens|tokens }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- elif runs %}
+  <table class="tbl dense">
+    <thead><tr>
+      <th scope="col">Started</th><th scope="col">Result</th><th scope="col">Duration</th>
+      <th scope="col">What happened</th>
+    </tr></thead>
+    <tbody>
+      {%- for r in runs %}
+      <tr{% if r.word != 'OK' %} class="flag"{% endif %}>
+        <td>{{ m.when(r.at) }}</td>
+        <td><span class="ihost">{{ m.lamp(r.lamp) }}{{ r.word }}</span></td>
+        <td class="mono">{{ r.duration or DASH }}</td>
+        <td>{{ r.what or DASH }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- else %}
+  <p class="empty">No runs recorded yet.</p>
+  {%- endif %}
+</section>
+{% endblock %}

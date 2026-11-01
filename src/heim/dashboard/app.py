@@ -53,6 +53,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from heim.agents import (
     AGENT_KEYS,
+    BACKUP_TIME,
     Tick,
     agent_specs,
     investigable_hosts,
@@ -688,6 +689,38 @@ def create_app(config: Config | None = None) -> FastAPI:
             window="live",
             version=VERSION,
         )
+
+    def _agent_inputs() -> tuple[dict, list[dict], list[dict], str]:
+        by_agent = reader.read(lambda s: s.agent_runs_by_agent())
+        invs = reader.read(lambda s: s.investigations(limit=60))
+        running = reader.read(lambda s: s.investigations(limit=5, status="running"))
+        return by_agent, invs, running, datetime.now(timezone.utc).isoformat()
+
+    @app.get("/agents", response_class=HTMLResponse)
+    async def agents_page(request: Request):
+        by_agent, invs, running, now_iso = _agent_inputs()
+        rows = _agent_rows(cfg, by_agent, invs, running, now_iso)
+        return page(request, "agents.html", page_title="agents",
+                    **_agents_panel(rows, request.query_params.get("agents", "")),
+                    base_href="/agents")
+
+    @app.get("/agents/{key}", response_class=HTMLResponse)
+    async def agent_detail(request: Request, key: str):
+        if key not in AGENT_KEYS:
+            return page(request, "error.html", status=404, page_title="not found",
+                        message=f"No agent called {key!r}.",
+                        detail="The seven agents are listed on the Agents page.")
+        by_agent, invs, running, now_iso = _agent_inputs()
+        row = next(r for r in _agent_rows(cfg, by_agent, invs, running, now_iso)
+                   if r["key"] == key)
+        return page(request, "agent.html", page_title=f"agents / {row['name'].lower()}",
+                    agent=row, cadence=_cadence_text(cfg, key),
+                    evidence=_AGENT_EVIDENCE.get(key),
+                    backup_file=str(((by_agent.get("backup") or [{}])[0].get("detail") or {})
+                                    .get("backup_file") or "") if key == "backup" else "",
+                    runs=(_investigator_runs(_own_runs(invs)) if key == "investigator"
+                          else _agent_run_table(by_agent.get(key, []), row["cadence_s"], now_iso)),
+                    has_invs=key == "investigator")
 
     @app.get("/investigations", response_class=HTMLResponse)
     async def investigations(request: Request, status: str = "", host: str = "",
@@ -1575,8 +1608,78 @@ def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
                      "status": status, "last_ok": status.last_ok_at, "strip": strip,
                      "strip_label": _strip_label(strip),
                      "flag": status.state in FLAGGED_STATES,
+                     "cadence_s": None if spec.paused else spec.cadence_s,
                      "href": f"/agents/{spec.key}"})
     return rows
+
+
+#: where each agent's detail page points for what the agent produced; the
+#: backup verifier has no page, it shows the file name instead.
+_AGENT_EVIDENCE = {
+    "alert_poller": ("/incidents", "Incidents"), "thresholds": ("/incidents", "Incidents"),
+    "uptime": ("/incidents", "Incidents"), "daily": ("/findings", "Findings"),
+    "investigator": ("/investigations", "Investigations"),
+    "security": ("/security", "Security audit"),
+}
+
+
+def _cadence_text(cfg: Config, key: str) -> str:
+    """How often the agent should run, in words (the spec's agent table)."""
+    if key in ("alert_poller", "thresholds", "uptime"):
+        return f"every {cfg.settings.schedules.poll_minutes} min"
+    if key == "daily":
+        n = len(cfg.settings.schedules.daily)
+        return {1: "daily", 2: "twice daily"}.get(n, f"{n} times daily")
+    if key == "security":
+        return "weekly"
+    if key == "backup":
+        return "daily at {:02d}:{:02d}".format(*BACKUP_TIME)
+    return "on demand"
+
+
+def _what_happened(run: dict) -> str:
+    """The error text, else the run's counters (``4 hosts · 50 queries``)."""
+    if run.get("error"):
+        return str(run["error"])
+    parts = [f"{v} {k.replace('_', ' ')}" for k, v in (run.get("detail") or {}).items()
+             if v is not None and not isinstance(v, (dict, list))]
+    return " · ".join(parts)
+
+
+def _agent_run_table(runs: list[dict], cadence_s: int | None, now_iso: str) -> list[dict]:
+    """A heartbeat agent's last runs, newest first. A stretch over twice the
+    cadence between two runs, or a newest run older than one cadence, is a
+    ``Missed`` row, the same rule as the run strip."""
+    def at_s(iso: str, other: str) -> float | None:
+        a, b = fmt.parse_dt(iso), fmt.parse_dt(other)
+        return (b - a).total_seconds() if a and b else None
+
+    out: list[dict] = []
+    if cadence_s and runs:
+        age = at_s(str(runs[0].get("started_at")), now_iso)
+        if age is not None and age > cadence_s:
+            out.append({"at": now_iso, "word": "Missed", "lamp": "amber", "duration": "",
+                        "what": "Latest run not received."})
+    for i, r in enumerate(runs):
+        out.append({"at": r.get("started_at"), "word": "OK" if r.get("ok") else "Error",
+                    "lamp": "blue" if r.get("ok") else "red",
+                    "duration": fmt.duration(r.get("started_at"), r.get("finished_at")),
+                    "what": _what_happened(r)})
+        if cadence_s and i + 1 < len(runs):
+            gap = at_s(str(runs[i + 1].get("started_at")), str(r.get("started_at")))
+            if gap is not None and gap > 2 * cadence_s:
+                out.append({"at": runs[i + 1].get("started_at"), "word": "Missed",
+                            "lamp": "amber", "duration": "",
+                            "what": f"No run for {fmt.dur_s(gap)}."})
+    return out[:24]
+
+
+def _investigator_runs(own: list[dict]) -> list[dict]:
+    """The investigator's runs are its investigations, newest first."""
+    return [{"id": i["id"], "at": i.get("started_at"), "status": i.get("status"),
+             "host": i.get("host"), "steps": i.get("n_steps") or 0,
+             "tokens": int(i.get("input_tokens") or 0) + int(i.get("output_tokens") or 0)}
+            for i in own[:24]]
 
 
 def _gap(row: dict) -> dict:

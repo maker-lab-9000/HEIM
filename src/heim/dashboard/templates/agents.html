@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+{#- the whole Agents panel, the same partial the overview embeds; its switch
+    and gap lines are plain links, so the page needs no script. -#}
+{% include "partials/_agents_table.html" %}
+{% endblock %}

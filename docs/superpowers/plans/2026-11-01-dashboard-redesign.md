@@ -77,7 +77,8 @@ Work on branch `feat/dashboard-redesign` (already created, stacked on `feat/upti
 | 2 | `test_needs_attention.py:274` | `<span aria-hidden="true">●</span> Nothing needs attention.` | `<span class="lamp blue" aria-hidden="true"></span> Nothing needs attention.` |
 | 2 | `test_tool_feedback.py:278, 280, 294` | `💡 allow du…`, `💡 general: logs: …`, `"💡" not in html` | `Suggestion: allow du…`, `Suggestion, general: logs: …`, `"Suggestion" not in html` |
 | 2 | `test_dashboard.py:439` | `"🔒" in html` | `"Locked" in html` |
-| 3 | `test_needs_attention.py:197, 204` | `html.index("needs attention")` | `html.index("Needs attention")` (the panel title becomes a display heading in sentence case) |
+| 3 | `test_needs_attention.py:197, 210, 225, 237, 262` | `"needs attention"` in `html.index` / `card.index` / `many.index` slices | `"Needs attention"` (the panel title becomes a display heading in sentence case) |
+| 3 | `test_needs_attention.py:204` | `card health` before `needs attention` | `html.index("Needs attention") < html.index("card health") < html.index("latest runs")` (the concept puts Needs attention first and the health card among the existing blocks below) |
 
 **Heading case (pre-flight ruling 7):** the tests slice the overview on lowercase caption text (`html.index("latest runs")`, `"recent investigations"`, `"tool usage"`, `"triggered by"`, `"transcript · "`). Those secondary blocks keep their **lowercase DOM caption text**, rendered as `.label` mono caps by CSS (the concept's engraved-label style), so every such slice holds unchanged. Only the concept's display headings ("Needs attention", "Needs you", "Agents", page titles) are sentence case in the DOM.
 
@@ -233,6 +234,7 @@ git commit -m "dashboard: the console system — tokens, lamps, grouped rail, de
 - **Agents filter:** `all` shows every agent; `running` only `running`; `attention` only `failed`, `degraded`, `stale`, `unknown`. The switch's counts are computed from the same list.
 - **Flag and gaps:** an agent is flagged (`tr.flag`) when `stale` or `failed`; its gap line reads `"Monitoring gap: latest {name} result not received."` (stale) or `"Monitoring gap: {name} failed: {error}."` (failed) with the link `"Review {name} runs →"` to `/agents/<key>`.
 - The empty state line is `<span class="lamp blue" aria-hidden="true"></span> Nothing needs attention.`; Needs you empty: `Nothing needs you. The agents are handling it.`
+- **Soft cap (ruling 15):** the Needs attention table shows at most 6 rows but never hides a critical row; when rows are cut, one `all (n) →` line under the table links to `/incidents`; the header count stays the full count. The `empty_client` fixture in `tests/test_needs_attention.py` seeds a complete investigation instead of an open warning incident (ruling 14), its assertions unchanged.
 - The footer line: `HEIM / H 01` and `heim {version}` from the package metadata.
 
 - [ ] **Step 1: Write the failing tests** in `tests/test_overview_console.py`, using the dashboard client fixture pattern from `tests/test_dashboard.py` and seeding `agent_runs`:
@@ -251,7 +253,7 @@ git commit -m "dashboard: the console system — tokens, lamps, grouped rail, de
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/heim/dashboard/app.py src/heim/dashboard/format.py src/heim/dashboard/templates/overview.html src/heim/dashboard/templates/partials/_agents_table.html src/heim/dashboard/templates/partials/_needs_you.html tests/test_overview_console.py tests/test_needs_attention.py
+git add src/heim/agents.py src/heim/dashboard/app.py src/heim/dashboard/format.py src/heim/dashboard/static/heim.css src/heim/dashboard/templates/overview.html src/heim/dashboard/templates/partials/_agents_table.html src/heim/dashboard/templates/partials/_needs_you.html tests/test_overview_console.py tests/test_needs_attention.py
 git commit -m "dashboard: the console overview — cards, needs attention, needs you, agents"
 ```
 
