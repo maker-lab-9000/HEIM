@@ -115,6 +115,27 @@
 </svg>
 {%- endmacro %}
 
+{#- one kind of an investigation's output (spec: "AI output is labelled by
+    kind"): a panel titled with the kind, a .label caption saying where it
+    came from, and the body the caller renders. Observations, Interpretation,
+    Proposed actions and Completed actions all go through here, so their heads
+    cannot drift apart. -#}
+{% macro kind(key, title, caption) -%}
+<section class="panel kind" aria-labelledby="h-{{ key }}">
+  <div class="panel-head"><h2 id="h-{{ key }}">{{ title }}</h2><p class="label">{{ caption }}</p></div>
+  {{- caller() }}
+</section>
+{%- endmacro %}
+
+{#- a kind's report sections, (heading, html) pairs, or its empty line -#}
+{% macro parts(items, otherwise) -%}
+{%- for heading, html in items %}
+<div class="prose">{% if heading %}<h3>{{ heading }}</h3>{% endif %}{{ html|safe }}</div>
+{%- else %}
+{{ empty(otherwise) }}
+{%- endfor %}
+{%- endmacro %}
+
 {% macro muted(sup) -%}
 <span class="pill st-muted"><span class="dot" aria-hidden="true"></span>muted · until
   {{ sup.until|day if sup.until else 'further notice' }}</span>

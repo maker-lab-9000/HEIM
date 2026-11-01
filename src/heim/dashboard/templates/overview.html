@@ -202,7 +202,7 @@
                 aria-label="{{ r.share }} percent of the busiest row">
             <span class="seg" style="width:{{ r.share }}%"></span></span>
         </td>
-        <td class="num mono c-blocked{{ ' ink3' if not r.blocked }}">{% if r.blocked %}⛔ {{ r.blocked }}{% else %}0{% endif %}</td>
+        <td class="num mono c-blocked{{ ' ink3' if not r.blocked }}">{% if r.blocked %}<span class="st-crit"><span class="dot" aria-hidden="true"></span>{{ r.blocked }}</span>{% else %}0{% endif %}</td>
         <td class="num mono c-avg">{{ r.avg_ms|dur_ms }}</td>
         {#- an em dash means the steps predate per-step attribution (§5.6),
             not that the calls were free -#}

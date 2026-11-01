@@ -587,6 +587,77 @@ def needs_you_label(inv: dict) -> str:
     return ""
 
 
+# ------------------------------------------------ an investigation's report
+
+#: The buckets an investigation report is sorted into (spec: "AI output is
+#: labelled by kind"). The transcript is the observations and the operator's
+#: record the completed actions, so neither comes from the report.
+REPORT_KINDS = ("interpretation", "proposed", "other")
+
+#: ``##`` heading -> its kind, matched case-insensitively against the START of
+#: the heading, first hit wins: "Root cause (confidence: high)" and
+#: "Recommended remediation" land where they mean to. Anything unlisted is
+#: ``other``; Evidence and Tooling feedback are named only to say so.
+_SECTION_KIND: tuple[tuple[str, str], ...] = (
+    ("summary", "interpretation"),
+    ("root cause", "interpretation"),
+    ("confidence", "interpretation"),
+    ("remediation", "proposed"),
+    ("recommend", "proposed"),
+    ("next step", "proposed"),
+    ("evidence", "other"),
+    ("tooling feedback", "other"),
+)
+
+#: a level-2 ATX heading; ``###`` and deeper stay inside their section
+_H2 = re.compile(r"^##[ \t]+(\S.*?)(?:[ \t]+#+)?[ \t]*$")
+#: a fenced code block's opening or closing line
+_FENCE = re.compile(r"^ {0,3}(```|~~~)")
+
+
+def _section_kind(heading: str) -> str:
+    key = heading.strip("*_` ").lower()
+    return next((kind for prefix, kind in _SECTION_KIND if key.startswith(prefix)), "other")
+
+
+def report_sections(report_md: str | None) -> dict:
+    """An investigation report sorted by kind:
+    ``{"interpretation": [(heading, markdown), …], "proposed": […], "other": […],
+    "raw": report_md}``.
+
+    Nothing is dropped: every ``##`` section lands in exactly one bucket in
+    document order, text before the first heading is ``other`` under the
+    heading ``""``, and ``raw`` is the whole text for the folded full report.
+    A ``##`` line inside a code fence is body text: the salvage fences an
+    untrusted raw output, and splitting it would promote that text to a
+    section of its own.
+    """
+    text = str(report_md or "")
+    chunks: list[tuple[str | None, list[str]]] = [(None, [])]
+    fence = ""
+    for line in text.splitlines():
+        heading = None if fence else _H2.match(line)
+        if heading:
+            chunks.append((heading.group(1), []))
+            continue
+        mark = _FENCE.match(line)
+        if mark and not fence:
+            fence = mark.group(1)
+        elif mark and mark.group(1) == fence:
+            fence = ""
+        chunks[-1][1].append(line)
+    out: dict = {kind: [] for kind in REPORT_KINDS}
+    for heading, lines in chunks:
+        body = "\n".join(lines).strip("\n")
+        if heading is None:
+            if body.strip():
+                out["other"].append(("", body))
+        else:
+            out[_section_kind(heading)].append((heading, body))
+    out["raw"] = text
+    return out
+
+
 # ------------------------------------------------------------------ statuses
 
 #: status -> (icon, css class, label) — meaning is never carried by color alone

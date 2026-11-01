@@ -71,7 +71,7 @@ b, strong, th { font-weight: 600; }
 .eyebrow { margin: 0; line-height: 1.5; }
 
 /* lamps: a bezelled disc beside its word; a pill's empty .dot is one too */
-.lamp, .pill .dot, .sev .dot, .verdict .dot, .outcome .dot {
+.lamp, .pill .dot, .sev .dot, .verdict .dot, .outcome .dot, .smeta .dot, .c-blocked .dot {
   --lit-hi: var(--lamp-off-hi); --lit: var(--lamp-off); --bezel: var(--panel);
   display: inline-block; flex: none; width: 14px; height: 14px; border-radius: 50%; vertical-align: -2px;
   background: radial-gradient(circle at 35% 30%, var(--lit-hi), var(--lit) 65%);
@@ -168,6 +168,7 @@ b, strong, th { font-weight: 600; }
 .panel-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 12px; }
 .panel-head h2 { font-size: var(--text-22); letter-spacing: -0.02em; }
 .panel-head .more { margin-left: auto; }
+.panel-head .label { margin: 0; }
 .more { font-weight: 600; white-space: nowrap; }
 .more .arr { margin-left: 8px; }
 .cards { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); margin-bottom: 16px; }
@@ -212,7 +213,7 @@ b, strong, th { font-weight: 600; }
 .vacts { margin-top: 4px; }
 form.act { display: inline-block; margin: 0; }
 .filters select, .mselect {
-  min-height: 36px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--r-ctl);
+  min-height: 36px; padding: 0 8px; border: 1px solid var(--ink-3); border-radius: var(--r-ctl);
   background: var(--panel); color: var(--ink); font: var(--text-13)/1 var(--mono);
   letter-spacing: 0; text-transform: none;
 }
@@ -346,8 +347,11 @@ footer.foot { display: flex; justify-content: space-between; gap: 16px; padding-
 .imeta td { overflow-wrap: anywhere; }
 .imeta .c-tok, .imeta .c-cost, .imeta .c-dur { width: 11%; }
 .imeta .c-agent, .imeta .c-fp { width: 19%; }
-.brief { margin-top: 8px; }
 .ihost { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0; }
+.imeta .lamp { margin-right: 8px; }
+.trig { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.kind .prose + .prose { margin-top: 16px; }
+.runacts .acts { margin: 0; }
 .transcript { margin: 0; padding: 0; list-style: none; }
 .entry { display: flex; gap: 12px; padding: 8px 0 12px 12px; border-left: 2px solid var(--line); }
 .entry + .entry { border-top: 1px solid var(--line); }
@@ -356,7 +360,9 @@ footer.foot { display: flex; justify-content: space-between; gap: 16px; padding-
 .ebody { flex: 1; min-width: 0; }
 .ehdr { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; margin: 0 0 4px; }
 .smeta { font-size: var(--text-11); color: var(--ink-2); white-space: nowrap; }
+.smeta .st-crit, .c-blocked .st-crit { display: inline-flex; gap: 8px; align-items: center; }
 .smeta .st-crit { color: var(--signal-ink); font-weight: 600; }
+.smeta .dot, .c-blocked .dot { width: 12px; height: 12px; }
 .rline { font-size: var(--text-13); color: var(--ink-2); }
 .entry-empty { padding: 8px 0; }
 .fulltx .turn { padding: 8px 0; border-top: 1px solid var(--line); }
@@ -380,7 +386,7 @@ footer.foot { display: flex; justify-content: space-between; gap: 16px; padding-
 
 .prose { margin: 8px 0; font-size: var(--text-14); color: var(--ink-2); }
 .prose h1, .prose h2, .prose h3 { margin: 16px 0 8px; font: 600 var(--text-16)/1.3 var(--sans); color: var(--ink); }
-.prose h2:first-child { margin-top: 4px; }
+.prose h2:first-child, .prose h3:first-child { margin-top: 4px; }
 .prose code, .prose pre { background: var(--term-bg); color: var(--term-ink-2); border-radius: 4px; font-family: var(--mono); font-size: var(--text-13); }
 .prose code { padding: 0 4px; }
 .prose pre { padding: 8px; overflow: auto; }

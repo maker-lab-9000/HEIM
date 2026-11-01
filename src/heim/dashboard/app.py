@@ -757,10 +757,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                                "the list shows everything the store has.")
         steps = row.get("steps") or []
         transcript, truncated = _stored_transcript(row)
+        fingerprint = str(row.get("fingerprint") or "")
+        suppression = _suppressions(reader).get(fingerprint) if fingerprint else None
         return page(
             request, "investigation.html", page_title=f"investigations / #{inv_id}",
             inv=row, steps=steps, burn=fmt.burn_segments(steps),
             report_html=_md_to_html(row.get("report_md") or "", allow_raw_html=False) if row.get("report_md") else "",
+            sections=_sections_view(row.get("report_md") or ""),
+            completed_actions=_completed_actions(row, suppression),
             findings=_trigger_findings(row),
             brief_html=_md_to_html(row.get("brief_md") or "", allow_raw_html=False) if row.get("brief_md") else "",
             outcome=_outcome_line(row),
@@ -2246,6 +2250,55 @@ def _trigger_findings(row: dict) -> list[dict]:
             "detail": str(f.get("detail") or f.get("summary") or ""),
         })
     return out
+
+
+def _sections_view(report_md: str) -> dict:
+    """``fmt.report_sections`` with each body rendered: model output, so raw
+    HTML stays off, as for the full report. ``other_names`` are the headings
+    the kind panels leave to the folded full report, named on its fold."""
+    parts = fmt.report_sections(report_md)
+    view: dict = {
+        kind: [(heading, _md_to_html(body, allow_raw_html=False) if body.strip() else "")
+               for heading, body in parts[kind]]
+        for kind in fmt.REPORT_KINDS
+    }
+    view["other_names"] = [heading for heading, _ in parts["other"] if heading]
+    view["raw"] = parts["raw"]
+    return view
+
+
+def _completed_actions(row: dict, suppression: dict | None) -> list[dict]:
+    """What the operator did about this run, ``[{"what", "at"}, …]``, from the
+    row and the mute on its fingerprint: the agent is read-only, so these are
+    the only actions there are.
+
+    A timed-out ask (approval or outcome) is nobody's decision, so it is not
+    listed. The row keeps no approval time (the decision column is all there
+    is), so an approval has none; a decline and an outcome are stamped with
+    ``finished_at``, which the pipeline writes as it records them.
+    """
+    status = str(row.get("status") or "")
+    outcome = str(row.get("outcome") or "")
+    finished = str(row.get("finished_at") or "")
+    done: list[dict] = []
+    decision = str(row.get("approval_decision") or "")
+    if decision == "approve":
+        done.append({"what": "Investigation approved", "at": ""})
+    elif decision == "decline":
+        done.append({"what": "Investigation declined", "at": finished})
+    # the same precedence as _outcome_line: a timed-out confirm is also stored
+    # as status=needs_human, and nobody said that
+    if outcome != "timeout":
+        if outcome == "resolved" or status == "resolved":
+            done.append({"what": "Marked resolved", "at": finished})
+        elif outcome == "needs_human" or status == "needs_human":
+            done.append({"what": "Marked as needing a human", "at": finished})
+    if suppression:
+        until = str(suppression.get("until") or "")
+        done.append({"what": f"Fingerprint muted until {fmt.day(until)}" if until
+                     else "Fingerprint muted for good",
+                     "at": str(suppression.get("created_at") or "")})
+    return done
 
 
 def _stored_transcript(row: dict) -> tuple[list[dict], str]:

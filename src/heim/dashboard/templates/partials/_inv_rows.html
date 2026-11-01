@@ -16,8 +16,9 @@
       {% else %}{{ m.when(g.created_at) }}{% endif %}</td>
   </tr>
   {%- endfor %}
+  {#- a run waiting on the operator carries the signal bar (design.md: tr.flag) -#}
   {%- for r in rows %}
-  <tr>
+  <tr{% if r.status in ('pending_approval', 'needs_human') %} class="flag"{% endif %}>
     <td class="c-id mono"><a href="/investigations/{{ r.id }}">#{{ r.id }}</a></td>
     <td>{{ m.pill(r.status) }}</td>
     <td class="eyebrow">{{ r.trigger or DASH }}</td>

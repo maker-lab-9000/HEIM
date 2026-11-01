@@ -21,7 +21,7 @@ MIRROR = ':root:not([data-theme="dark"]) {'
 
 #: the glyphs the redesign retired (the operator's ruling: words and lamps).
 #: ▲ stays allowed: it is a change marker in data, not a status.
-RETIRED = "💡 🔒 👍 ☀ ☾ ◐ ● ○ ◌ ◷ ✓ ✗ ✕ ⚠ ✳ ◆ ‖".split()
+RETIRED = "💡 🔒 👍 ☀ ☾ ◐ ● ○ ◌ ◷ ✓ ✗ ✕ ⚠ ✳ ◆ ‖ ⛔".split()
 
 
 def _css() -> str:

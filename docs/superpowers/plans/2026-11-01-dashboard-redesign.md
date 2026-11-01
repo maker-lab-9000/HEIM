@@ -73,6 +73,7 @@ Work on branch `feat/dashboard-redesign` (already created, stacked on `feat/upti
 | 2 | `test_dashboard_actions.py:315` | `"CONFIRM"` | `">Confirm<"` |
 | 2 | `test_metrics_page.py:296` (`test_nav_has_metrics_between_findings_and_hosts`) | the flat order findings < metrics < hosts | the grouped rail's Infrastructure order: `hosts < metrics < security`; presence checks unchanged |
 | 2 | `test_dashboard_actions.py:365` | `"UNMUTE" not in r.text` | `">Unmute<" not in r.text` (the flash sentence "Unmuted — …" would otherwise match the bare word) |
+| 6 | `test_dashboard.py:307, 411` | `"⛔ blocked"` | `">blocked<"` (the badge becomes a red lamp plus the word: `<span class="st-crit"><span class="dot" aria-hidden="true"></span>blocked</span>`); `⛔` joins `RETIRED` in `tests/test_dashboard_system.py` in the same commit, and the overview's tool-usage blocked count (`overview.html:205`) drops its `⛔` for a red lamp |
 | 2 | `test_dashboard.py:494` (the `heim.css` byte cap) | `<= 21_248` | `<= 32_768`, raised once for the whole redesign, with a docstring line naming the raise; Tasks 3–9 must fit under it |
 | 2 | `test_needs_attention.py:274` | `<span aria-hidden="true">●</span> Nothing needs attention.` | `<span class="lamp blue" aria-hidden="true"></span> Nothing needs attention.` |
 | 2 | `test_tool_feedback.py:278, 280, 294` | `💡 allow du…`, `💡 general: logs: …`, `"💡" not in html` | `Suggestion: allow du…`, `Suggestion, general: logs: …`, `"Suggestion" not in html` |
@@ -318,6 +319,7 @@ git commit -m "dashboard: the window switch — live, 24 h, 7 d run buckets"
 - Modify: `templates/investigations.html`, `templates/investigation.html`, `templates/partials/_inv_rows.html`, `templates/partials/_inv_acts.html`, `templates/partials/_transcript.html`, `templates/partials/_verdict.html` if used there
 - Modify: `src/heim/dashboard/format.py`, adding the pure `report_sections(report_md: str) -> dict`
 - Modify: `src/heim/dashboard/app.py`: the `investigation_detail` context gains `sections` and `completed_actions`
+- Modify (ruling 17): `templates/partials/_transcript.html` and `templates/overview.html:205` replace the `⛔` glyph with a red lamp plus the word; `tests/test_dashboard.py:307, 411` re-pin `"⛔ blocked"` → `">blocked<"`; `tests/test_dashboard_system.py` adds `⛔` to `RETIRED`
 - Test: `tests/test_investigation_sections.py` (new)
 
 **Interfaces:**

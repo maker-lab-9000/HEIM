@@ -7,6 +7,8 @@
   <span class="mono">#{{ inv.id }}</span>
 </nav>
 
+{#- the header facts: the host and its status lamp, the run's facts in one
+    row, its lineage and what triggered it. -#}
 <section class="card head">
   <h2 class="ihost">{{ inv.host }} {{ m.pill(inv.status) }}</h2>
   {#- the run's facts as a real table, like every other dense table in the app:
@@ -35,8 +37,9 @@
         <td class="c-cost mono">{{ inv.cost|money }}</td>
         {#- an approval waits until the operator reacts, so its age is the only
             thing that makes a forgotten one visible — say "waiting", not a
-            duration, because nothing is running yet. -#}
-        <td class="c-dur mono">{% if inv.status == 'pending_approval' %}waiting {{ elapsed(inv.started_at) }}{% elif inv.status == 'running' %}{{ elapsed(inv.started_at) }} so far{% else %}{{ duration(inv.started_at, inv.finished_at) }}{% endif %}</td>
+            duration, because nothing is running yet. It is lit orange: it
+            needs the operator. -#}
+        <td class="c-dur mono">{% if inv.status == 'pending_approval' %}{{ m.lamp('orange') }}waiting {{ elapsed(inv.started_at) }}{% elif inv.status == 'running' %}{{ m.lamp('ring') }}{{ elapsed(inv.started_at) }} so far{% else %}{{ duration(inv.started_at, inv.finished_at) }}{% endif %}</td>
         <td class="c-when">{{ m.when(inv.started_at) }}</td>
         <td class="c-fp mono ink2" title="{{ inv.fingerprint }}">{{ inv.fingerprint|fp }}</td>
       </tr>
@@ -52,49 +55,80 @@
   <p class="headline"><span class="eyebrow">lineage</span>
     <a class="mono" href="/investigations/{{ inv.replay_of }}">replay of #{{ inv.replay_of }}</a></p>
   {%- endif %}
-  {% include "partials/_inv_acts.html" %}
+  {#- provenance: what the agent was asked to look into. Rendered for every
+      status — it is the reason the run exists, before and after there is a
+      report. -#}
+  <div class="trig">
+    <h3 class="label">triggered by</h3>
+    {%- if findings %}
+    <ul class="flist">
+      {%- for f in findings %}
+      <li><p class="fhead">{{ m.sev(f.severity) }}
+        {%- if f.metric %} <span class="mono ink2">{{ f.metric }}</span>{% endif %}
+        {%- if f.detail %} <span class="ink2">{{ f.detail }}</span>{% endif %}</p></li>
+      {%- endfor %}
+    </ul>
+    {%- else %}
+    <p class="empty">Manual investigation — no incident findings attached.</p>
+    {%- endif %}
+  </div>
 </section>
 
-{#- provenance: what the agent was asked to look into, and the brief it got.
-    Rendered for every status — it is the reason the run exists, before and
-    after there is a report. -#}
-<section class="card">
-  <h2 class="eyebrow">triggered by</h2>
-  {%- if findings %}
+{#- the four kinds (spec: "Labelling an investigation"): the tool steps are
+    what the agent observed, the report's Summary / Root cause / Confidence its
+    interpretation, its remediation the proposals, and the operator's record
+    the completed actions. The agent is read-only and takes none. -#}
+{%- set n = steps|length %}
+{% call m.kind('observations', 'Observations', 'transcript · ' ~ n ~ ' step' ~ ('' if n == 1 else 's')) %}
+  {% include "partials/_transcript.html" %}
+{% endcall %}
+
+{%- set waiting = inv.status in ('running', 'pending_approval') %}
+{%- set no_report = 'No report yet — it is written when the agent finishes.' if waiting
+                    else 'No report was written for this run.' %}
+{% call m.kind('interpretation', 'Interpretation', 'written by the agent') %}
+  {{ m.parts(sections.interpretation, 'The report has no summary, root cause or confidence section. The full report below has everything it said.' if sections.raw else no_report) }}
+{% endcall %}
+
+{% call m.kind('proposed', 'Proposed actions', 'suggested by the agent · not carried out') %}
+  {{ m.parts(sections.proposed, 'The report proposes no remediation.' if sections.raw
+             else ('Nothing proposed yet.' if waiting else 'Nothing proposed.')) }}
+{% endcall %}
+
+{% call m.kind('completed', 'Completed actions', 'taken by the operator') %}
+  {%- if completed_actions %}
   <ul class="flist">
-    {%- for f in findings %}
-    <li><p class="fhead">{{ m.sev(f.severity) }}
-      {%- if f.metric %} <span class="mono ink2">{{ f.metric }}</span>{% endif %}
-      {%- if f.detail %} <span class="ink2">{{ f.detail }}</span>{% endif %}</p></li>
+    {%- for a in completed_actions %}
+    <li>{{ a.what }}{% if a.at %} {{ m.when(a.at) }}{% endif %}</li>
     {%- endfor %}
   </ul>
   {%- else %}
-  <p class="empty">Manual investigation — no incident findings attached.</p>
+  {{ m.empty('No actions taken. The agent is read-only; decisions are yours.') }}
   {%- endif %}
-  {%- if brief_html %}
+{% endcall %}
+
+{#- the report as the agent wrote it, every section, folded: the panels above
+    sort it, this keeps it whole (the salvage's raw output included). -#}
+<section class="card">
+  <h2 class="eyebrow">report</h2>
+  <details class="fullrep">
+    <summary>Full report as the agent wrote it{% if sections.other_names %} · also {{ sections.other_names|join(', ') }}{% endif %}</summary>
+    {%- if report_html %}
+    <div class="prose">{{ report_html|safe }}</div>
+    {%- else %}
+    {{ m.empty(no_report) }}
+    {%- endif %}
+  </details>
+</section>
+
+{%- if brief_html %}
+<section class="card">
   <details class="brief">
     <summary>Brief sent to the agent</summary>
     <div class="prose">{{ brief_html|safe }}</div>
   </details>
-  {%- endif %}
 </section>
-
-<section class="card">
-  <h2 class="eyebrow">transcript · {{ steps|length }} step{{ '' if steps|length == 1 else 's' }}</h2>
-  {% include "partials/_transcript.html" %}
-</section>
-
-{% if report_html %}
-<section class="card">
-  <h2 class="eyebrow">report</h2>
-  <div class="prose">{{ report_html|safe }}</div>
-</section>
-{% elif inv.status == 'running' or inv.status == 'pending_approval' %}
-<section class="card">
-  <h2 class="eyebrow">report</h2>
-  <p class="empty">No report yet — it is written when the agent finishes.</p>
-</section>
-{% endif %}
+{%- endif %}
 
 {#- the raw session, when settings.store_transcripts was on for this run: for
     post-morteming a wrong root cause, so it is folded away by default. -#}
@@ -122,6 +156,12 @@
   </details>
 </section>
 {% endif %}
+
+{#- the operator's keys, after the brief they act on: approve or decline
+    the ask, or re-run it with fresh evidence -#}
+<section class="card runacts" aria-label="Actions on this run">
+  {% include "partials/_inv_acts.html" %}
+</section>
 
 {% if outcome %}
 <p class="outcome {{ outcome.cls }}"><span class="dot" aria-hidden="true"></span>{{ outcome.text }}</p>

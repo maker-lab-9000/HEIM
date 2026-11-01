@@ -304,7 +304,7 @@ def test_investigation_detail_transcript(client, ids):
         or "topk(10, container_memory_working_set_bytes" in html
     assert "sudo agent-docker stats --no-stream" in html
     # blocked step treatment
-    assert "⛔ blocked" in html
+    assert ">blocked<" in html
     assert 'class="entry blocked"' in html
     # result previews are native <details>
     assert "<details" in html and "expand" in html
@@ -408,7 +408,7 @@ def test_transcript_partial_is_a_fragment(client, ids):
     assert r.status_code == 200
     assert "<html" not in r.text
     assert r.text.lstrip().startswith('<div id="transcript"')
-    assert "⛔ blocked" in r.text
+    assert ">blocked<" in r.text
 
 
 def test_unknown_investigation_is_404(client):
