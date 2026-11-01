@@ -114,6 +114,45 @@ async def test_settings_ship_uptime_kuma_off(tmp_path, monkeypatch):
     assert rig.fetches == 0
 
 
+def _load_without_uptime_block(tmp_path, monkeypatch, *, block: str = ""):
+    """A deployment's own settings.yaml that predates the feature (no
+    ``uptime_kuma:`` block), optionally with ``block`` appended instead."""
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    croot = tmp_path / "config"
+    shutil.copytree(ROOT / "config", croot,
+                    ignore=shutil.ignore_patterns("settings.yaml"))
+    text = (croot / "settings.example.yaml").read_text()
+    head, sep, _tail = text.partition("uptime_kuma:\n")
+    assert sep, "settings.example.yaml lost its uptime_kuma block"
+    (croot / "settings.yaml").write_text(head + block)
+    return load_config(croot)
+
+
+def test_url_defaults_to_the_env_var_when_settings_yaml_has_no_block(tmp_path, monkeypatch):
+    monkeypatch.setenv("HEIM_UPTIME_KUMA_URL", "http://10.0.0.3:3001")
+    cfg = _load_without_uptime_block(tmp_path, monkeypatch)
+    assert "uptime_kuma" not in (cfg.root / "settings.yaml").read_text()
+    assert cfg.settings.uptime_kuma.url == "http://10.0.0.3:3001"
+
+
+def test_url_is_off_without_the_env_var_or_a_block(tmp_path, monkeypatch):
+    monkeypatch.delenv("HEIM_UPTIME_KUMA_URL", raising=False)
+    cfg = _load_without_uptime_block(tmp_path, monkeypatch)
+    assert cfg.settings.uptime_kuma.url == ""
+
+
+def test_an_explicit_yaml_url_wins_over_the_env_var(tmp_path, monkeypatch):
+    monkeypatch.setenv("HEIM_UPTIME_KUMA_URL", "http://10.0.0.3:3001")
+    cfg = _load_without_uptime_block(
+        tmp_path, monkeypatch, block='uptime_kuma:\n  url: "http://10.0.0.5:3001"\n')
+    assert cfg.settings.uptime_kuma.url == "http://10.0.0.5:3001"
+    monkeypatch.delenv("HEIM_UPTIME_KUMA_URL")
+    cfg = _load_without_uptime_block(
+        tmp_path / "b", monkeypatch, block='uptime_kuma:\n  url: ""\n')
+    assert cfg.settings.uptime_kuma.url == ""
+
+
 async def test_two_down_monitors_dispatch_one_grouped_investigation(rt, rig):
     await rig.poll(_metrics(("n8n", "10.0.0.10", 0), ("grafana", "10.0.0.10", 0)))
     assert len(rig.dispatched) == 1

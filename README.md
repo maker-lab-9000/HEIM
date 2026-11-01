@@ -442,8 +442,10 @@ holds the only copy:
 
 ### Uptime Kuma (service outages)
 
-When `HEIM_UPTIME_KUMA_URL` and `UPTIME_KUMA` are set, the 5-minute poll also reads
-Uptime Kuma's `/metrics`. Every unpaused monitor is expected up; a down monitor opens an
+When `HEIM_UPTIME_KUMA_URL` and `UPTIME_KUMA` are set in `.env`, the 5-minute poll also
+reads Uptime Kuma's `/metrics`. No `settings.yaml` change is needed: `uptime_kuma.url`
+defaults to `HEIM_UPTIME_KUMA_URL`, and an explicit `uptime_kuma.url` in your
+`settings.yaml` overrides it (`url: ""` turns the source off). Every unpaused monitor is expected up; a down monitor opens an
 `[uptime] ` incident and sends **one Telegram message per host**. Hosts HEIM can
 investigate (ubuntu-server via SSH, home-assistant, and homelab for the `availability`
 category) get an approval-gated investigation; **heim and any address that is not a HEIM

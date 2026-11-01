@@ -125,8 +125,13 @@ class ApprovalsCfg(BaseModel):
 
 class UptimeKumaCfg(BaseModel):
     """Uptime Kuma as an alert source. Empty ``url`` = off. The API key is the
-    ``UPTIME_KUMA`` env var, never config."""
-    url: str = ""
+    ``UPTIME_KUMA`` env var, never config.
+
+    ``url`` defaults to ``HEIM_UPTIME_KUMA_URL``, read when the settings are
+    built (``load_config`` loads ``.env`` first), so a deployment whose own
+    gitignored ``settings.yaml`` predates the feature still picks it up from
+    ``.env``. An explicit ``uptime_kuma.url`` in the YAML wins."""
+    url: str = Field(default_factory=lambda: os.environ.get("HEIM_UPTIME_KUMA_URL", ""))
 
 
 class Settings(BaseModel):
@@ -192,7 +197,9 @@ class Settings(BaseModel):
     # opens. Hysteresis is not optional: a single scrape at 102% is a blip,
     # and dispatching on it burns an agent run and a human approval.
     threshold_consecutive: int = 2
-    uptime_kuma: UptimeKumaCfg = UptimeKumaCfg()
+    # a factory, not a shared instance: the url's env default must be read
+    # when Settings is built (after .env is loaded), not at import time
+    uptime_kuma: UptimeKumaCfg = Field(default_factory=UptimeKumaCfg)
 
 
 # --------------------------------------------------------------------------- hosts
