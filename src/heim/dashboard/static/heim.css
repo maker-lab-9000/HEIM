@@ -480,6 +480,7 @@ details > summary:hover { color: var(--ink); }
 .ccap .cq { display: block; font-weight: 600; color: var(--ink); }
 .rchart .ccap { margin: 0; font-size: 11px; }
 .tsum { font-size: var(--text-13); color: var(--ink-3); }
+.acts + .kpis { margin-top: 16px; }
 
 /* phones: the rail becomes a wrapped row of lamp-chips above the page */
 
@@ -499,6 +500,7 @@ details > summary:hover { color: var(--ink); }
   .ptitle { font-size: var(--text-28); }
   .tmeta { flex-wrap: wrap; gap: 12px; padding-top: 0; white-space: normal; }
   /* a wide table scrolls inside its own panel, never the page */
+  .mtbl { min-width: 44rem; }
   .card, .panel { padding: 16px; overflow-x: auto; }
   .imeta { min-width: 40rem; }
   .panel-head, .gap { flex-wrap: wrap; }
