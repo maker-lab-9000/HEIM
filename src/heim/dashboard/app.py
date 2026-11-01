@@ -798,6 +798,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         return page(request, "incidents.html", page_title="incidents", rows=rows,
                     next_offset=next_offset)
 
+    # the qids the metrics page can anchor to (read once; the catalog is config)
+    catalog_qids = {q.qid for q in load_queries(cfg.queries_path)}
+
     @app.get("/findings", response_class=HTMLResponse)
     async def findings_page(request: Request):
         offset = _offset(request)
@@ -825,6 +828,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         for group in groups:  # worst first inside a run, like the daily email
             group["findings"].sort(key=lambda f: _SEV_RANK.get(
                 str(f.get("severity") or "").lower(), 3))
+            for f in group["findings"]:
+                f["evidence"] = _evidence(reader, f, catalog_qids)
         # `total` is this window's size — the header says which findings these
         # are ("showing findings 51–94"), never a grand total it cannot know
         return page(request, "findings.html", page_title="findings", groups=groups,
@@ -1221,6 +1226,17 @@ def _qs_with(request: Request) -> Callable[..., str]:
         return urlencode(pairs)
 
     return qs_with
+
+
+def _evidence(reader: StoreReader, finding: dict, catalog_qids: set[str]) -> list[dict]:
+    """The links from one finding row to the rows that back it."""
+    fp = str(finding.get("fingerprint") or "")
+    if not fp:
+        return []
+    inv = reader.read(lambda s: s.investigation_by_fingerprint(fp))
+    audit = str(finding.get("source") or "") == "security_audit"
+    has_incident = False if audit else reader.read(lambda s: s.incident(fp)) is not None
+    return fmt.evidence_links(finding, inv, catalog_qids, incident_exists=has_incident)
 
 
 def _finding_window(rows: list[dict], offset: int) -> tuple[list[dict], int | None]:

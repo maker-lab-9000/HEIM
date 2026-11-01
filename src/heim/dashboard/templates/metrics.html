@@ -79,6 +79,7 @@
 </form>
 {%- endif %}
 
+{%- set seen = namespace(qids=[]) %}
 {%- for h in metrics.hosts %}
 <section class="card">
   <h2 class="mhost mono">{{ h.name }} {{ m.pill(h.flag) }}</h2>
@@ -98,7 +99,10 @@
     </tr></thead>
     <tbody>
       {%- for r in c.rows %}
-      <tr>
+      {#- one anchor per query: the findings page links to /metrics#q-<qid> -#}
+      {%- set first = r.qid and r.qid not in seen.qids %}
+      {%- if first %}{% set _ = seen.qids.append(r.qid) %}{% endif %}
+      <tr{% if first %} id="q-{{ r.qid }}"{% endif %}>
         <td class="c-flag">{{ m.pill(r.flag) }}</td>
         <td class="c-mname">{{ r.label }}{% if r.name %} <span class="mono ink2">{{ r.name }}</span>{% endif %}</td>
         <td class="num mono c-cur">{{ r.current|mval(r.unit) }}</td>

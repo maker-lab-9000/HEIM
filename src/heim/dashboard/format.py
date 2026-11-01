@@ -710,3 +710,31 @@ def status_pill(value: str | None) -> dict:
     key = str(value or "").strip().lower()
     icon, cls, label = _STATUS.get(key, ("·", "st-muted", key or "unknown"))
     return {"icon": icon, "cls": cls, "label": label, "key": key}
+
+
+def evidence_links(finding: dict, investigation: dict | None,
+                   catalog_qids, *, incident_exists: bool = True) -> list[dict]:
+    """Where to look for the proof of one finding: ``[{"label", "href"}]``.
+
+    A link is only drawn for something that exists. A daily finding's qid is
+    the second part of its ``host|qid|name`` fingerprint (invariant 1); it
+    links to the metrics row only when the catalog knows that qid. An audit
+    finding links to its check on /security instead. The incidents page does
+    not filter by fingerprint, so the incident link opens the list.
+    """
+    fp = str(finding.get("fingerprint") or "")
+    parts = fp.split("|")
+    qid = parts[1] if len(parts) >= 3 else ""
+    links: list[dict] = []
+    if str(finding.get("source") or "") == "security_audit":
+        if qid:
+            links.append({"label": "check", "href": f"/security#check-{qid}"})
+    else:
+        if qid and qid in catalog_qids:
+            links.append({"label": "metric", "href": f"/metrics#q-{qid}"})
+        if fp and incident_exists:
+            links.append({"label": "incident", "href": "/incidents"})
+    if investigation and investigation.get("id") is not None:
+        n = investigation["id"]
+        links.append({"label": f"investigation {n}", "href": f"/investigations/{n}"})
+    return links

@@ -538,3 +538,5 @@ details > summary:hover { color: var(--ink); }
     --term-bg: #1B1917; --term-ink: #E9E2D4; --term-ember: #E88C3A;
   }
 }
+.evidence { margin: 4px 0 0; }
+.evidence a { color: var(--ink-2); }

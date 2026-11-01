@@ -27,6 +27,9 @@
         <td class="c-metric mono ink2">{{ f.metric or DASH }}</td>
         <td>
           <span class="fsum">{{ f.summary }}</span>
+          {%- if f.evidence %}
+          <p class="evidence label">{% for e in f.evidence %}<a href="{{ e.href }}">{{ e.label }}</a>{{ ' · ' if not loop.last }}{% endfor %}</p>
+          {%- endif %}
           {#- detail, recommendation and fingerprint stay folded away in the cell -#}
           {%- if f.detail or f.recommendation %}
           <details>
