@@ -200,7 +200,7 @@ def test_htmx_investigate_returns_the_panel_with_the_feedback_line(client, store
     job_id = _jobs_by_dashboard(store)[0]["id"]
     assert (f"Queued as job #{job_id} — the daemon picks it up within a few seconds."
             in body)
-    assert "INVESTIGATE" in body                      # the host card, re-rendered
+    assert ">Investigate<" in body                      # the host card, re-rendered
 
 
 def test_htmx_investigate_from_an_incident_returns_the_incident_panel(client):
@@ -529,7 +529,7 @@ def test_host_cards_offer_investigate(app_store):
     client, _ids, _store, cfg = app_store
     html = client.get("/hosts").text
     assert html.count('action="/actions/investigate"') == len(cfg.hosts)
-    assert "INVESTIGATE" in html
+    assert ">Investigate<" in html
 
 
 def test_action_forms_work_without_js(client):
