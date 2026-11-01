@@ -276,3 +276,47 @@ async def test_fetch_metrics_uses_basic_auth():
 
 def test_homelab_investigates_availability(rt):
     assert "availability" in rt.config.hosts["homelab"].investigable
+
+
+async def test_daily_run_leaves_uptime_incidents_alone(rt, monkeypatch):
+    """reconcile() bumps missedRuns on every open row the LLM didn't mention and
+    resolves after 2; an uptime outage Kuma couldn't report on for a day must
+    not be closed by that."""
+    import json
+
+    from heim.pipelines import daily
+
+    fp = "homelab|uptime|Plex"
+    rt.store.upsert([{
+        "fingerprint": fp, "host": "homelab", "metric": "Plex", "severity": "critical",
+        "status": "open", "firstSeen": "2026-11-01T08:00:00.000+01:00",
+        "lastSeen": "2026-11-01T08:00:00.000+01:00", "resolvedAt": "",
+        "timesSeen": 3, "missedRuns": 1, "description": "[uptime] Plex is down",
+        "investigated": 0,
+    }])
+    payload = {"generatedAt": "2026-11-01T07:00:00.000+01:00", "windowDays": 3,
+               "hosts": [], "counts": {"crit": 0, "warn": 0, "naQueries": 0},
+               "overall": "healthy", "categories": {}, "topAlerts": []}
+    analysis = {"overallHealth": "healthy", "headline": "ok", "executiveSummary": "ok",
+                "categories": {}, "findings": [], "watchlist": []}
+
+    async def fake_fetch(base, qdefs, window):
+        return []
+
+    async def fake_analyst(cfg, system, user):
+        return json.dumps(analysis), "model-x", {"input": 1, "output": 1}
+
+    async def fake_dispatch(rt_, items, *, concurrent, trigger="manual"):
+        pass
+
+    monkeypatch.setattr(daily, "_fetch_query_ranges", fake_fetch)
+    monkeypatch.setattr(daily, "aggregate", lambda *a, **k: {"payload": payload})
+    monkeypatch.setattr(daily, "analyst_complete", fake_analyst)
+    monkeypatch.setattr(daily, "dispatch_all", fake_dispatch)
+
+    await daily.run_daily(rt, dispatch_concurrently=False)
+    await daily.run_daily(rt, dispatch_concurrently=False)
+
+    row = next(r for r in rt.store.all_rows() if r["fingerprint"] == fp)
+    assert row["status"] == "open"
+    assert row["missedRuns"] == 1
