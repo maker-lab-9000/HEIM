@@ -34,6 +34,8 @@ import sqlite3
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit
@@ -49,7 +51,16 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from heim.agents import AGENT_KEYS
+from heim.agents import (
+    AGENT_KEYS,
+    Tick,
+    agent_specs,
+    investigable_hosts,
+    investigator_status,
+    overall_condition,
+    run_strip,
+    status_of,
+)
 from heim.config import Config, load_config
 from heim.costing import cost_of
 from heim.dashboard import format as fmt
@@ -61,6 +72,7 @@ from heim.metrics.queries import build_window, load_queries
 # through the exact code path the email did, or the numbers would drift
 from heim.pipelines.daily import _fetch_query_ranges
 from heim.pipelines.queue import enqueue_investigation, enqueue_retry
+from heim.pipelines.security_audit import AGENT_NAME as AUDIT_AGENT
 from heim.pipelines.security_audit import AUDIT_HOST, AUDIT_KIND
 from heim.pipelines.suppression import mark_false_positive, suppress_fingerprint
 from heim.reports.render import _md_to_html
@@ -96,6 +108,31 @@ THEME_WORD = {"auto": "Auto", "light": "Light", "dark": "Dark"}
 DAEMON_FRESH_S = 20 * 60
 #: the daemon's every-5-minutes agents: their heartbeats say it is alive
 POLL_AGENTS = ("alert_poller", "thresholds", "uptime")
+#: how often the poll agents run, for the Observations ruler's missed polls
+POLL_CADENCE_S = 300
+
+#: the Agents panel's switch (``?agents=``): the states each segment keeps
+AGENT_FILTERS: dict[str, frozenset[str] | None] = {
+    "all": None,
+    "running": frozenset({"running"}),
+    "attention": frozenset({"failed", "degraded", "stale", "unknown"}),
+}
+#: a flagged row: the agent stopped reporting or its last run errored
+FLAGGED_STATES = frozenset({"stale", "failed"})
+#: the coverage card's hollow discs: no fresh word from the agent
+SILENT_STATES = frozenset({"stale", "unknown", "paused"})
+#: how many pending approvals and troubled runs the overview reads at once;
+#: Needs attention still lists only the newest ATTENTION_RUNS of the runs
+NEEDS_YOU_LIMIT = 50
+ATTENTION_RUNS = 6
+#: the Needs attention table stops here, so the first screen reaches the
+#: Agents panel; a critical row is never the one cut (``_attention_shown``)
+ATTENTION_CAP = 6
+
+try:
+    VERSION = package_version("heim")
+except PackageNotFoundError:  # pragma: no cover - a source checkout without metadata
+    VERSION = "dev"
 
 #: rows per window on the three list pages. ``?offset=N`` moves the window;
 #: the "Load 50 more" control is a plain link to the next one, so the no-JS path
@@ -582,7 +619,7 @@ def create_app(config: Config | None = None) -> FastAPI:
              "meta": "agents working now", "href": "/investigations?status=running",
              "running": counts.get("running", 0) > 0},
             {"label": "pending approval", "value": str(counts.get("pending_approval", 0)),
-             "meta": "waiting on a 👍 in Telegram",
+             "meta": "waiting for your approval",
              "href": "/investigations?status=pending_approval"},
             {"label": "tokens 24h", "value": fmt.tokens(tok_in + tok_out),
              "meta": f"{fmt.tokens(tok_in)} in → {fmt.tokens(tok_out)} out{spend_text}"},
@@ -594,9 +631,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         # with the total behind them so the card knows whether it is truncating.
         # The reason line is the detail page's own sentence (_outcome_line) —
         # `outcome` stores keywords ("needs_human", "timeout"), never prose.
-        attention = [{**r, "reason": (_outcome_line(r) or {}).get("text", "")}
-                     for r in reader.read(lambda s: s.needs_attention())]
+        # One wide read feeds both the card (its newest rows) and Needs you.
+        troubled = [{**r, "reason": (_outcome_line(r) or {}).get("text", "")}
+                    for r in reader.read(lambda s: s.needs_attention(limit=NEEDS_YOU_LIMIT))]
+        attention = troubled[:ATTENTION_RUNS]
         attention_count = reader.read(lambda s: s.needs_attention_count())
+        # the console (redesign 2026-11-01): heartbeats, the agent rows and the
+        # four cards, each figure counted from the same rows the page lists
+        now_iso = datetime.now(timezone.utc).isoformat()
+        by_agent = reader.read(lambda s: s.agent_runs_by_agent())
+        running = reader.read(lambda s: s.investigations(limit=5, status="running"))
+        pending = reader.read(lambda s: s.investigations(limit=NEEDS_YOU_LIMIT,
+                                                         status="pending_approval"))
+        agent_rows = _agent_rows(cfg, by_agent, invs, running, now_iso)
+        needs_you = _needs_you(pending, troubled)
+        attention_rows = _attention_rows(open_incidents, attention, invs,
+                                         set(investigable_hosts(cfg)))
         feedback = reader.read(lambda s: s.latest_tool_feedback())
         tool_usage = _tool_usage(reader.read(lambda s: s.tool_usage(limit=12)), feedback)
         # the weekly rhythm (spec §11): 14 zero-filled days, turned into bar
@@ -617,8 +667,23 @@ def create_app(config: Config | None = None) -> FastAPI:
             tool_feedback_general=_general_feedback(feedback, tool_usage),
             investigations=invs[:8], findings=findings[:6],
             # a recorded run is activity too — the page used to claim "no
-            # activity yet" while the latest-runs card had something to say
-            empty=not (invs or findings or open_incidents or queued or daily),
+            # activity yet" while the latest-runs card had something to say;
+            # so is a heartbeat: the daemon has polled, even if nothing fired
+            empty=not (invs or findings or open_incidents or queued or daily
+                       or any(by_agent.values())),
+            condition=overall_condition(open_incidents,
+                                        [r["status"] for r in agent_rows]),
+            coverage=_coverage(agent_rows),
+            observations=_observations(agent_rows, by_agent, now_iso),
+            requires_you=_requires_you(needs_you),
+            attention_rows=attention_rows,
+            attention_shown=_attention_shown(attention_rows),
+            needs_you=needs_you,
+            **_agents_panel(agent_rows, request.query_params.get("agents", "")),
+            base_href="/",
+            # Task 5 wires 24 h and 7 d; until then the page reads live
+            window="live",
+            version=VERSION,
         )
 
     @app.get("/investigations", response_class=HTMLResponse)
@@ -1445,6 +1510,231 @@ def _health_card(latest: dict | None, sev_counts: dict, cfg: Config,
         "line": _counts_line(sev_counts.get((latest or {}).get("id"), {})),
         "hosts": hosts,
     }
+
+
+# ----------------------------------------------------------- the console
+#
+# The overview's first screen (redesign 2026-11-01): what needs attention, are
+# the agents working, how fresh is their word. Pure: every helper takes rows
+# the route already read, so a figure and the list it summarises are always
+# counted from the same rows.
+
+
+def _own_runs(invs: list[dict]) -> list[dict]:
+    """The investigator's own runs: the security auditor writes investigation
+    rows too, and an offline replay says nothing about the live agent."""
+    return [i for i in invs
+            if i.get("agent_name") != AUDIT_AGENT and i.get("trigger") != "replay"]
+
+
+def _strip_label(strip: list[Tick]) -> str:
+    """The run strip in words, for its ``role="img"``."""
+    if not strip:
+        return "no runs yet"
+    runs = sum(t.state in ("ok", "fail") for t in strip)
+    failed = sum(t.state == "fail" for t in strip)
+    missed = sum(t.state == "miss" for t in strip)
+    parts = [f"{runs} run{'' if runs == 1 else 's'}"]
+    parts += [f"{failed} failed"] if failed else []
+    parts += [f"{missed} missed"] if missed else []
+    parts += ["the latest not received"] if strip[-1].state == "open" else []
+    return ", ".join(parts if len(parts) > 1 else parts + ["all succeeded"])
+
+
+def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
+                running: list[dict], now_iso: str) -> list[dict]:
+    """One row per agent, in ``AGENT_KEYS`` order: spec, status and run strip.
+
+    The investigator records no heartbeats; its runs are its investigations
+    (``invs``, newest first), and ``running`` names the one in flight for
+    its scope line. A paused agent's strip shows what it did, never a miss.
+    """
+    detail = {key: rows[0].get("detail") or {} for key, rows in by_agent.items() if rows}
+    live = next(iter(_own_runs(running)), None)
+    if live:
+        detail["investigator"] = {"running_host": live.get("host"),
+                                  "running_id": live.get("id")}
+    own = _own_runs(invs)
+    rows = []
+    for spec in agent_specs(cfg, detail):
+        if spec.key == "investigator":
+            status = investigator_status(own, now_iso)
+            finished = [{"started_at": i.get("started_at"),
+                         "ok": i.get("status") not in ("failed", "incomplete")}
+                        for i in own
+                        if i.get("status") not in ("pending_approval", "declined", "running")]
+            strip = run_strip(finished, None, now_iso)
+        else:
+            runs = by_agent.get(spec.key, [])
+            status = status_of(spec, runs, now_iso)
+            strip = run_strip(runs, None if spec.paused else spec.cadence_s, now_iso)
+        rows.append({"key": spec.key, "name": spec.name, "scope": spec.scope,
+                     "status": status, "last_ok": status.last_ok_at, "strip": strip,
+                     "strip_label": _strip_label(strip),
+                     "flag": status.state in FLAGGED_STATES,
+                     "href": f"/agents/{spec.key}"})
+    return rows
+
+
+def _gap(row: dict) -> dict:
+    """The monitoring-gap line under the Agents table for one flagged row."""
+    name, status = row["name"].lower(), row["status"]
+    if status.state == "stale":
+        text = f"Monitoring gap: latest {name} result not received."
+    else:
+        error = status.last_error.rstrip(". ") or "no reason recorded"
+        text = f"Monitoring gap: {name} failed: {error}."
+    return {"text": text, "href": row["href"], "label": f"Review {name} runs"}
+
+
+def _agents_panel(rows: list[dict], wanted: str) -> dict:
+    """The Agents panel's context: the rows the switch keeps, the switch's
+    counts (from the same rows), and one gap line per flagged agent whatever
+    the filter, because a monitoring gap is news on every view."""
+    key = wanted if wanted in AGENT_FILTERS else "all"
+
+    def keeps(states: frozenset[str] | None, row: dict) -> bool:
+        return states is None or row["status"].state in states
+
+    return {
+        "agents": [r for r in rows if keeps(AGENT_FILTERS[key], r)],
+        "agents_filter": key,
+        "agents_counts": {k: sum(keeps(states, r) for r in rows)
+                          for k, states in AGENT_FILTERS.items()},
+        "gaps": [_gap(r) for r in rows if r["flag"]],
+    }
+
+
+def _coverage(rows: list[dict]) -> dict:
+    """The Agent coverage card: one disc per agent, hollow when it is silent."""
+    discs = [r["status"].state not in SILENT_STATES for r in rows]
+    return {"reporting": sum(discs), "total": len(rows), "discs": discs,
+            "missing": [r["name"] for r, on in zip(rows, discs) if not on]}
+
+
+def _observations(rows: list[dict], by_agent: dict[str, list[dict]], now_iso: str) -> dict:
+    """The Observations card: how old the newest poll is, and the last polls
+    as a ruler. A poll cycle records each running half under one start time,
+    so the halves merge into one tick that fails when any half failed."""
+    polling = [r["key"] for r in rows
+               if r["key"] in POLL_AGENTS and r["status"].state != "paused"]
+    cycles: dict[str, bool] = {}
+    for key in polling:
+        for run in by_agent.get(key, []):
+            at = run["started_at"]
+            cycles[at] = cycles.get(at, True) and run["ok"]
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    merged = sorted(({"started_at": at, "ok": ok} for at, ok in cycles.items()),
+                    key=lambda r: fmt.parse_dt(r["started_at"]) or epoch, reverse=True)
+    ticks = run_strip(merged, POLL_CADENCE_S, now_iso)
+    beats = [r.get("finished_at") or r.get("started_at")
+             for key in POLL_AGENTS for r in by_agent.get(key, [])[:1]]
+    beats = [b for b in beats if fmt.parse_dt(b)]
+    newest = max(beats, key=fmt.parse_dt) if beats else ""
+    polls = sum(t.state in ("ok", "fail") for t in ticks)
+    failed = sum(t.state == "fail" for t in ticks)
+    missed = sum(t.state == "miss" for t in ticks)
+    return {
+        "since_s": fmt.age_seconds(newest) if newest else None,
+        "since_text": fmt.age_text(newest) if newest else fmt.DASH,
+        "sources": "Prometheus · Uptime Kuma" if "uptime" in polling else "Prometheus",
+        "ticks": ticks,
+        "label": f"{polls} polls, {failed} failed, {missed} missed",
+    }
+
+
+def _subject(inv: dict) -> str:
+    """What an investigation is about, in a few words: its first triggering
+    finding, else the name in its fingerprint (``host|qid|name``)."""
+    first = next((f["metric"] for f in _trigger_findings(inv) if f["metric"]), "")
+    parts = str(inv.get("fingerprint") or "").split("|")
+    name = (parts[2] or parts[1]) if len(parts) == 3 else ""
+    return first or name
+
+
+def _needs_you(pending: list[dict], troubled: list[dict]) -> list[dict]:
+    """The operator's tasks, oldest first within each kind: approvals, then
+    physical checks, then the runs that need a person's judgement. Each opens
+    the investigation, where the approve/decline and re-run forms live."""
+    def task(inv: dict, kind: str, title: str, text: str) -> dict:
+        return {"kind": kind, "label": fmt.needs_you_label(inv), "title": title,
+                "mono": f"{inv.get('host') or fmt.DASH} · investigation {inv.get('id')}",
+                "text": text, "href": f"/investigations/{inv.get('id')}",
+                "primary": kind == "approval"}
+
+    approvals = [task(i, "approval", f"Investigate {_subject(i) or i.get('host')}",
+                      "Review the proposed diagnostic scope.") for i in reversed(pending)]
+    checks, humans = [], []
+    for inv in reversed(troubled):
+        if inv.get("status") != "needs_human":
+            continue
+        step = fmt.physical_step(inv.get("report_md"))
+        title = _subject(inv) or f"Investigation {inv.get('id')}"
+        if step:
+            checks.append(task(inv, "check", title, step))
+        else:
+            humans.append(task(inv, "human", title, inv.get("reason", "")))
+    return approvals + checks + humans
+
+
+def _requires_you(tasks: list[dict]) -> dict:
+    return {"n": len(tasks),
+            "approvals": sum(t["kind"] == "approval" for t in tasks),
+            "checks": sum(t["kind"] == "check" for t in tasks)}
+
+
+_PREFIXES = ("[uptime] ", "[metric] ", "[alert] ")
+
+
+def _attention_rows(open_incidents: list[dict], attention: list[dict],
+                    invs: list[dict], investigable: set[str]) -> list[dict]:
+    """Needs attention: critical incidents, then the runs that ended badly
+    (with their re-run form), then warnings; oldest first within each group.
+    ``open_rows()`` is status ``open`` only, so suppressed rows never get here."""
+    by_fp: dict[str, list[dict]] = {}
+    for inv in invs:                                   # newest first
+        by_fp.setdefault(str(inv.get("fingerprint") or ""), []).append(inv)
+
+    def incident(i: dict, severity: str, lamp: str) -> dict:
+        text = str(i.get("description") or "")
+        sub = next((text[len(p):] for p in _PREFIXES if text.startswith(p)), text)
+        name = str(i.get("fingerprint") or "").split("|")[-1]
+        return {"kind": "incident", "severity": severity, "lamp": lamp,
+                "title": i.get("metric") or name or fmt.DASH,
+                "sub": sub, "host": i.get("host") or "",
+                "workflow": fmt.workflow_for(i, by_fp.get(i.get("fingerprint") or "", []),
+                                             investigable),
+                "age": fmt.age_text(i.get("firstSeen")), "at": i.get("firstSeen") or "",
+                "href": "/incidents"}
+
+    def run(inv: dict) -> dict:
+        status = str(inv.get("status") or "")
+        return {"kind": "investigation", "id": inv.get("id"), "status": status,
+                "severity": fmt.status_pill(status)["label"],
+                "lamp": "red" if status == "failed" else "amber",
+                "title": _subject(inv) or f"Investigation {inv.get('id')}",
+                "sub": inv.get("reason", ""), "host": inv.get("host") or "",
+                "workflow": {"title": "Needs a human" if status == "needs_human" else "Stopped",
+                             "sub": f"investigation {inv.get('id')}",
+                             "href": f"/investigations/{inv.get('id')}"},
+                "age": fmt.age_text(inv.get("started_at")), "at": inv.get("started_at") or "",
+                "href": f"/investigations/{inv.get('id')}"}
+
+    def rank(i: dict) -> int:
+        return _SEV_RANK.get(str(i.get("severity") or "").lower(), 3)
+
+    crit = [incident(i, "critical", "red") for i in open_incidents if rank(i) == 0]
+    warn = [incident(i, "warning", "amber") for i in open_incidents if rank(i) == 1]
+    return crit + [run(i) for i in reversed(attention)] + warn
+
+
+def _attention_shown(rows: list[dict]) -> list[dict]:
+    """The rows the Needs attention table prints: at most ``ATTENTION_CAP``,
+    unless more than that are critical. Criticals lead the order, so cutting
+    the tail can only ever drop runs and warnings; the panel's header still
+    counts every row and an "all (n)" line links the rest."""
+    crit = sum(r["kind"] == "incident" and r["severity"] == "critical" for r in rows)
+    return rows[:max(ATTENTION_CAP, crit)]
 
 
 def _findings_line(findings: list[dict]) -> str:

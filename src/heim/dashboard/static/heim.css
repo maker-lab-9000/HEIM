@@ -248,7 +248,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: var(--text-13); }
 .runs i, .key i { display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--ink); }
 .runs .fail, .key .fail { background: var(--crit); }
 .runs .miss, .key .miss { background: var(--warn); }
-.runs .open { background: transparent; box-shadow: inset 0 0 0 2px var(--ink); }
+.runs .open, .discs .open { background: transparent; box-shadow: inset 0 0 0 2px var(--ink); }
 .gap {
   display: flex; align-items: center; gap: 24px; padding: 16px 4px 0;
   border-top: 1px solid var(--line); font-size: var(--text-13);
@@ -260,6 +260,48 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: var(--text-13); }
 }
 .key { display: flex; gap: 20px; margin-left: auto; color: var(--ink-2); }
 .key span { display: inline-flex; align-items: center; gap: 8px; }
+
+/* the overview console: instrument cards, the two columns, the agents */
+
+.card .label, .task .label, .gap p, .gaps { margin-top: 0; margin-bottom: 0; }
+.read { display: flex; align-items: center; gap: 12px; }
+.read .word { font-size: var(--text-16); font-weight: 600; line-height: 1.2; }
+.read small, .card .foot, .task .mono, .task p { display: block; margin: 2px 0 0; font-size: var(--text-13); font-weight: 400; color: var(--ink-2); }
+.card .foot { margin-top: auto; padding-top: 12px; }
+.discs, .ruler { display: flex; gap: 8px; margin-top: 16px; }
+.discs i { width: 14px; height: 14px; border-radius: 50%; background: var(--ink); }
+.ruler { justify-content: space-between; align-items: flex-end; height: 16px; }
+.ruler i { width: 1px; height: 12px; background: var(--ink-3); }
+.ruler .fail, .ruler .miss { width: 2px; height: 16px; background: var(--crit); }
+.cols { display: grid; grid-template-columns: minmax(0, 2.6fr) minmax(300px, 1fr); gap: 16px; align-items: start; }
+.panel-head .count, .tbl .sub, .agents .scope, .agents .when { color: var(--ink-2); }
+.tbl .title { display: block; font-size: var(--text-15); font-weight: 600; }
+.tbl .sub { display: block; margin-top: 2px; }
+.att .sub a { white-space: nowrap; }
+.sev .w { display: inline-block; }
+.sev .w::first-letter { text-transform: uppercase; }
+.att td:first-child { width: 8.5em; }
+.att .age { padding-right: 0; text-align: right; }
+.att .mono, .att .age, .agents .name, .agents .state, .agents .when { white-space: nowrap; }
+.att td { padding-block: 8px; }
+.wf { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
+.wf .acts, .over { margin: 0; }
+.wf .btn { min-height: 32px; padding: 0 12px; }
+.task { display: grid; grid-template-columns: 14px minmax(0, 1fr); column-gap: 12px; padding: 12px 0 16px; border-bottom: 1px solid var(--line); }
+.task:last-child { border-bottom: 0; }
+.task h3 { margin-top: 8px; font-size: var(--text-16); font-weight: 600; }
+.task .btn { margin-top: 16px; }
+.agents .panel-head { align-items: center; }
+.agents .panel-head .seg { margin-left: auto; }
+.agents td { padding-block: 8px; vertical-align: middle; }
+.agents .name, .agents .state { font-weight: 600; }
+.agents .scope { padding-left: 16px; }
+.agents .state { display: inline-flex; align-items: center; gap: 12px; }
+.agents .go { text-align: right; color: var(--ink-3); }
+.gaps { display: grid; gap: 8px; padding: 0; list-style: none; }
+.gaps li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; }
+footer.foot { display: flex; justify-content: space-between; gap: 16px; padding-top: 12px; }
+@media (max-width: 70rem) { .cols { grid-template-columns: minmax(0, 1fr); } }
 
 /* pages, re-themed until their tasks recompose them */
 
@@ -428,9 +470,17 @@ details > summary:hover { color: var(--ink); }
   .card, .panel { padding: 16px; overflow-x: auto; }
   .imeta { min-width: 40rem; }
   .panel-head, .gap { flex-wrap: wrap; }
-  .panel-head .more, .key { margin-left: 0; }
+  .panel-head .more, .key, .agents .panel-head .seg { margin-left: 0; }
   .gap { gap: 12px; }
   .runs { flex-wrap: wrap; }
+  /* the console's tables restack into rows: the name leads each one */
+  .att thead, .agents thead, .agents .go { display: none; }
+  .att table, .att tbody, .att tr, .att td, .agents table, .agents tbody, .agents tr, .agents td { display: block; }
+  .att td, .agents td { width: auto; padding: 2px 0; border: 0; text-align: left; }
+  .att tr, .agents tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .agents .scope { padding-left: 0; }
+  .agents tr.flag { padding-left: 12px; background: var(--flag-bg); box-shadow: inset 4px 0 0 var(--signal); }
+  .agents tr.flag td { background: none; box-shadow: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

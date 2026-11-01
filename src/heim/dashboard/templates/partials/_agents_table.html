@@ -1,0 +1,59 @@
+{#- The Agents panel (the signature of the console): one row per agent with its
+    state, last success and the strip of its last runs; a stale or failed
+    agent is a flagged row and gets a monitoring-gap line under the table.
+
+    Renders from `agents` (the rows the switch keeps), `agents_filter`
+    (all | running | attention), `agents_counts`, `gaps` and `base_href`, the
+    page the switch links back to (the overview, or /agents). The switch is
+    plain links that keep the rest of the query string, so it works with no
+    JavaScript. -#}
+{% import "partials/_macros.html" as m %}
+<section class="panel agents" id="agents" aria-labelledby="h-ag">
+  <div class="panel-head">
+    <h2 id="h-ag">Agents</h2>
+    {%- set items = [] %}
+    {%- for key, label in (('all', 'All'), ('running', 'Running'), ('attention', 'Attention')) %}
+    {%- set qs = qs_with(agents=None if key == 'all' else key) %}
+    {%- set _ = items.append({'href': base_href ~ ('?' ~ qs if qs else '') ~ '#agents',
+                              'label': label, 'n': agents_counts[key],
+                              'on': agents_filter == key}) %}
+    {%- endfor %}
+    {{ m.seg(items, 'Filter agents') }}
+  </div>
+  {%- if agents %}
+  <table class="tbl">
+    <thead><tr>
+      <th scope="col" colspan="2">Agent / scope</th><th scope="col">Execution state</th>
+      <th scope="col">Last success</th><th scope="col" colspan="2">Last 24 runs</th>
+    </tr></thead>
+    <tbody>
+      {%- for a in agents %}
+      <tr{% if a.flag %} class="flag"{% endif %}>
+        <td class="name"><a href="{{ a.href }}">{{ a.name }}</a></td>
+        <td class="scope">{{ a.scope }}</td>
+        <td><span class="state">{{ m.lamp(a.status.lamp) }}{{ a.status.word }}</span></td>
+        <td class="when">{% if a.last_ok %}{{ m.when(a.last_ok) }}{% else %}{{ DASH }}{% endif %}</td>
+        <td>{% if a.strip %}<span class="runs" role="img" aria-label="{{ a.strip_label }}">
+          {%- for t in a.strip %}<i{% if t.state != 'ok' %} class="{{ t.state }}"{% endif %}></i>{% endfor -%}
+          </span>{% else %}{{ DASH }}{% endif %}</td>
+        <td class="go" aria-hidden="true">›</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- else %}
+  <p class="empty">{{ 'No agent is running right now.' if agents_filter == 'running'
+                      else 'No agent needs attention.' }}</p>
+  {%- endif %}
+  <div class="gap">
+    {%- if gaps %}
+    <ul class="gaps">
+      {%- for g in gaps %}
+      <li><span class="note"><span class="bang" aria-hidden="true">!</span>{{ g.text }}</span>
+        <a class="more" href="{{ g.href }}">{{ g.label }}<span class="arr" aria-hidden="true">→</span></a></li>
+      {%- endfor %}
+    </ul>
+    {%- endif %}
+    <p class="key"><span><i></i>Success</span><span><i class="fail"></i>Failed</span><span><i class="miss"></i>Missed</span></p>
+  </div>
+</section>

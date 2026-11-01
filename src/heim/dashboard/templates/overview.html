@@ -1,11 +1,131 @@
 {% extends "base.html" %}
 {#- `with context` so the action macro can read `back` (partials/_macros.html) -#}
 {% import "partials/_macros.html" as m with context %}
+
+{#- the top bar's window switch: plain links. Only Live is wired so far; the
+    other two keep the rest of the query string. -#}
+{% block switch %}
+{{ m.seg([
+  {'href': '?' ~ qs_with(window='live'), 'label': 'Live', 'on': window == 'live'},
+  {'href': '?' ~ qs_with(window='24h'), 'label': '24 h', 'on': window == '24h'},
+  {'href': '?' ~ qs_with(window='7d'), 'label': '7 d', 'on': window == '7d'},
+], 'Window') }}
+{% endblock %}
+
 {% block content %}
 
+{#- the four instrument cards (the console concept): where the house stands,
+    whether every agent is reporting, how fresh the newest poll is, and how
+    many tasks wait on the operator. Each figure is counted from the rows the
+    panels below list. -#}
+<section class="cards" aria-label="Condition, coverage, freshness and tasks">
+  <div class="card">
+    <p class="label">Infrastructure</p>
+    <span class="grille" aria-hidden="true"></span>
+    <div class="read">
+      {{ m.lamp(('lg ' ~ condition.lamp)|trim) }}
+      <span class="big num">{{ '%02d'|format(condition.crit) }}<span class="visually-hidden"> critical open</span></span>
+      <span class="word">{{ condition.word }}<small>{{ condition.detail }}</small></span>
+    </div>
+  </div>
+  <div class="card">
+    <p class="label">Agent coverage</p>
+    <span class="grille" aria-hidden="true"></span>
+    <div class="read">
+      <span class="big num">{{ coverage.reporting }} / {{ coverage.total }}</span>
+      <span class="word"><small>Reporting</small></span>
+    </div>
+    <div class="discs" role="img" aria-label="{{ coverage.total }} agents, {{ coverage.reporting }} reporting">
+      {%- for on in coverage.discs %}<i{% if not on %} class="open"{% endif %}></i>{% endfor -%}
+    </div>
+    <p class="foot">{% if coverage.missing %}Not reporting: {{ coverage.missing|join(', ') }}{% else %}Every agent reporting{% endif %}</p>
+  </div>
+  <div class="card">
+    <p class="label">Observations</p>
+    <span class="grille" aria-hidden="true"></span>
+    <div class="read">
+      <span class="big num">{{ observations.since_text }}</span>
+      <span class="word"><small>{{ 'Since last sync' if observations.since_s is not none else 'No sync yet' }}</small></span>
+    </div>
+    <div class="ruler" role="img" aria-label="{{ observations.label }}">
+      {%- for t in observations.ticks %}<i{% if t.state in ('fail', 'miss') %} class="{{ t.state }}"{% endif %}></i>{% endfor -%}
+    </div>
+    <p class="foot">{{ observations.sources }}</p>
+  </div>
+  <div class="card">
+    <p class="label">Requires you</p>
+    <span class="grille" aria-hidden="true"></span>
+    {%- set ry = requires_you %}
+    {%- set others = ry.n - ry.approvals - ry.checks %}
+    <div class="read">
+      <span class="big num">{{ '%02d'|format(ry.n) }}</span>
+      <span class="word">Task{{ '' if ry.n == 1 else 's' }}<small>{{ ry.approvals }} approval{{ '' if ry.approvals == 1 else 's' }} · {{ ry.checks }} physical check{{ '' if ry.checks == 1 else 's' }}{% if others %} · {{ others }} for a human{% endif %}</small></span>
+    </div>
+  </div>
+</section>
+
+<div class="cols">
+{#- Needs attention (design spec §12 grown into the console): critical
+    incidents, then the runs that did not finish cleanly, then warnings,
+    oldest first within each. Past six rows the table stops (never on a
+    critical row) and an all (n) line links the rest, so the first screen
+    still reaches the Agents panel. Every row says what HEIM is doing about it;
+    a run keeps the one action that helps, re-run it, and its reason line is
+    the detail page's own sentence. The empty state stays visible as good
+    news rather than disappearing. -#}
+<section class="panel att" aria-labelledby="h-att">
+  <div class="panel-head">
+    <h2 id="h-att">Needs attention</h2>
+    <span class="count">{{ attention_rows|length }} finding{{ '' if attention_rows|length == 1 else 's' }}</span>
+    <a class="more" href="/incidents">View incidents<span class="arr" aria-hidden="true">→</span></a>
+  </div>
+  {%- if attention_rows %}
+  <table class="tbl">
+    <thead><tr>
+      <th scope="col" colspan="2">Finding</th><th scope="col">Host</th>
+      <th scope="col">Workflow</th><th scope="col" class="age">Age</th>
+    </tr></thead>
+    <tbody>
+      {%- for r in attention_shown %}
+      {%- set wf = r.workflow %}
+      {%- set ts = r.at|iso %}
+      <tr>
+        <td><span class="sev">{{ m.lamp(r.lamp) }}<span class="w">{{ r.severity }}</span></span></td>
+        <td><span class="title">{{ r.title }}</span>
+          {%- if r.sub %}<span class="sub">{{ r.sub }}</span>{% endif %}</td>
+        <td class="mono">{{ r.host }}</td>
+        <td>{% if r.kind == 'investigation' %}<div class="wf"><div>{% endif %}<span class="title">{{ wf.title }}</span><span class="sub">
+          {%- if wf.href %}{% set lead, run, n = wf.sub.rpartition('investigation ') %}{{ lead }}<a href="{{ wf.href }}">{{ run }}{{ n }}</a>
+          {%- else %}{{ wf.sub }}{% endif %}</span>
+          {%- if r.kind == 'investigation' %}</div>
+          <span class="acts">{{ m.act('/actions/retrigger', 'Re-run',
+            {'investigation_id': r.id},
+            confirm='Re-run investigation #' ~ r.id ~ '?') }}</span></div>
+          {%- endif %}</td>
+        <td class="age num"><time{% if ts != DASH %} datetime="{{ ts }}" title="{{ ts }}"{% endif %}>{{ r.age }}</time></td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- if attention_shown|length < attention_rows|length %}
+  <p class="over"><a class="more" href="/incidents">all ({{ attention_rows|length }})<span class="arr" aria-hidden="true">→</span></a></p>
+  {%- endif %}
+  {%- if attention_count > attention|length %}
+  <p><a class="qlink" href="/investigations">all ({{ attention_count }})</a></p>
+  {%- endif %}
+  {%- else %}
+  <p class="empty ok-empty"><span class="lamp blue" aria-hidden="true"></span> Nothing needs attention.</p>
+  {%- endif %}
+</section>
+{% include "partials/_needs_you.html" %}
+</div>
+
+{% include "partials/_agents_table.html" %}
+
+{#- every block the overview had before the console, restyled below it -#}
 {% if empty %}
   <section class="card">
-    <p class="empty">No activity yet. The daemon records every run here — check back after the next poll.</p>
+    <p class="empty">No activity yet. The daemon records every run here, so check back after the next poll.</p>
   </section>
 {% else %}
 
@@ -49,37 +169,6 @@
   {%- endif %}
 </section>
 {%- endif %}
-
-{# the triage queue (design spec §12): the runs that did not finish cleanly,
-    directly under the health card because bad news travels first. Each row
-    says what happened (pill), where (host badge), which run (#id), why (the
-    reason line — the detail page's own sentence, built by _outcome_line) and when,
-    and offers the one action that helps: re-run it. The empty state stays
-    visible as good news rather than disappearing. -#}
-<section class="card">
-  <h2 class="eyebrow">needs attention</h2>
-  {%- if attention %}
-  <ul class="flist">
-    {%- for r in attention %}
-    <li>{{ m.pill(r.status) }} {{ m.hostbadge(r.host) }}
-      <a class="mono" href="/investigations/{{ r.id }}">#{{ r.id }}</a>
-      {{ m.when(r.started_at) }}
-      <span class="acts">{{ m.act('/actions/retrigger', 'Re-run',
-        {'investigation_id': r.id},
-        confirm='Re-run investigation #' ~ r.id ~ '?') }}</span>
-      {%- if r.reason %}
-      <p class="runline">{{ r.reason }}</p>
-      {%- endif %}
-    </li>
-    {%- endfor %}
-  </ul>
-  {%- if attention_count > attention|length %}
-  <p><a class="qlink" href="/investigations">all ({{ attention_count }})</a></p>
-  {%- endif %}
-  {%- else %}
-  <p class="empty ok-empty"><span class="lamp blue" aria-hidden="true"></span> Nothing needs attention.</p>
-  {%- endif %}
-</section>
 
 <section class="card">
   <h2 class="eyebrow">latest runs</h2>
@@ -218,4 +307,6 @@
 </section>
 
 {% endif %}
+
+<footer class="foot label"><span>HEIM / H 01</span><span>heim {{ version }}</span></footer>
 {% endblock %}

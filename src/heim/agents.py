@@ -97,7 +97,10 @@ def _daily_cadence_s(times: list[str]) -> int:
     return max(gaps) * 60
 
 
-def _investigable_hosts(cfg) -> list[str]:
+def investigable_hosts(cfg) -> list[str]:
+    """The hosts an investigation can reach (SSH guests, the hypervisor, the
+    HA host), sorted. The investigator's scope line names them, and the
+    dashboard's Needs attention workflow reads the same list."""
     r = cfg.routing()
     names = set(r.ssh_hosts)
     for h in (r.hypervisor_host, r.ha_host):
@@ -135,7 +138,7 @@ def agent_specs(cfg, latest_detail: dict[str, dict]) -> list[AgentSpec]:
     if inv.get("running_host") and inv.get("running_id") is not None:
         inv_scope = f"{inv['running_host']} · investigation {inv['running_id']}"
     else:
-        inv_scope = "investigates " + ", ".join(_investigable_hosts(cfg))
+        inv_scope = "investigates " + ", ".join(investigable_hosts(cfg))
 
     hosts = d["alert_poller"].get("hosts", len(cfg.hosts))
     daily_hosts = d["daily"].get("hosts", len(cfg.hosts))

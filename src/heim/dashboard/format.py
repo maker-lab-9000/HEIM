@@ -71,6 +71,22 @@ def _coarse(secs: float) -> str:
     return f"{int(secs // (86400 * 30))}mo"
 
 
+def age_text(value: str | None, *, now: datetime | None = None) -> str:
+    """"26 min" / "5 h" / "2 d": how long something has stood, for an Age
+    column or a card figure, where "ago" would be one word too many."""
+    secs = age_seconds(value, now=now)
+    if secs is None:
+        return DASH
+    secs = max(0.0, secs)
+    if secs < 60:
+        return "<1 min"
+    if secs < 3600:
+        return f"{int(secs // 60)} min"
+    if secs < 86400:
+        return f"{int(secs // 3600)} h"
+    return f"{int(secs // 86400)} d"
+
+
 def iso(value: str | None) -> str:
     """Full timestamp for `title=` tooltips."""
     dt = parse_dt(value)
@@ -487,6 +503,88 @@ def bar_chart(points: list[dict], *, value_key: str = "tokens",
         "total": int(sum(values)) if all(float(v).is_integer() for v in values) else sum(values),
         "busiest": bars[peak] if peak >= 0 else None,
     }
+
+
+# ---------------------------------------------------- what HEIM is doing
+
+def workflow_for(incident: dict, investigations: list[dict], investigable: set[str]) -> dict:
+    """What HEIM is doing about an open incident: ``{"title", "sub", "href"}``.
+
+    ``investigations`` are the rows on the incident's fingerprint, newest
+    first. A run in flight or waiting speaks first; then the newest run, if it
+    ended asking for a human. Otherwise the incident is Open, and the sub-line
+    says who is watching it: nobody has looked yet on a host an agent can
+    reach (Needs attention); an Uptime Kuma check no agent can reach
+    (Report-only target); a threshold (``[metric]``) or an alert rule
+    (``[alert]``) for the rest; the daily analysis when it carries no prefix.
+    """
+    def ran(title: str, sub: str, inv: dict) -> dict:
+        return {"title": title, "sub": sub, "href": f"/investigations/{inv.get('id')}"}
+
+    by_status = {}
+    for inv in investigations:
+        by_status.setdefault(str(inv.get("status") or ""), inv)
+    if "running" in by_status:
+        inv = by_status["running"]
+        return ran("Investigating", f"Agent is checking · investigation {inv.get('id')}", inv)
+    if "pending_approval" in by_status:
+        inv = by_status["pending_approval"]
+        return ran("Awaiting approval", f"investigation {inv.get('id')}", inv)
+    if investigations and investigations[0].get("status") == "needs_human":
+        inv = investigations[0]
+        return ran("Needs a human", f"investigation {inv.get('id')}", inv)
+
+    host = str(incident.get("host") or "")
+    text = str(incident.get("description") or "")
+    reachable = host in investigable
+    if reachable and not investigations:
+        sub = "Needs attention"
+    elif text.startswith("[uptime] ") and not reachable:
+        sub = "Report-only target"
+    elif text.startswith("[metric] "):
+        sub = "Monitoring threshold"
+    elif text.startswith("[alert] "):
+        sub = "Alert rule"
+    elif reachable or text.startswith("[uptime] "):
+        sub = "Needs attention"
+    else:
+        sub = "Daily analysis"
+    return {"title": "Open", "sub": sub, "href": ""}
+
+
+#: words in a report's remediation that only a person at the hardware can do
+_PHYSICAL = re.compile(r"\b(?:fans?|cables?|power|reseat\w*|replac\w*|unplug\w*|"
+                       r"enclosures?|hardware|physically)\b", re.I)
+
+
+def _remediation(report_md: str | None) -> list[str]:
+    """The lines of the report's ``## Remediation`` section, list markers off."""
+    lines: list[str] = []
+    inside = False
+    for line in str(report_md or "").splitlines():
+        if line.startswith("## "):
+            inside = line[3:].strip().lower().startswith("remediation")
+            continue
+        text = re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", line).strip()
+        if inside and text:
+            lines.append(text)
+    return lines
+
+
+def physical_step(report_md: str | None) -> str:
+    """The first remediation step that needs someone at the hardware, or ""."""
+    return next((s for s in _remediation(report_md) if _PHYSICAL.search(s)), "")
+
+
+def needs_you_label(inv: dict) -> str:
+    """The task type over a Needs-you item: an approval, a physical check the
+    agent cannot make remotely, or a judgement only a person can make."""
+    status = str(inv.get("status") or "")
+    if status == "pending_approval":
+        return "Approval"
+    if status == "needs_human":
+        return "Physical check" if physical_step(inv.get("report_md")) else "Needs a human"
+    return ""
 
 
 # ------------------------------------------------------------------ statuses
