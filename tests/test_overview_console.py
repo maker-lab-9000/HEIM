@@ -408,7 +408,7 @@ def test_needs_you_lists_approvals_then_checks_and_links_to_detail(tmp_path, mon
     assert f'class="btn primary" href="/investigations/{ids["approval"]}"' in approval
     assert "Review investigation" in approval
 
-    assert 'class="lamp amber"' in check and ">Physical check<" in check
+    assert 'class="lamp orange"' in check and ">Physical check<" in check   # needs you: orange
     assert "Check the USB enclosure fan by hand." in check
     assert f'class="btn" href="/investigations/{ids["check"]}"' in check
     assert "View evidence" in check

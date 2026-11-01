@@ -8,7 +8,7 @@
   <div class="panel-head"><h2 id="h-you">Needs you</h2></div>
   {%- for t in needs_you %}
   <article class="task">
-    {{ m.lamp('orange' if t.kind == 'approval' else 'amber') }}
+    {{ m.lamp(('pending_approval' if t.kind == 'approval' else 'needs_human')|lamp) }}
     <div>
       <p class="label">{{ t.label }}</p>
       <h3>{{ t.title }}</h3>

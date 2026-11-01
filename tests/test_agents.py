@@ -9,6 +9,7 @@ import pytest
 
 from heim import agents, daemon
 from heim.agents import AgentSpec, AgentStatus
+from heim.dashboard.format import lamp
 from heim.config import load_config
 from heim.incidents.store import IncidentStore
 from heim.runtime import Runtime
@@ -45,7 +46,7 @@ def spec(**kw) -> AgentSpec:
 
 
 def status(key: str, state: str) -> AgentStatus:
-    return AgentStatus(key=key, state=state, word="", lamp="", last_run_at="", last_ok_at="",
+    return AgentStatus(key=key, state=state, word="", last_run_at="", last_ok_at="",
                        last_error="", last_error_at="", current="")
 
 
@@ -108,37 +109,37 @@ def test_prune_agent_runs_even_when_retention_is_keep_forever(tmp_path):
 
 def test_no_runs_is_unknown_not_healthy():
     st = agents.status_of(spec(), [], NOW_ISO)
-    assert (st.state, st.word, st.lamp) == ("unknown", "No data yet", "")
+    assert (st.state, st.word, lamp(st.state)) == ("unknown", "No data yet", "")
 
 
 def test_fresh_ok_run_is_healthy():
     st = agents.status_of(spec(), [run(60)], NOW_ISO)
-    assert (st.state, st.word, st.lamp) == ("healthy", "Healthy", "blue")
+    assert (st.state, st.word, lamp(st.state)) == ("healthy", "Healthy", "blue")
     assert st.last_run_at == ago(60) and st.last_ok_at == ago(60)
 
 
 def test_ok_after_error_is_degraded():
     st = agents.status_of(spec(), [run(60), run(360, ok=False, error="x")], NOW_ISO)
-    assert (st.state, st.word, st.lamp) == ("degraded", "Degraded", "amber")
+    assert (st.state, st.word, lamp(st.state)) == ("degraded", "Degraded", "amber")
     assert st.last_error == "x"
 
 
 def test_last_error_is_failed_with_message():
     st = agents.status_of(spec(), [run(60, ok=False, error="Prometheus unreachable"), run(360)], NOW_ISO)
-    assert (st.state, st.word, st.lamp) == ("failed", "Failed", "red")
+    assert (st.state, st.word, lamp(st.state)) == ("failed", "Failed", "red")
     assert st.last_error == "Prometheus unreachable" and st.last_error_at == ago(60)
     assert st.last_ok_at == ago(360)
 
 
 def test_old_ok_run_is_overdue():
     st = agents.status_of(spec(), [run(901)], NOW_ISO)
-    assert (st.state, st.word, st.lamp) == ("stale", "Overdue", "amber")
+    assert (st.state, st.word, lamp(st.state)) == ("stale", "Overdue", "amber")
     assert agents.status_of(spec(), [run(900)], NOW_ISO).state == "healthy"
 
 
 def test_paused_spec_is_paused_whatever_the_runs():
     st = agents.status_of(spec(paused=True), [run(60, ok=False, error="x")], NOW_ISO)
-    assert (st.state, st.word, st.lamp) == ("paused", "Paused", "")
+    assert (st.state, st.word, lamp(st.state)) == ("paused", "Paused", "")
 
 
 def test_run_strip_marks_misses_and_the_open_slot():
@@ -160,19 +161,19 @@ def test_investigator_running_idle_and_failed():
     failed = {"id": 5, "host": "homelab", "status": "failed", "started_at": ago(30),
               "finished_at": ago(20), "incomplete_reason": "model refused"}
     st = agents.investigator_status([running, done], NOW_ISO)
-    assert (st.state, st.word, st.lamp) == ("running", "Running", "ring")
+    assert (st.state, st.word, lamp(st.state)) == ("running", "Running", "green")
     assert st.current == "homelab · investigation 4"
     st = agents.investigator_status([done], NOW_ISO)
-    assert (st.state, st.word, st.lamp) == ("idle", "Idle", "blue")
+    assert (st.state, st.word, lamp(st.state)) == ("idle", "Idle", "blue")
     st = agents.investigator_status([failed, done], NOW_ISO)
-    assert (st.state, st.lamp, st.last_error) == ("failed", "red", "model refused")
+    assert (st.state, lamp(st.state), st.last_error) == ("failed", "red", "model refused")
     assert agents.investigator_status([], NOW_ISO).state == "unknown"
 
 
 def test_overall_condition_unknown_when_a_watcher_is_overdue():
     inc = [{"severity": "critical"}]
     c = agents.overall_condition(inc, [status("alert_poller", "stale"), status("thresholds", "healthy")])
-    assert (c["state"], c["word"], c["lamp"]) == ("unknown", "Unknown", "")
+    assert (c["state"], c["word"], lamp(c["state"])) == ("unknown", "Unknown", "")
     # a paused watcher is not a blind one
     c = agents.overall_condition([], [status("uptime", "paused"), status("alert_poller", "healthy")])
     assert c["state"] == "normal"
@@ -181,14 +182,14 @@ def test_overall_condition_unknown_when_a_watcher_is_overdue():
 def test_overall_condition_critical_degraded_normal_with_counts():
     ok = [status("alert_poller", "healthy")]
     c = agents.overall_condition([{"severity": "critical"}, {"severity": "warning"}], ok)
-    assert (c["state"], c["lamp"], c["crit"], c["warn"], c["detail"]) == (
+    assert (c["state"], lamp(c["state"]), c["crit"], c["warn"], c["detail"]) == (
         "critical", "red", 1, 1, "1 warning open")
     c = agents.overall_condition([{"severity": "warn"}, {"severity": "warning"}], ok)
-    assert (c["state"], c["lamp"], c["detail"]) == ("degraded", "amber", "2 warnings open")
+    assert (c["state"], lamp(c["state"]), c["detail"]) == ("degraded", "amber", "2 warnings open")
     c = agents.overall_condition([], ok + [status("backup", "failed")])
-    assert (c["state"], c["lamp"]) == ("degraded", "amber")
+    assert (c["state"], lamp(c["state"])) == ("degraded", "amber")
     c = agents.overall_condition([], ok)
-    assert (c["state"], c["word"], c["lamp"], c["detail"]) == (
+    assert (c["state"], c["word"], lamp(c["state"]), c["detail"]) == (
         "normal", "Normal", "blue", "nothing else open")
 
 

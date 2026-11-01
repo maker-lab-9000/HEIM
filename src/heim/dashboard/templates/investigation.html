@@ -39,7 +39,7 @@
             thing that makes a forgotten one visible — say "waiting", not a
             duration, because nothing is running yet. It is lit orange: it
             needs the operator. -#}
-        <td class="c-dur mono">{% if inv.status == 'pending_approval' %}{{ m.lamp('orange') }}waiting {{ elapsed(inv.started_at) }}{% elif inv.status == 'running' %}{{ m.lamp('ring') }}{{ elapsed(inv.started_at) }} so far{% else %}{{ duration(inv.started_at, inv.finished_at) }}{% endif %}</td>
+        <td class="c-dur mono">{% if inv.status == 'pending_approval' %}{{ m.lamp(inv.status|lamp) }}waiting {{ elapsed(inv.started_at) }}{% elif inv.status == 'running' %}{{ m.lamp(inv.status|lamp) }}{{ elapsed(inv.started_at) }} so far{% else %}{{ duration(inv.started_at, inv.finished_at) }}{% endif %}</td>
         <td class="c-when">{{ m.when(inv.started_at) }}</td>
         <td class="c-fp mono ink2" title="{{ inv.fingerprint }}">{{ inv.fingerprint|fp }}</td>
       </tr>
@@ -176,6 +176,6 @@
 {%- endif %}
 
 {% if outcome %}
-<p class="outcome {{ outcome.cls }}"><span class="dot" aria-hidden="true"></span>{{ outcome.text }}</p>
+<p class="outcome {{ (outcome.state|pill).cls }}">{{ m.dot(outcome.state) }}{{ outcome.text }}</p>
 {% endif %}
 {% endblock %}

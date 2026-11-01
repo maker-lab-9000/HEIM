@@ -12,7 +12,7 @@
   <table class="tbl dense">
     <tbody>
       <tr><th scope="row">State</th>
-        <td><span class="ihost">{{ m.lamp(agent.status.lamp) }}{{ agent.status.word }}</span></td></tr>
+        <td><span class="ihost">{{ m.lamp(agent.status.state|lamp) }}{{ agent.status.word }}</span></td></tr>
       <tr><th scope="row">Scope</th><td>{{ agent.scope }}</td></tr>
       <tr><th scope="row">Runs</th><td>{{ cadence }}</td></tr>
       <tr><th scope="row">Last success</th>
@@ -61,7 +61,7 @@
       {%- for r in runs %}
       <tr{% if r.word != 'OK' %} class="flag"{% endif %}>
         <td>{{ m.when(r.at) }}</td>
-        <td><span class="ihost">{{ m.lamp(r.lamp) }}{{ r.word }}</span></td>
+        <td><span class="ihost">{{ m.lamp(r.state|lamp) }}{{ r.word }}</span></td>
         <td class="mono">{{ r.duration or DASH }}</td>
         <td>{{ r.what or DASH }}</td>
       </tr>

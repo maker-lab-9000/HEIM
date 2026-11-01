@@ -30,16 +30,17 @@ _NAMES = {
 #: The poll halves: if one of these goes quiet HEIM is blind, not "normal".
 _WATCHERS = ("alert_poller", "thresholds", "uptime")
 
-#: state -> (word, lamp)
+#: state -> word. The state's colour is the dashboard's one colour code
+#: (``heim.dashboard.format.FAMILIES``), looked up from the state key.
 _STATES = {
-    "healthy": ("Healthy", "blue"),
-    "degraded": ("Degraded", "amber"),
-    "failed": ("Failed", "red"),
-    "paused": ("Paused", ""),
-    "unknown": ("No data yet", ""),
-    "stale": ("Overdue", "amber"),
-    "running": ("Running", "ring"),
-    "idle": ("Idle", "blue"),
+    "healthy": "Healthy",
+    "degraded": "Degraded",
+    "failed": "Failed",
+    "paused": "Paused",
+    "unknown": "No data yet",
+    "stale": "Overdue",
+    "running": "Running",
+    "idle": "Idle",
 }
 
 
@@ -58,7 +59,6 @@ class AgentStatus:
     key: str
     state: str
     word: str
-    lamp: str
     last_run_at: str
     last_ok_at: str
     last_error: str
@@ -174,8 +174,7 @@ def agent_specs(cfg, latest_detail: dict[str, dict]) -> list[AgentSpec]:
 
 def _status(key: str, state: str, *, last_run_at="", last_ok_at="", last_error="",
             last_error_at="", current="") -> AgentStatus:
-    word, lamp = _STATES[state]
-    return AgentStatus(key=key, state=state, word=word, lamp=lamp, last_run_at=last_run_at,
+    return AgentStatus(key=key, state=state, word=_STATES[state], last_run_at=last_run_at,
                        last_ok_at=last_ok_at, last_error=last_error,
                        last_error_at=last_error_at, current=current)
 
@@ -308,14 +307,14 @@ def overall_condition(open_incidents: list[dict], statuses: list[AgentStatus]) -
     detail = ("nothing else open" if warn == 0
               else f"{warn} warning{'s' if warn != 1 else ''} open")
 
-    def out(state: str, word: str, lamp: str) -> dict:
-        return {"state": state, "word": word, "lamp": lamp, "crit": crit, "warn": warn,
+    def out(state: str, word: str) -> dict:
+        return {"state": state, "word": word, "crit": crit, "warn": warn,
                 "detail": detail}
 
     if any(s.key in _WATCHERS and s.state in ("stale", "unknown") for s in statuses):
-        return out("unknown", "Unknown", "")
+        return out("unknown", "Unknown")
     if crit:
-        return out("critical", "Critical", "red")
+        return out("critical", "Critical")
     if warn or any(s.state in ("failed", "degraded") for s in statuses):
-        return out("degraded", "Degraded", "amber")
-    return out("normal", "Normal", "blue")
+        return out("degraded", "Degraded")
+    return out("normal", "Normal")

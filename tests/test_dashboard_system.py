@@ -106,7 +106,7 @@ def test_no_emoji_or_status_glyphs_in_templates():
 
 def test_dot_spans_are_empty_lamps(client):
     html = client.get("/findings").text
-    dots = re.findall(r'<span class="dot" aria-hidden="true">(.*?)</span>', html, re.S)
+    dots = re.findall(r'<span class="dot(?: [a-z]+)?" aria-hidden="true">(.*?)</span>', html, re.S)
     assert dots, "the findings page renders severity lamps"
     assert all(d == "" for d in dots), sorted(set(dots))
 

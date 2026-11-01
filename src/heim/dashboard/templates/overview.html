@@ -15,7 +15,7 @@
     <p class="label">Infrastructure</p>
     <span class="grille" aria-hidden="true"></span>
     <div class="read">
-      {{ m.lamp(('lg ' ~ condition.lamp)|trim) }}
+      {{ m.lamp(('lg ' ~ condition.state|lamp)|trim) }}
       <span class="big num">{{ '%02d'|format(condition.crit) }}<span class="visually-hidden"> critical open</span></span>
       <span class="word">{{ condition.word }}<small>{{ condition.detail }}</small></span>
     </div>
@@ -82,7 +82,7 @@
       {%- set wf = r.workflow %}
       {%- set ts = r.at|iso %}
       <tr>
-        <td><span class="sev">{{ m.lamp(r.lamp) }}<span class="w">{{ r.severity }}</span></span></td>
+        <td><span class="sev">{{ m.lamp(r.state|lamp) }}<span class="w">{{ r.severity }}</span></span></td>
         <td><span class="title">{{ r.title }}</span>
           {%- if r.sub %}<span class="sub">{{ r.sub }}</span>{% endif %}</td>
         <td class="mono">{{ r.host }}</td>
@@ -103,7 +103,7 @@
   <p class="over"><a class="more" href="{{ attention_more }}">all ({{ attention_total }})<span class="arr" aria-hidden="true">→</span></a></p>
   {%- endif %}
   {%- else %}
-  <p class="empty ok-empty"><span class="lamp blue" aria-hidden="true"></span> Nothing needs attention.</p>
+  <p class="empty ok-empty">{{ m.lamp('ok'|lamp) }} Nothing needs attention.</p>
   {%- endif %}
 </section>
 {% include "partials/_needs_you.html" %}
@@ -202,7 +202,7 @@
                 aria-label="{{ r.share }} percent of the busiest row">
             <span class="seg" style="width:{{ r.share }}%"></span></span>
         </td>
-        <td class="num mono c-blocked{{ ' ink3' if not r.blocked }}">{% if r.blocked %}<span class="st-crit"><span class="dot" aria-hidden="true"></span>{{ r.blocked }}</span>{% else %}0{% endif %}</td>
+        <td class="num mono c-blocked{{ ' ink3' if not r.blocked }}">{% if r.blocked %}<span class="st-crit">{{ m.dot('error') }}{{ r.blocked }}</span>{% else %}0{% endif %}</td>
         <td class="num mono c-avg">{{ r.avg_ms|dur_ms }}</td>
         {#- an em dash means the steps predate per-step attribution (§5.6),
             not that the calls were free -#}

@@ -1,6 +1,8 @@
 {#- shared building blocks: lamps, status pills, the segmented switch, tool
     and host badges. A status is a lamp plus its word, never a glyph: the
-    `.dot` inside a pill is an empty lamp the st-* class colours (design.md). -#}
+    `.dot` inside a pill is an empty lamp. Every colour comes from the state's
+    family (format.FAMILIES, the one colour code): `state|lamp` is the lamp's
+    colour class, `state|family` the class of a coloured word or pressed key. -#}
 
 {% macro lamp(colour='') -%}
 <span class="lamp{{ ' ' ~ colour if colour }}" aria-hidden="true"></span>
@@ -19,9 +21,21 @@
 </div>
 {%- endmacro %}
 
+{#- the empty lamp inside a pill, a severity or a verdict, lit by its state -#}
+{% macro dot(state) -%}
+{%- set c = state|lamp -%}
+<span class="dot{{ ' ' ~ c if c }}" aria-hidden="true"></span>
+{%- endmacro %}
+
 {% macro pill(value) -%}
 {%- set p = value|pill -%}
-<span class="pill {{ p.cls }}"><span class="dot" aria-hidden="true"></span>{{ p.label }}</span>
+<span class="pill {{ p.cls }}">{{ dot(value) }}{{ p.label }}</span>
+{%- endmacro %}
+
+{#- the colour key (format.LEGEND): one lamp and its words per family -#}
+{% macro legend() -%}
+<p class="key legend"><span class="visually-hidden">Lamp colours: </span>
+  {%- for c, words in colour_legend %}<span>{{ lamp(('sm ' ~ c)|trim) }}{{ words }}</span>{% endfor %}</p>
 {%- endmacro %}
 
 {% macro tool(name) -%}
@@ -40,15 +54,13 @@
 
 {% macro sev(value) -%}
 {%- set p = value|pill -%}
-<span class="sev {{ p.cls }}"><span class="dot" aria-hidden="true"></span>{{ p.label }}</span>
+<span class="sev {{ p.cls }}">{{ dot(value) }}{{ p.label }}</span>
 {%- endmacro %}
 
-{#- a state as a coloured word, no lamp (the incidents list). The class names
-    the colour; critical/warning/open carry text tokens tuned for 4.5:1, resolved
-    is the ink, anything else the secondary ink. -#}
+{#- a state as a coloured word, no lamp (incidents, findings). The class is
+    the state's family; each family's text token holds 4.5:1 on the panel. -#}
 {% macro word(value) -%}
-{%- set k = {'critical': 'crit', 'warning': 'warn', 'open': 'open', 'resolved': 'done'}.get(value, 'other') -%}
-<span class="word {{ k }}">{{ value or DASH }}</span>
+<span class="word {{ value|family }}">{{ value or DASH }}</span>
 {%- endmacro %}
 
 {#- a timestamp. When the value is missing or unparseable `iso` gives the dash,
@@ -96,10 +108,11 @@
 {%- endmacro %}
 
 {#- a key that has been pressed and now shows the outcome: inset, disabled,
-    in the colour of the result, and still carrying its word. `tone` is `open`
-    (green) or `crit` (red); `title` is the tooltip naming the state. -#}
-{% macro pressed(label, tone, title) -%}
-<button class="btn pressed {{ tone }}" type="button" disabled aria-pressed="true" title="{{ title }}">{{ label }}</button>
+    in the colour of the result, and still carrying its word. `state` is what
+    the press did (done, dismissed, approve, decline) and picks the family;
+    `title` is the tooltip naming it. -#}
+{% macro pressed(label, state, title) -%}
+<button class="btn pressed {{ state|family }}" type="button" disabled aria-pressed="true" title="{{ title }}">{{ label }}</button>
 {%- endmacro %}
 
 {#- a daily bar chart (spec §11), server-rendered: `c` is fmt.bar_chart()'s
@@ -166,6 +179,6 @@
 {%- endmacro %}
 
 {% macro muted(sup) -%}
-<span class="pill st-muted"><span class="dot" aria-hidden="true"></span>muted · until
+<span class="pill st-muted">{{ dot('muted') }}muted · until
   {{ sup.until|day if sup.until else 'further notice' }}</span>
 {%- endmacro %}

@@ -1,9 +1,15 @@
+{#- a finding's verdict: the pair of keys, or once judged the chosen key,
+    pressed and disabled in its family (confirmed green, false positive set
+    aside, with its dark lamp). The word stays on the key; the DOM keeps the
+    lower-case verdict and CSS capitalises it. -#}
 {% import "partials/_macros.html" as m with context %}
 <div class="acts vacts">
-  {%- if f.verdict == 'confirmed' %}
-  <span class="verdict st-ok"><span class="dot" aria-hidden="true"></span>confirmed</span>
-  {%- elif f.verdict %}
-  <span class="verdict"><span class="dot" aria-hidden="true"></span>{{ f.verdict|replace('_', ' ') }}</span>
+  {%- if f.verdict %}
+  <button class="btn pressed {{ f.verdict|family }}" type="button" disabled aria-pressed="true"
+          title="verdict: {{ f.verdict|replace('_', ' ') }}">
+    {%- if f.verdict == 'confirmed' %}<span class="verdict st-ok">confirmed</span>
+    {%- else %}{{ m.dot(f.verdict) }}<span class="verdict">{{ f.verdict|replace('_', ' ') }}</span>{% endif -%}
+  </button>
   {%- else %}
   {{ m.act('/actions/verdict', 'Confirm', {'finding_id': f.id, 'verdict': 'confirmed'}) }}
   {{ m.act('/actions/verdict', 'False positive',

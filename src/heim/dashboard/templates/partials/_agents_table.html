@@ -31,7 +31,7 @@
       <tr{% if a.flag %} class="flag"{% endif %}>
         <td class="name"><a href="{{ a.href }}">{{ a.name }}</a></td>
         <td class="scope">{{ a.scope }}</td>
-        <td><span class="state">{{ m.lamp(a.status.lamp) }}{{ a.status.word }}</span></td>
+        <td><span class="state">{{ m.lamp(a.status.state|lamp) }}{{ a.status.word }}</span></td>
         <td class="when">{% if a.last_ok %}{{ m.when(a.last_ok) }}{% else %}{{ DASH }}{% endif %}</td>
         <td>{% if a.strip %}<span class="runs" role="img" aria-label="{{ a.strip_label }}">
           {%- for t in a.strip %}<i{% if t.state != 'ok' %} class="{{ t.state }}"{% endif %}></i>{% endfor -%}
@@ -55,5 +55,6 @@
     </ul>
     {%- endif %}
     <p class="key"><span><i></i>Success</span><span><i class="fail"></i>Failed</span><span><i class="miss"></i>Missed</span></p>
+    {{ m.legend() }}
   </div>
 </section>

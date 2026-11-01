@@ -4,7 +4,7 @@
   {%- for g in ghosts %}
   <tr class="ghost">
     <td class="c-id mono ink3" title="job #{{ g.id }}">job #{{ g.id }}</td>
-    <td class="mono ink3">{{ m.lamp() }} queued · waiting for daemon</td>
+    <td class="mono ink3">{{ m.lamp('queued'|lamp) }} queued · waiting for daemon</td>
     <td class="eyebrow ink3">{{ g.requested_by or DASH }}</td>
     <td class="ink3">{{ g.host or DASH }}</td>
     <td class="mono ink3" title="{{ g.fingerprint }}">{{ g.fingerprint|fp }}</td>

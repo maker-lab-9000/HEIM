@@ -7,7 +7,7 @@
 {%- set heading = {"not found": "Nothing to show here",
                    "bad request": "That request was refused"}.get(page_title, "The store could not be read") %}
 <section class="panel errpanel" aria-labelledby="h-err">
-  <div class="panel-head"><h2 id="h-err"><span class="lamp {{ 'red' if page_title == 'error' else 'amber' }}" aria-hidden="true"></span>{{ heading }}</h2></div>
+  <div class="panel-head"><h2 id="h-err"><span class="lamp {{ ('error' if page_title == 'error' else 'stale')|lamp }}" aria-hidden="true"></span>{{ heading }}</h2></div>
   <p class="errmsg">{{ message }}</p>
   {%- if detail %}<p class="ink2">{{ detail }}</p>{% endif %}
   <p><a class="btn" href="/">Back to overview</a></p>

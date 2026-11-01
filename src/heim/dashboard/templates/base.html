@@ -37,7 +37,7 @@
   {%- endfor %}
   <div class="rail-foot">
     <p class="daemon {{ 'live' if daemon.ok else 'quiet' }}"><span
-      class="lamp{{ ' ' ~ daemon.lamp if daemon.lamp }}" aria-hidden="true"></span><span class="lbl"><b>{{ daemon.label }}</b>
+      class="lamp{{ ' ' ~ daemon.state|lamp if daemon.state|lamp }}" aria-hidden="true"></span><span class="lbl"><b>{{ daemon.label }}</b>
       {%- if daemon.when %}<small>{{ daemon.when }}</small>{% endif %}</span></p>
     {#- no-JS theme switch: a plain GET link the server turns into a cookie
         and a 303. A link rather than a bare form, so the rest of the query

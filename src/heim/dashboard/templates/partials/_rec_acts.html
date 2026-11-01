@@ -7,8 +7,8 @@
 {% import "partials/_macros.html" as m with context %}
 <div class="acts">
   {%- if r.state %}
-  {%- if r.state == 'done' %}{{ m.pressed('Done', 'open', 'marked done') }}
-  {%- else %}{{ m.pressed('Dismiss', 'crit', 'dismissed') }}{% endif %}
+  {%- if r.state == 'done' %}{{ m.pressed('Done', 'done', 'marked done') }}
+  {%- else %}{{ m.pressed('Dismiss', 'dismissed', 'dismissed') }}{% endif %}
   {%- else %}
   {{ m.act('/actions/recommendation', 'Done', {'key': r.key, 'state': 'done'}) }}
   {{ m.act('/actions/recommendation', 'Dismiss', {'key': r.key, 'state': 'dismissed'}) }}

@@ -21,7 +21,7 @@
             call of a multi-tool turn carries the turn's whole delta, hence the
             tilde — a per-step number is a lower bound, not a measurement. -#}
         <p class="ehdr">{{ m.tool(s.tool) }}<span class="smeta mono">{% if s.blocked %}<span
-          class="st-crit"><span class="dot" aria-hidden="true"></span>blocked</span> · {% endif %}{{ s.duration_ms|dur_ms }} · {{ s.result_bytes|size }}{%
+          class="st-crit">{{ m.dot('error') }}blocked</span> · {% endif %}{{ s.duration_ms|dur_ms }} · {{ s.result_bytes|size }}{%
           if s.input_tokens %} · ~{{ s.input_tokens|tokens }} tok{% endif %}</span></p>
         <pre class="cmd mono"><span class="prompt" aria-hidden="true">$ </span>{{ s|command }}</pre>
         {%- if s.result_preview %}

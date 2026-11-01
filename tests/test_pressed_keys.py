@@ -24,12 +24,12 @@ def _rec_key(client):
 def test_done_recommendation_shows_a_pressed_green_done_key(seeded_client):
     key = _rec_key(seeded_client)
     r = seeded_client.post("/actions/recommendation", data={"key": key, "state": "done"}, headers=HX)
-    assert 'class="btn pressed open" type="button" disabled aria-pressed="true"' in r.text
+    assert 'class="btn pressed go" type="button" disabled aria-pressed="true"' in r.text
     assert ">Done</button>" in r.text and "Marked done." in r.text
     assert 'class="pill' not in r.text and 'class="dot"' not in r.text
     assert ">Dismiss<" not in r.text                      # no live keys on a handled row
     page = seeded_client.get("/recommendations").text.split("handled (1)", 1)[1]
-    assert 'class="btn pressed open"' in page and ">Done</button>" in page
+    assert 'class="btn pressed go"' in page and ">Done</button>" in page
 
 
 def test_dismissed_recommendation_shows_a_pressed_red_dismiss_key(seeded_client):
@@ -48,7 +48,7 @@ def app(app_store):
 
 
 @pytest.mark.parametrize("decision, tone, label, other", [
-    ("approve", "open", "Approve", "Decline"), ("decline", "crit", "Decline", "Approve")])
+    ("approve", "go", "Approve", "Decline"), ("decline", "crit", "Decline", "Approve")])
 def test_a_decided_approval_shows_the_pressed_key(app, decision, tone, label, other):
     client, ids, _ = app
     inv = ids["pending"]
@@ -67,9 +67,11 @@ def test_every_key_is_inset_while_pressed():
     css = CSS.read_text()
     assert re.search(r"\.btn:active[^{]*\{[^}]*inset 0 2px 3px var\(--shade\)", css)
     assert re.search(r"\.btn\.pressed[^{]*\{[^}]*inset 0 2px 3px var\(--shade\)[^}]*\}", css)
-    for tone, tok in (("open", "--t-open"), ("crit", "--t-crit")):
-        assert f"color-mix(in oklab, var({tok}) 14%, var(--panel))" in css
-        assert re.search(rf"\.btn\.pressed\.{tone}\s*\{{[^}}]*color: var\({tok}\)", css)
+    # the key wears its family's --tone (the one colour code, 2026-11-02)
+    assert re.search(r"\.btn\.pressed[^{]*\{[^}]*color: var\(--tone\)[^}]*"
+                     r"color-mix\(in oklab, var\(--tone\) 14%, var\(--panel\)\)", css)
+    for tone, tok in (("go", "--t-open"), ("crit", "--t-crit")):
+        assert f":is(.word, .pressed).{tone} {{ --tone: var({tok}); }}" in css
 
 
 def test_cards_span_the_container_in_four_two_one_columns():

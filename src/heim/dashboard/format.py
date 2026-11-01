@@ -752,37 +752,92 @@ def report_sections(report_md: str | None) -> dict:
 
 # ------------------------------------------------------------------ statuses
 
-#: status -> (icon, css class, label) — meaning is never carried by color alone
+#: The one colour code (the operator's decision, 2026-11-02): every state
+#: belongs to a family, and the family is grouped by who acts. Each family is
+#: (lamp colour class, st-* class); its key is also the class a coloured word
+#: (`.word.<family>`) and a pressed key (`.btn.pressed.<family>`) wear. The lamp
+#: colours and the st-* names predate the code and are kept, so older hooks and
+#: pins hold; nothing outside this table decides a state's colour.
+FAMILIES = {
+    "you": ("orange", "st-you"),    # waiting on you
+    "go": ("green", "st-go"),       # in progress, or done well
+    "crit": ("red", "st-crit"),     # broken
+    "warn": ("amber", "st-warn"),   # getting worse
+    "ok": ("blue", "st-ok"),        # settled
+    "other": ("", "st-muted"),      # set aside
+}
+
+#: the colour key, as the legends print it: (lamp colour class, words)
+LEGEND = tuple((FAMILIES[f][0], words) for f, words in (
+    ("you", "Waiting on you"), ("go", "In progress, done"), ("crit", "Broken"),
+    ("warn", "Getting worse"), ("ok", "Settled"), ("other", "Set aside")))
+
+#: state -> (icon, label, family) — meaning is never carried by color alone
 _STATUS = {
-    "running": ("●", "st-running", "running"),
-    "pending_approval": ("◷", "st-warn", "pending approval"),
-    "complete": ("✓", "st-ok", "complete"),
-    "resolved": ("✓", "st-ok", "resolved"),
-    "incomplete": ("⚠", "st-serious", "incomplete"),
-    "needs_human": ("⚠", "st-serious", "needs you"),
-    "failed": ("✕", "st-crit", "failed"),
-    "declined": ("○", "st-muted", "declined"),
-    "open": ("●", "st-crit", "open"),
-    "clearing": ("◐", "st-warn", "clearing"),
-    "suppressed": ("◌", "st-muted", "suppressed"),
-    "queued": ("◌", "st-muted", "queued"),
-    "critical": ("✕", "st-crit", "critical"),
-    "warning": ("⚠", "st-warn", "warning"),
-    "warn": ("⚠", "st-warn", "warning"),
-    "info": ("·", "st-muted", "info"),
-    "ok": ("✓", "st-ok", "ok"),
-    "healthy": ("✓", "st-ok", "healthy"),
+    # investigations (and the queued job ghost row: an investigation always
+    # asks first, so a queued one is already waiting for the operator)
+    "pending_approval": ("◷", "pending approval", "you"),
+    "needs_human": ("⚠", "needs you", "you"),
+    "queued": ("◌", "queued", "you"),
+    "running": ("●", "running", "go"),
+    "complete": ("✓", "complete", "ok"),
+    "resolved": ("✓", "resolved", "ok"),
+    "incomplete": ("⚠", "incomplete", "warn"),
+    "failed": ("✕", "failed", "crit"),
+    "declined": ("○", "declined", "other"),
+    "timeout": ("◌", "timed out", "other"),
+    # jobs: `done` reads like a ticked recommendation, a cut-off one as broken
+    "done": ("✓", "done", "go"),
+    "interrupted": ("✕", "interrupted", "crit"),
+    # incidents: `clearing` is the anti-flap count running down to resolved
+    "open": ("●", "open", "you"),
+    "clearing": ("◐", "clearing", "go"),
+    "suppressed": ("◌", "suppressed", "other"),
+    # severities and overall health
+    "critical": ("✕", "critical", "crit"),
+    "warning": ("⚠", "warning", "warn"),
+    "warn": ("⚠", "warning", "warn"),
+    "info": ("·", "info", "other"),
+    "ok": ("✓", "ok", "ok"),
+    "healthy": ("✓", "healthy", "ok"),
+    "normal": ("✓", "normal", "ok"),
+    "degraded": ("⚠", "degraded", "warn"),
+    "unknown": ("·", "unknown", "other"),
     # metric flags (spec §6): `crit` is the aggregate's own word for a breached
     # threshold — a reading, not a failed run, hence ✳ rather than ✕.
-    "crit": ("✳", "st-crit", "crit"),
-    "na": ("·", "st-muted", "n/a"),
-    "timeout": ("◌", "st-muted", "timed out"),
-    # recommendation states (spec §9): done reads as ok, dismissed as muted —
-    # the operator ticked it off either way, the difference is whether it was
-    # worth doing.
-    "done": ("✓", "st-ok", "done"),
-    "dismissed": ("○", "st-muted", "dismissed"),
+    "crit": ("✳", "crit", "crit"),
+    "na": ("·", "n/a", "other"),
+    # verdicts and mutes
+    "confirmed": ("✓", "confirmed", "go"),
+    "false_positive": ("○", "false positive", "other"),
+    "muted": ("○", "muted", "other"),
+    # recommendation states (spec §9): done is work done well, dismissed a
+    # refusal — the pressed keys wear the same two
+    "dismissed": ("○", "dismissed", "crit"),
+    # an approval decision, as its pressed key shows it: Approve green, Decline
+    # red. The investigation it leaves behind is `declined`, which is set aside.
+    "approve": ("✓", "approved", "go"),
+    "decline": ("✕", "declined", "crit"),
+    # agents (heim.agents) and their runs, and the daemon's heartbeat
+    "idle": ("✓", "idle", "ok"),
+    "paused": ("○", "paused", "other"),
+    "stale": ("⚠", "overdue", "warn"),
+    "overdue": ("⚠", "overdue", "warn"),
+    "missed": ("⚠", "missed", "warn"),
+    "error": ("✕", "error", "crit"),
+    "connected": ("●", "connected", "go"),
 }
+
+
+def family(value: str | None) -> str:
+    """The colour family of a state (``FAMILIES`` key); unknown states are set aside."""
+    entry = _STATUS.get(str(value or "").strip().lower())
+    return entry[2] if entry else "other"
+
+
+def lamp(value: str | None) -> str:
+    """The lamp colour class for a state: ``m.lamp(state|lamp)``."""
+    return FAMILIES[family(value)][0]
 
 
 #: who owns an incident, from its description prefix (invariant 3)
@@ -800,8 +855,8 @@ def ownership_word(description: str | None) -> str:
 
 def status_pill(value: str | None) -> dict:
     key = str(value or "").strip().lower()
-    icon, cls, label = _STATUS.get(key, ("·", "st-muted", key or "unknown"))
-    return {"icon": icon, "cls": cls, "label": label, "key": key}
+    icon, label, fam = _STATUS.get(key, ("·", key or "unknown", "other"))
+    return {"icon": icon, "cls": FAMILIES[fam][1], "label": label, "key": key}
 
 
 def evidence_links(finding: dict, investigation: dict | None,

@@ -59,8 +59,8 @@ def test_severity_and_status_cells_have_no_lamps(client):
 
 def test_words_carry_their_colour_classes(client):
     html = client.get("/incidents").text
-    for cls, word in [("crit", "critical"), ("warn", "warning"), ("open", "open"),
-                      ("done", "resolved"), ("other", "clearing"), ("other", "suppressed")]:
+    for cls, word in [("crit", "critical"), ("warn", "warning"), ("you", "open"),
+                      ("ok", "resolved"), ("go", "clearing"), ("other", "suppressed")]:
         assert f'<span class="word {cls}">{word}</span>' in html, word
 
 
@@ -75,8 +75,9 @@ def test_toggle_is_inside_the_incident_row(client):
 def test_false_positive_verdict_has_a_lamp_before_its_words(client):
     for page in ("/findings", "/security"):
         html = client.get(page).text
-        assert re.search(r'<span class="verdict"><span class="dot" aria-hidden="true"></span>'
-                         r'false positive</span>', html), page
+        # a pressed, set-aside key since 2026-11-02: the dark lamp, then the words
+        assert re.search(r'<button class="btn pressed other"[^>]*><span class="dot" aria-hidden="true">'
+                         r'</span><span class="verdict">false positive</span>', html), page
 
 
 def test_text_tokens_exist_per_mode_and_light_has_no_ok():

@@ -120,6 +120,8 @@ Note (Task 10, 2026-11-01): `--warn` was `#C9961C` (2.4:1 on the light panel); d
 | `ring` | running | `st-running`, agent `running` |
 | `st-serious` (needs a human, incomplete) | `amber` lamp | |
 
+**Update 2026-11-02 (the operator's decision): one colour code, grouped by who acts.** This table is superseded by the families in `design.md`, and so is the earlier follow-up's "open = green": open is now orange. Orange (`--signal` lamp, `--t-you` text) is waiting on you: pending approval, needs you, open incidents, queued. Green (new mode-invariant `--go`/`--go-hi` lamp, `--t-open` text) is in progress or done well: running, clearing, done, confirmed, connected. Red is broken (critical, failed, error, dismissed); amber is getting worse (warning, degraded, overdue, missed, incomplete); ink with the quiet blue-grey lamp is settled (resolved, complete, healthy, idle, ok); grey, the lamp off, is set aside (declined, muted, suppressed, false positive, paused, n/a, unknown). Pressed keys follow it: Done, Approve and Confirm green; Dismiss and Decline red; False positive grey. `ring` and `st-serious` are retired as states; one table in `format.py` (`FAMILIES`, `_STATUS`) decides every colour, and the Agents panel prints the key.
+
 Sizes: `.lamp.lg` 32 px (the condition card), `.lamp.sm` 12 px (inside a segment). The word always accompanies the lamp; the lamp is `aria-hidden`.
 
 ### Other components

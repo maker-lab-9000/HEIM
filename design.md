@@ -20,7 +20,7 @@ The locked system. Every Hallmark run reads this first and pages share it. Chang
   --shade: rgb(0 0 0 / 0.45);  --glint: rgb(255 255 255 / 0.06);           /* light: rgb(31 26 21 / 0.14), rgb(255 255 255 / 0.85) */
   /* mode-invariant, :root only */
   --signal: #E8541E;  --signal-hi: #F8713A;  --crit: #D42B1F;  --crit-hi: #F08274;
-  --warn: #B07F0A;  --warn-hi: #EFCB6A;  --ok: #9FB0BA;  --ok-hi: #D3DDE2;
+  --warn: #B07F0A;  --warn-hi: #EFCB6A;  --ok: #9FB0BA;  --ok-hi: #D3DDE2;  --go: #2E9A4C;  --go-hi: #8FD9A0;
   --sans: system-ui, …;  --mono: ui-monospace, …;  --r: 8px;  --r-ctl: 6px;  --dur-micro: 120ms;
 }
 ```
@@ -29,18 +29,23 @@ The tool palette (`--tool-*`) and the host slots (`--host-*`) are identity colou
 ## Lamps
 A lamp (`.lamp`, and the empty `.dot` inside `.pill`, `.sev`, `.verdict`, `.outcome`) is a 14 px bezelled disc: `radial-gradient(circle at 35% 30%, <hi>, <colour> 65%)` inside a ring of the surface, then a hairline. In the rail the ring is `--bg`. Its colour is the state, the word always sits beside it, and the lamp is `aria-hidden`.
 
-| Class | Meaning | Serves |
-|---|---|---|
-| `red` | critical, failed | `st-crit` |
-| `amber` | warning, degraded, overdue, missed, needs a human | `st-warn`, `st-serious` |
-| `orange` | needs you; the current nav item; the engaged segment | approvals |
-| `blue` | healthy, complete, resolved | `st-ok` |
-| (none) | off, paused, muted, declined, unknown | `st-muted` |
-| `ring` | running | `st-running` |
+## One colour code, grouped by who acts (the operator's decision, 2026-11-02)
+Every state belongs to one family, and `format.FAMILIES` / `format._STATUS` is the only place that decides which. Templates ask for `state|lamp` (the lamp's colour class) or `state|family` (the class of a coloured word or a pressed key); no template picks a colour itself.
+
+| Family | Means | Lamp | Text | States |
+|---|---|---|---|---|
+| `you` | waiting on you | `orange` (`--signal`) | `--t-you` | pending approval, needs you, open, queued |
+| `go` | in progress, or done well | `green` (`--go`) | `--t-open` | running, clearing, done, confirmed, approved, connected |
+| `crit` | broken | `red` (`--crit`) | `--t-crit` | critical, failed, error, interrupted, dismissed, declined (the key) |
+| `warn` | getting worse | `amber` (`--warn`) | `--t-warn` | warning, degraded, overdue, missed, incomplete |
+| `ok` | settled | `blue` (`--ok`) | `--ink` | resolved, complete, healthy, idle, ok, normal |
+| `other` | set aside | none (lamp off) | `--ink-3` | declined, muted, suppressed, false positive, paused, n/a, info, unknown |
+
+Pressed keys follow it: Done, Approve and Confirm pressed are green; Dismiss and Decline red; False positive grey, with its dark lamp. The st-* class of a pill is the family's (`st-you`, `st-go`, `st-crit`, `st-warn`, `st-ok`, `st-muted`); the colour sits on the lamp itself (`.dot.green`). The Agents panel prints the key under its run key. `.lamp.ring` survives only for the Appearance row, which is not a state.
 
 Sizes: `.lamp.lg` 32 px, `.lamp.sm` 12 px. No glyph or emoji is ever a status: words and lamps only.
 
-Contrast: red, orange and amber hold 3:1 on both panels (`--warn` was deepened from `#C9961C` to `#B07F0A` for the light one). Healthy blue-grey (`--ok`) is deliberately quiet, about 2:1 on the light panel: a healthy lamp should not draw the eye, so it is never alone; the word beside it carries the state and the `--line` bezel gives the disc its edge.
+Contrast: red, orange, amber and green hold 3:1 on both panels (green 4.4 dark / 3.2 light; the text tokens 4.5:1 or better, `--t-you` light `#994400` / dark `#F4722F`) (`--warn` was deepened from `#C9961C` to `#B07F0A` for the light one). Healthy blue-grey (`--ok`) is deliberately quiet, about 2:1 on the light panel: a healthy lamp should not draw the eye, so it is never alone; the word beside it carries the state and the `--line` bezel gives the disc its edge.
 
 ## Labels (the operator's ruling)
 `.label` is `600 11px/1 var(--mono)`, tracked `0.14em`, upper case, `--ink-3`: card titles, table heads, rail groups, the brand line, the Needs-you task type, the footer. This departs from Hallmark Floor 67 / Reflex 64 on purpose, as do the task-type label above a Needs-you heading (54), arrows on action links (63) and middle-dot meta strings (63). They are recorded in the stamp as one plain line, `ruled: 67 64 54 63`, not as `waive` lines (sloplint rejects waivers on Floor gates); sloplint still lists them, and that is expected. Secondary captions keep lower-case DOM text (tests slice pages on it); CSS sets the caps.

@@ -399,6 +399,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         dur_s=fmt.dur_s, dur_ms=fmt.dur_ms, tokens=fmt.tokens, size=fmt.size,
         fp=fmt.fingerprint, pill=fmt.status_pill, tool_key=fmt.tool_key,
         command=fmt.command_of, ownership=fmt.ownership_word,
+        family=fmt.family, lamp=fmt.lamp,
     )
     templates.env.filters["ucfirst"] = lambda v: str(v)[:1].upper() + str(v)[1:]
     templates.env.filters.update(mval=fmt.value, mtrend=fmt.trend,
@@ -417,7 +418,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     investigator_models = list(cfg.settings.investigator_models)
     templates.env.globals.update(duration=fmt.duration, elapsed=fmt.elapsed,
                                  DASH=fmt.DASH, models=investigator_models,
-                                 default_model=_default_model(cfg))
+                                 default_model=_default_model(cfg),
+                                 colour_legend=fmt.LEGEND)
     app.state.templates = templates
 
     # ------------------------------------------------------- metrics cache
@@ -547,7 +549,7 @@ def create_app(config: Config | None = None) -> FastAPI:
              "nav": NAV, "nav_groups": NAV_GROUPS, "clock": "",
              "env_chip": _env_chip(cfg),
              "daemon": {"ok": False, "label": "Daemon quiet",
-                        "when": "the store is unreadable", "lamp": "amber"},
+                        "when": "the store is unreadable", "state": "stale"},
              "page_title": "error"},
             status_code=500,
         )
@@ -1411,16 +1413,16 @@ def _daemon_chip(reader: StoreReader) -> dict:
         at = reader.read(newest)
     except sqlite3.Error:  # pragma: no cover - surfaced by the error page
         return {"ok": False, "label": "Daemon quiet", "when": "the store is unreadable",
-                "lamp": "amber"}
+                "state": "stale"}
     if not at:
         return {"ok": False, "label": "No heartbeat yet", "when": "nothing recorded",
-                "lamp": ""}
+                "state": "unknown"}
     age = fmt.age_seconds(at)
     when = fmt.rel_time(at)
     if age is not None and age < DAEMON_FRESH_S:
-        return {"ok": True, "label": "Connected", "when": f"Synced {when}", "lamp": "blue"}
+        return {"ok": True, "label": "Connected", "when": f"Synced {when}", "state": "connected"}
     return {"ok": False, "label": "Daemon quiet", "when": f"Last sync {when}",
-            "lamp": "amber"}
+            "state": "stale"}
 
 
 def _incident_meta(rows: list[dict]) -> str:
@@ -1757,18 +1759,18 @@ def _agent_run_table(runs: list[dict], cadence_s: int | None, now_iso: str) -> l
     if cadence_s and runs:
         age = at_s(str(runs[0].get("started_at")), now_iso)
         if age is not None and age > cadence_s:
-            out.append({"at": now_iso, "word": "Missed", "lamp": "amber", "duration": "",
+            out.append({"at": now_iso, "word": "Missed", "state": "missed", "duration": "",
                         "what": "Latest run not received."})
     for i, r in enumerate(runs):
         out.append({"at": r.get("started_at"), "word": "OK" if r.get("ok") else "Error",
-                    "lamp": "blue" if r.get("ok") else "red",
+                    "state": "ok" if r.get("ok") else "error",
                     "duration": fmt.duration(r.get("started_at"), r.get("finished_at")),
                     "what": _what_happened(r)})
         if cadence_s and i + 1 < len(runs):
             gap = at_s(str(runs[i + 1].get("started_at")), str(r.get("started_at")))
             if gap is not None and gap > 2 * cadence_s:
                 out.append({"at": runs[i + 1].get("started_at"), "word": "Missed",
-                            "lamp": "amber", "duration": "",
+                            "state": "missed", "duration": "",
                             "what": f"No run for {fmt.dur_s(gap)}."})
     return out[:24]
 
@@ -1914,11 +1916,11 @@ def _attention_rows(open_incidents: list[dict], attention: list[dict],
     for inv in invs:                                   # newest first
         by_fp.setdefault(str(inv.get("fingerprint") or ""), []).append(inv)
 
-    def incident(i: dict, severity: str, lamp: str) -> dict:
+    def incident(i: dict, severity: str) -> dict:
         text = str(i.get("description") or "")
         sub = next((text[len(p):] for p in _PREFIXES if text.startswith(p)), text)
         name = str(i.get("fingerprint") or "").split("|")[-1]
-        return {"kind": "incident", "severity": severity, "lamp": lamp,
+        return {"kind": "incident", "severity": severity, "state": severity,
                 "title": i.get("metric") or name or fmt.DASH,
                 "sub": sub, "host": i.get("host") or "",
                 "workflow": fmt.workflow_for(i, by_fp.get(i.get("fingerprint") or "", []),
@@ -1930,7 +1932,7 @@ def _attention_rows(open_incidents: list[dict], attention: list[dict],
         status = str(inv.get("status") or "")
         return {"kind": "investigation", "id": inv.get("id"), "status": status,
                 "severity": fmt.status_pill(status)["label"],
-                "lamp": "red" if status == "failed" else "amber",
+                "state": status,
                 "title": _subject(inv) or f"Investigation {inv.get('id')}",
                 "sub": inv.get("reason", ""), "host": inv.get("host") or "",
                 "workflow": {"title": "" if status == "needs_human" else "Stopped",   # the left column says "Needs you"
@@ -1942,8 +1944,8 @@ def _attention_rows(open_incidents: list[dict], attention: list[dict],
     def rank(i: dict) -> int:
         return _SEV_RANK.get(str(i.get("severity") or "").lower(), 3)
 
-    crit = [incident(i, "critical", "red") for i in open_incidents if rank(i) == 0]
-    warn = [incident(i, "warning", "amber") for i in open_incidents if rank(i) == 1]
+    crit = [incident(i, "critical") for i in open_incidents if rank(i) == 0]
+    warn = [incident(i, "warning") for i in open_incidents if rank(i) == 1]
     return crit + [run(i) for i in reversed(attention)] + warn
 
 
@@ -2439,29 +2441,29 @@ def _outcome_line(row: dict) -> dict | None:
     outcome = str(row.get("outcome") or "")
     when = fmt.clock(row.get("finished_at"))
     if outcome == "resolved" or status == "resolved":
-        return {"icon": "✓", "cls": "st-ok", "text": f"Resolved by operator · {when}"}
+        return {"icon": "✓", "state": "resolved", "text": f"Resolved by operator · {when}"}
     # a timed-out ask is also stored as status=needs_human (pipelines/
     # investigate), so it has to be answered *before* the needs_human case —
     # nobody said "needs you", the question simply went unanswered
     if outcome == "timeout":
-        return {"icon": "◌", "cls": "st-muted",
+        return {"icon": "◌", "state": "timeout",
                 "text": "No outcome confirmed — the ask timed out"}
     if outcome == "needs_human" or status == "needs_human":
-        return {"icon": "⚠", "cls": "st-serious",
+        return {"icon": "⚠", "state": "needs_human",
                 "text": "Needs you — re-proposed next run"}
     if status == "declined":
-        return {"icon": "○", "cls": "st-muted",
+        return {"icon": "○", "state": "declined",
                 "text": "Declined — re-proposed next run"}
     if status == "failed":
-        return {"icon": "✕", "cls": "st-crit",
+        return {"icon": "✕", "state": "failed",
                 "text": row.get("incomplete_reason") or "Failed before writing a report"}
     if status == "incomplete":
-        return {"icon": "⚠", "cls": "st-serious",
+        return {"icon": "⚠", "state": "incomplete",
                 "text": row.get("incomplete_reason") or "Incomplete run"}
     if status == "running":
-        return {"icon": "●", "cls": "st-running", "text": "Still working…"}
+        return {"icon": "●", "state": "running", "text": "Still working…"}
     if status == "pending_approval":
-        return {"icon": "◷", "cls": "st-warn",
+        return {"icon": "◷", "state": "pending_approval",
                 "text": "Waiting for approval — approve or decline above, or "
                         "answer in Telegram."}
     return None
