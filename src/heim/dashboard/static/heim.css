@@ -238,7 +238,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: var(--text-13); }
 .tbl td.st-crit, .tbl td.st-warn { font-weight: 600; }
 .tbl tr.flag td { background: var(--flag-bg); }
 .tbl tr.flag td:first-child { box-shadow: inset 4px 0 0 var(--signal); }
-.tbl.flg th:first-child, .tbl.flg td:first-child { padding-left: 12px; }
+.tbl.ftbl th:first-child, .tbl.ftbl td:first-child, .tbl.flg th:first-child, .tbl.flg td:first-child { padding-left: 12px; }
 .tbl .c-id { width: 4.5em; }
 .loadmore, .loadmore td { margin: 12px 0; text-align: center; }
 .ghost td { color: var(--ink-3); }
@@ -414,16 +414,17 @@ details > summary:hover { color: var(--ink); }
 /* findings, security, recommendations, hosts: fixed column widths */
 .ftbl .c-sev { width: 8em; }
 .ftbl .c-host, .ftbl .c-metric, .rtbl .c-host { width: 12em; }
-.ftbl .c-verdict, .rtbl .c-acts { width: 15em; }
-.ftbl td .acts { flex-direction: column; align-items: flex-start; gap: 4px; margin: 0; }
-.ftbl details { margin-top: 4px; }
+.ftbl .c-verdict { width: 16em; }
+.rtbl .c-acts { width: 15em; }
+.ftbl td .acts { margin: 0; flex-wrap: nowrap; }
+.ftbl .c-metric { overflow-wrap: normal; word-break: normal; }
 .stbl .c-trend { width: 8em; }
 .tbl .trend.is-new { color: var(--signal-ink); font-weight: 600; }
 .htbl tr.on td { background: var(--raised); }
 .fbgrid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 .rtbl .c-src { width: 14em; }
 .rtbl .qlink { white-space: nowrap; }
-.rtbl .c-when { width: 7em; }
+.rtbl .c-when { width: 9em; }
 .rtbl td .acts { margin: 0; }
 .fsum, .rtbl .rectext { color: var(--ink); }
 .flist { margin: 0; padding: 0; list-style: none; }
@@ -447,18 +448,19 @@ details > summary:hover { color: var(--ink); }
 .hrow .hline, .hrow .hopen { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; color: var(--ink-2); }
 .hrow .acts { margin: 0; }
 .own { white-space: nowrap; }
-.incs th, .incs td { padding-right: 12px; }
+:is(.incs, .ftbl) th, :is(.incs, .ftbl) td { padding-right: 12px; }
 .inc { overflow-x: auto; }
 .word { font-weight: 600; color: var(--ink-2); }
 .word.crit { color: var(--t-crit); }
 .word.warn { color: var(--t-warn); }
 .word.open { color: var(--t-open); }
 .word.done { color: var(--ink); }
-.incs .more summary { white-space: nowrap; }
-.incs tr.xbody { display: none; }
-.incs tr:has(details[open]) + tr.xbody { display: table-row; }
-.incs tr.xbody td { padding: 4px 12px 16px; }
-.incs .xbody .prose { max-width: 70ch; }
+:is(.incs, .ftbl) .more { white-space: normal; width: 9em; }
+:is(.incs, .ftbl) .more summary { white-space: normal; }
+:is(.incs, .ftbl) tr.xbody { display: none; }
+:is(.incs, .ftbl) tr:has(details[open]) + tr.xbody { display: table-row; }
+:is(.incs, .ftbl) tr.xbody td { padding: 4px 12px 16px; }
+:is(.incs, .ftbl) .xbody .prose { max-width: 70ch; }
 /* metrics: one fixed-layout table per category, all on one grid */
 .mline { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0; font-size: var(--text-13); }
 .mline .mref { margin-left: auto; }
@@ -526,24 +528,24 @@ details > summary:hover { color: var(--ink); }
   .agents .scope { padding-left: 0; }
   .agents tr.flag { padding-left: 12px; background: var(--flag-bg); box-shadow: inset 4px 0 0 var(--signal); }
   .agents tr.flag td { background: none; box-shadow: none; }
-  .incs thead { display: none; }
-  .incs, .incs tbody, .incs tr, .incs td { display: block; }
-  .incs tr.xbody { display: none; }
-  .incs tr:has(details[open]) + tr.xbody { display: block; }
-  .incs tr.xbody td { padding: 0 0 8px; }
-  .incs td { padding: 2px 0; border: 0; text-align: left; }
-  .incs .num { text-align: left; }
-  .incs tr { padding: 12px 0 4px; }
-  .incs tr.flag { padding-left: 12px; box-shadow: inset 4px 0 0 var(--signal); background: var(--flag-bg); }
-  .incs tr.flag td { background: none; box-shadow: none; }
-  .flg td:first-child { padding-left: 0; }
-  .flg tr.flag td:first-child { box-shadow: none; }
-  .flg tbody tr { padding-left: 12px; }
+  :is(.incs, .ftbl) thead { display: none; }
+  :is(.incs, .ftbl), :is(.incs, .ftbl) tbody, :is(.incs, .ftbl) tr, :is(.incs, .ftbl) td { display: block; }
+  :is(.incs, .ftbl) tr.xbody { display: none; }
+  :is(.incs, .ftbl) tr:has(details[open]) + tr.xbody { display: block; }
+  :is(.incs, .ftbl) tr.xbody td { padding: 0 0 8px; }
+  :is(.incs, .ftbl) td { padding: 2px 0; border: 0; text-align: left; }
+  :is(.incs, .ftbl) .num { text-align: left; }
+  :is(.incs, .ftbl) tr { padding: 12px 0 4px; }
+  :is(.incs, .ftbl) tr.flag { padding-left: 12px; box-shadow: inset 4px 0 0 var(--signal); background: var(--flag-bg); }
+  :is(.incs, .ftbl) tr.flag td { background: none; box-shadow: none; }
+  .tbl:is(.flg, .ftbl) td:first-child { padding-left: 0; }
+  :is(.flg, .ftbl) tr.flag td:first-child { box-shadow: none; }
+  :is(.flg, .ftbl) tbody tr { padding-left: 12px; }
   .hrow { grid-template-columns: 1fr; }
   .hhead { display: none; }
   .hrow .hline > .label { display: inline; }
-  /* :nth-child(n) is every cell: it ties .incs td:nth-child(6) on specificity and wins by order */
-  .incs td:nth-child(n) { max-width: none; }
+  /* :nth-child(n) is every cell: it ties :is(.incs, .ftbl) td:nth-child(6) on specificity and wins by order */
+  :is(.incs, .ftbl) td:nth-child(n) { max-width: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
