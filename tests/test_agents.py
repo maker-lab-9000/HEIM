@@ -91,6 +91,18 @@ def test_prune_drops_agent_runs_older_than_14_days_only(tmp_path):
     assert [r["started_at"] for r in s.agent_runs("daily")] == [ago(13 * day)]
 
 
+def test_prune_agent_runs_even_when_retention_is_keep_forever(tmp_path):
+    s = IncidentStore(tmp_path / "t.sqlite3")
+    day = 86400
+    s.record_agent_run("daily", ago(15 * day), ago(15 * day), True)
+    s.record_agent_run("daily", ago(1 * day), ago(1 * day), True)
+    s.upsert([{"fingerprint": "h|q|", "host": "h", "status": "resolved", "lastSeen": ago(400 * day),
+               "firstSeen": ago(400 * day), "description": "[metric] x", "severity": "warning"}])
+    assert s.prune(NOW_ISO, 0) == {"agent_runs": 1}
+    assert len(s.agent_runs("daily")) == 1
+    assert len(s.all_rows()) == 1          # incident history untouched
+
+
 # ------------------------------------------------------------------ status
 
 
@@ -225,7 +237,8 @@ async def test_poll_job_records_three_agents(rt, monkeypatch):
     rt.config.settings.uptime_kuma.url = "http://kuma.invalid"
 
     async def fake_poll(_rt, **_kw):
-        return {"aborted": "prometheus down", "threshold_samples": 0, "uptime_unreachable": True}
+        return {"aborted": "prometheus down", "threshold_samples": 0, "uptime_unreachable": True,
+                "uptime_monitors": 5, "uptime_report_only": 2}
 
     monkeypatch.setattr(daemon, "run_poll", fake_poll)
     await daemon._poll_job(rt)
@@ -236,6 +249,7 @@ async def test_poll_job_records_three_agents(rt, monkeypatch):
     assert msgs["alert_poller"]["error"] == "Prometheus unreachable"
     assert msgs["thresholds"]["error"] == "no usable samples"
     assert msgs["uptime"]["error"] == "Uptime Kuma unreachable"
+    assert msgs["uptime"]["detail"] == {"monitors": 5, "report_only": 2}
 
 
 async def test_poll_job_skips_paused_halves(rt, monkeypatch):
@@ -260,3 +274,15 @@ async def test_daily_job_failure_records_error(rt, monkeypatch):
     (row,) = rt.store.agent_runs("daily")
     assert row["ok"] is False
     assert row["error"].startswith("RuntimeError: xxx") and len(row["error"]) == 200
+
+
+def test_report_only_count_is_unmapped_or_non_investigable(rt):
+    from types import SimpleNamespace
+    from heim.pipelines.uptime import _report_only_count
+    routing = rt.config.routing()
+    ssh = sorted(routing.ssh_hosts)[0]
+    ctx = SimpleNamespace(instance_host_map={"10.9.9.1:1": ssh}, host_names=frozenset(rt.config.hosts),
+                          routing=routing)
+    mons = [SimpleNamespace(address="10.9.9.1"), SimpleNamespace(address="10.9.9.2")]
+    assert _report_only_count(mons, ctx) == 1
+    assert _report_only_count(None, ctx) == 0

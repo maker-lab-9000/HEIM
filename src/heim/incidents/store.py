@@ -1226,18 +1226,24 @@ class IncidentStore:
         offset as ``now_iso``, so mixed-offset rows can be off by the offset
         difference — hours at the edge of a 120-day window, which is fine.
         """
-        days = int(retention_days or 0)
-        if days <= 0:
-            return {}
-        cutoff = _shift_iso(now_iso, days)
-        job_cutoff = _shift_iso(now_iso, min(days, JOB_RETENTION_MAX_DAYS))
-
         counts: dict[str, int] = {}
 
         def _delete(table: str, where: str, params: tuple) -> None:
             n = self._db.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount
             if n > 0:
                 counts[table] = counts.get(table, 0) + int(n)
+
+        # Heartbeats have their own fixed window, independent of
+        # ``retention_days`` (even "keep forever" must not grow this table).
+        _delete("agent_runs", "started_at != '' AND started_at < ?",
+                (_shift_iso(now_iso, AGENT_RUNS_RETENTION_DAYS),))
+
+        days = int(retention_days or 0)
+        if days <= 0:
+            self._db.commit()
+            return counts
+        cutoff = _shift_iso(now_iso, days)
+        job_cutoff = _shift_iso(now_iso, min(days, JOB_RETENTION_MAX_DAYS))
 
         # children first, while their parents are still selectable
         _delete("investigation_steps",
@@ -1257,8 +1263,6 @@ class IncidentStore:
                 "status IN ('done', 'failed', 'interrupted') "
                 "AND COALESCE(NULLIF(finished_at, ''), created_at) != '' "
                 "AND COALESCE(NULLIF(finished_at, ''), created_at) < ?", (job_cutoff,))
-        _delete("agent_runs", "started_at != '' AND started_at < ?",
-                (_shift_iso(now_iso, AGENT_RUNS_RETENTION_DAYS),))
         self._db.commit()
 
         if sum(counts.values()) > VACUUM_AFTER_DELETIONS:

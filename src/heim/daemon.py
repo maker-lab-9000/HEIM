@@ -119,7 +119,8 @@ def _record_poll_agents(rt: Runtime, started: str, summary: dict) -> None:
         else:
             err = ""
         _record_agent_run(rt, "uptime", started, not err, err,
-                          {"monitors": summary.get("uptime_monitors")})
+                          {"monitors": summary.get("uptime_monitors"),
+                           "report_only": summary.get("uptime_report_only")})
 
 
 async def _poll_job(rt: Runtime) -> None:

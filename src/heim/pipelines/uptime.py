@@ -33,6 +33,7 @@ from heim.incidents.uptime_logic import (
     UptimeContext,
     decide,
     down_headline,
+    is_investigable_host,
     is_uptime_row,
     map_host,
     parse_metrics,
@@ -110,6 +111,16 @@ def build_context(cfg: Config, suppressed: set[str],
     )
 
 
+def _report_only_count(monitors: list | None, ctx) -> int:
+    """Monitors that can only be reported: unmapped, or on a non-investigable host."""
+    n = 0
+    for m in monitors or []:
+        host = map_host(m.address, ctx.instance_host_map, ctx.host_names)
+        if host is None or not is_investigable_host(host, ctx.routing):
+            n += 1
+    return n
+
+
 def _recent_rows(store, states: dict[str, dict], now_iso: str) -> list[dict]:
     """Resolved ``[uptime]`` rows whose monitor recovered inside the flap window."""
     try:
@@ -163,6 +174,7 @@ async def run_uptime(rt: Runtime, run_at: str, *, dispatch_concurrently: bool) -
 
     counters = {
         "uptime_monitors": len(monitors or []),
+        "uptime_report_only": _report_only_count(monitors, ctx),
         "uptime_upserts": len(dec.rows_to_upsert),
         "uptime_groups": len(dec.groups),
         # what WOULD be dispatched; a live poll recounts what actually was
