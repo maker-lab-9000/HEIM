@@ -126,3 +126,8 @@ host_color_order: [home-assistant, homelab, ubuntu-server, heim]
 threshold_detection: true
 threshold_severity: crit        # crit | warn  (warn also includes crit)
 threshold_consecutive: 2        # consecutive polls above threshold before opening
+
+# Uptime Kuma as an alert source: every unpaused monitor is expected up (empty url = off).
+# The API key (Uptime Kuma → Settings → API Keys) goes in .env as UPTIME_KUMA.
+uptime_kuma:
+  url: "${HEIM_UPTIME_KUMA_URL:-}"

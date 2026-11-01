@@ -28,7 +28,7 @@ import httpx
 from heim.incidents.poller_logic import diff_and_decide
 from heim.incidents.state import compute_state
 from heim.metrics.queries import load_queries
-from heim.pipelines import thresholds
+from heim.pipelines import thresholds, uptime
 from heim.pipelines.investigate import dispatch_all
 from heim.pipelines.suppression import filter_decision, filter_threshold
 from heim.runtime import Runtime
@@ -198,7 +198,9 @@ async def _run_thresholds(rt: Runtime, run_at: str, *,
 #: decide whether the poll is worth a row in ``runs``.
 _RECORDABLE = ("upserts", "dispatches", "notifications", "state_changed",
                "threshold_upserts", "threshold_dispatches",
-               "threshold_notifications", "threshold_state_changed")
+               "threshold_notifications", "threshold_state_changed",
+               "uptime_upserts", "uptime_dispatches", "uptime_messages",
+               "uptime_state_changed")
 
 
 async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
@@ -221,6 +223,13 @@ async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
                 rt, run_at, dispatch_concurrently=dispatch_concurrently))
         except Exception:
             log.exception("the threshold half of the poll failed")
+
+    if cfg.settings.uptime_kuma.url:
+        try:
+            summary.update(await uptime.run_uptime(
+                rt, run_at, dispatch_concurrently=dispatch_concurrently))
+        except Exception:
+            log.exception("the uptime half of the poll failed")
 
     if any(v for v in summary.values()):
         log.info("poll result: %s", summary)

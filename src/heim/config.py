@@ -123,6 +123,12 @@ class ApprovalsCfg(BaseModel):
         return _timeout_s(self.outcome_timeout_hours)
 
 
+class UptimeKumaCfg(BaseModel):
+    """Uptime Kuma as an alert source. Empty ``url`` = off. The API key is the
+    ``UPTIME_KUMA`` env var, never config."""
+    url: str = ""
+
+
 class Settings(BaseModel):
     prometheus: PrometheusCfg
     loki: LokiCfg | None = None
@@ -186,6 +192,7 @@ class Settings(BaseModel):
     # opens. Hysteresis is not optional: a single scrape at 102% is a blip,
     # and dispatching on it burns an agent run and a human approval.
     threshold_consecutive: int = 2
+    uptime_kuma: UptimeKumaCfg = UptimeKumaCfg()
 
 
 # --------------------------------------------------------------------------- hosts

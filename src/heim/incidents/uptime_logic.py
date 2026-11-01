@@ -160,6 +160,7 @@ class DownGroup:
     pending_investigation_id: int | None
     headline: str
     findings: list[dict]
+    items: str = ""
 
 
 @dataclass
@@ -274,10 +275,12 @@ def _flap_reopen(prior: dict, st: dict, name: str, host: str, now_iso: str,
     return row, changes, line
 
 
-def _group_for(host: str, rows: list[dict], mons: list[Monitor], mapped: bool,
-               investigable: bool, pending_id: int | None, now_iso: str,
-               tz: str) -> DownGroup:
-    items = ", ".join(f"{m.name} ({m.target})" for m in mons)
+def down_headline(host: str, items: str, mapped: bool, investigable: bool,
+                  pending_id: int | None, now_iso: str, tz: str) -> str:
+    """The Telegram headline for a group of new outages on one host.
+
+    Public so a caller whose pending investigation moved on can re-head the
+    group as a brand-new outage (``pending_id=None``)."""
     if pending_id is not None:
         head = (f"🔴 Also down on {host}: {items} · "
                 f"added to pending investigation #{pending_id}")
@@ -287,6 +290,15 @@ def _group_for(host: str, rows: list[dict], mons: list[Monitor], mapped: bool,
         head += "\n(report only: not a HEIM host)"
     elif not investigable:
         head += "\n(report only: no investigation for this host)"
+    return head
+
+
+def _group_for(host: str, rows: list[dict], mons: list[Monitor], mapped: bool,
+               investigable: bool, pending_id: int | None, now_iso: str,
+               tz: str) -> DownGroup:
+    items = ", ".join(f"{m.name} ({m.target})" for m in mons)
+    head = down_headline(host, items, mapped, investigable, pending_id,
+                         now_iso, tz)
     since = _hhmm(now_iso, tz)
     findings = [{
         "severity": "critical", "host": host, "metric": m.name, "trend": "",
@@ -296,7 +308,7 @@ def _group_for(host: str, rows: list[dict], mons: list[Monitor], mapped: bool,
                    f"{host} serves {m.target}, whether it is running, its recent "
                    f"logs, and why it stopped."),
     } for r, m in zip(rows, mons)]
-    return DownGroup(host, rows, investigable, pending_id, head, findings)
+    return DownGroup(host, rows, investigable, pending_id, head, findings, items)
 
 
 def _unreachable(fail_polls: int, open_by_fp: dict[str, dict], now_iso: str,
