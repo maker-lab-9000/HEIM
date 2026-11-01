@@ -120,3 +120,178 @@ def test_fail_polls_default_and_persist(tmp_path):
     assert store.uptime_fail_polls() == 0
     store.set_uptime_fail_polls(2)
     assert IncidentStore(path).uptime_fail_polls() == 2
+
+
+# ---------------------------------------------------------------- decide()
+from heim.incidents.uptime_logic import (  # noqa: E402
+    PREFIX,
+    UptimeContext,
+    decide,
+    fingerprint,
+)
+
+NOW = "2026-11-01T02:02:00+00:00"
+TEN_AGO = "2026-11-01T01:52:00+00:00"
+_MAP = {"10.0.0.10": "ubuntu-server", "10.0.0.2": "homelab",
+        "10.0.0.4": "heim", "10.0.0.3": "home-assistant"}
+
+
+def _ctx(**kw):
+    base = dict(
+        instance_host_map=_MAP, host_names=frozenset(_MAP.values()),
+        routing=HostRouting(ssh_hosts=frozenset({"ubuntu-server"}),
+                            hypervisor_host="homelab",
+                            hypervisor_categories=frozenset({"availability"}),
+                            ha_host="home-assistant"),
+        kuma_host="home-assistant", timezone="UTC")
+    base.update(kw)
+    return UptimeContext(**base)
+
+
+def _mon(name, status, addr="10.0.0.10", type_="http"):
+    target = f"http://{addr}:5678" if type_ == "http" else addr
+    return Monitor("1", name, type_, target, addr, status)
+
+
+def _orow(name="n8n", host="ubuntu-server", first=TEN_AGO, times=1, desc=None):
+    return {"fingerprint": fingerprint(host, name), "host": host, "metric": name,
+            "severity": "critical", "status": "open", "firstSeen": first,
+            "lastSeen": first, "resolvedAt": "", "timesSeen": times,
+            "missedRuns": 0, "investigated": True,
+            "description": desc or f"{PREFIX}{name} (http http://10.0.0.10:5678) is down in Uptime Kuma"}
+
+
+def _ostate(fp, **kw):
+    return {"fingerprint": fp, "up_polls": 0, "absent_polls": 0,
+            "last_recovered_at": "", "flap_outages": 0, "flap_msg_at": "", **kw}
+
+
+def test_first_down_poll_opens_a_critical_incident_and_one_group():
+    d = decide([_mon("n8n", 0)], [], {}, 0, NOW, _ctx())
+    assert len(d.groups) == 1
+    g = d.groups[0]
+    assert g.host == "ubuntu-server" and g.investigable
+    assert g.headline == "🔴 Down on ubuntu-server: n8n (http://10.0.0.10:5678) · first seen 02:02"
+    assert d.rows_to_upsert == [{
+        "fingerprint": "ubuntu-server|uptime_down|n8n", "host": "ubuntu-server",
+        "metric": "n8n", "severity": "critical", "status": "open",
+        "firstSeen": NOW, "lastSeen": NOW, "resolvedAt": "", "timesSeen": 1,
+        "missedRuns": 0, "investigated": True,
+        "description": "[uptime] n8n (http http://10.0.0.10:5678) is down in Uptime Kuma"}]
+    assert g.findings[0]["detail"].startswith("Uptime Kuma check 'n8n' (http http://10.0.0.10:5678) has been failing since 02:02.")
+    assert d.loki_events[0]["labels"]["category"] == "availability"
+
+
+def test_three_down_monitors_on_one_host_are_one_group():
+    d = decide([_mon("a", 0), _mon("b", 0), _mon("c", 0)], [], {}, 0, NOW, _ctx())
+    assert len(d.groups) == 1 and len(d.groups[0].rows) == 3
+    assert len(d.groups[0].findings) == 3
+    assert all(n in d.groups[0].headline for n in "abc")
+
+
+def test_already_open_outage_is_refreshed_not_regrouped():
+    d = decide([_mon("n8n", 0)], [_orow(times=4)], {}, 0, NOW, _ctx())
+    assert d.groups == []
+    assert d.rows_to_upsert[0]["lastSeen"] == NOW
+    assert d.rows_to_upsert[0]["timesSeen"] == 5
+
+
+def test_two_up_polls_resolve_with_one_grouped_recovery():
+    fp = fingerprint("ubuntu-server", "n8n")
+    d1 = decide([_mon("n8n", 1)], [_orow()], {}, 0, NOW, _ctx())
+    assert d1.rows_to_upsert == [] and d1.messages == []
+    assert d1.state_writes[0]["up_polls"] == 1
+    d2 = decide([_mon("n8n", 1)], [_orow()], {fp: _ostate(fp, up_polls=1)}, 0, NOW, _ctx())
+    assert d2.rows_to_upsert[0]["status"] == "resolved"
+    assert d2.rows_to_upsert[0]["resolvedAt"] == NOW
+    assert d2.messages == ["✅ Back up on ubuntu-server: n8n (down 10 min)"]
+    assert d2.state_writes[0]["last_recovered_at"] == NOW
+
+
+def test_pending_and_maintenance_change_nothing():
+    fp = fingerprint("ubuntu-server", "n8n")
+    for status in (2, 3):
+        d = decide([_mon("n8n", status)], [_orow()], {fp: _ostate(fp, up_polls=1)}, 0, NOW, _ctx())
+        assert d.rows_to_upsert == [] and d.messages == [] and d.state_writes == []
+
+
+def test_missing_for_one_poll_stays_open():
+    fp = fingerprint("ubuntu-server", "n8n")
+    d = decide([_mon("other", 1)], [_orow()], {}, 0, NOW, _ctx())
+    assert d.rows_to_upsert == [] and d.messages == []
+    assert [w for w in d.state_writes if w["fingerprint"] == fp][0]["absent_polls"] == 1
+
+
+def test_missing_for_two_polls_closes_with_the_paused_note():
+    fp = fingerprint("ubuntu-server", "n8n")
+    d = decide([_mon("other", 1)], [_orow()], {fp: _ostate(fp, absent_polls=1)}, 0, NOW, _ctx())
+    assert d.rows_to_upsert[0]["status"] == "resolved"
+    assert d.messages == ["⏸ n8n on ubuntu-server is no longer monitored (paused or removed): closing its outage"]
+    assert fp in d.state_clears
+
+
+def test_unmapped_address_is_report_only():
+    d = decide([_mon("k8s", 0, addr="10.0.0.24")], [], {}, 0, NOW, _ctx())
+    g = d.groups[0]
+    assert g.host == "10.0.0.24" and not g.investigable
+    assert g.headline.endswith("\n(report only: not a HEIM host)")
+
+
+def test_heim_is_report_only():
+    d = decide([_mon("x", 0, addr="10.0.0.4")], [], {}, 0, NOW, _ctx())
+    assert d.groups[0].headline.endswith("\n(report only: no investigation for this host)")
+
+
+def test_new_downs_join_a_pending_investigation():
+    d = decide([_mon("n8n", 0)], [], {}, 0, NOW, _ctx(pending_by_host={"ubuntu-server": 41}))
+    g = d.groups[0]
+    assert g.pending_investigation_id == 41
+    assert g.headline == ("🔴 Also down on ubuntu-server: n8n (http://10.0.0.10:5678)"
+                          " · added to pending investigation #41")
+
+
+def test_unreachable_never_resolves_or_touches_monitor_state():
+    d = decide(None, [_orow()], {}, 0, NOW, _ctx())
+    assert d.rows_to_upsert == [] and d.state_writes == [] and d.state_clears == []
+    assert d.fail_polls == 1 and d.messages == []
+
+
+def test_second_failed_poll_opens_the_kuma_incident_once():
+    d = decide(None, [], {}, 1, NOW, _ctx())
+    assert d.fail_polls == 2
+    r = d.rows_to_upsert[0]
+    assert r["fingerprint"] == "home-assistant|uptime_kuma_up|"
+    assert r["severity"] == "warning" and r["investigated"] is False
+    assert d.messages == ["⚠️ Can't reach Uptime Kuma: service outages are not being watched."]
+    d3 = decide(None, [r], {}, 2, NOW, _ctx())
+    assert d3.fail_polls == 3 and d3.messages == [] and d3.rows_to_upsert == []
+
+
+def test_kuma_back_resolves_its_incident_and_keeps_open_outages_quiet():
+    kuma = {"fingerprint": "home-assistant|uptime_kuma_up|", "host": "home-assistant",
+            "metric": "Uptime Kuma", "severity": "warning", "status": "open",
+            "firstSeen": TEN_AGO, "lastSeen": TEN_AGO, "resolvedAt": "",
+            "timesSeen": 1, "missedRuns": 0, "investigated": False,
+            "description": f"{PREFIX}Uptime Kuma is unreachable"}
+    d = decide([_mon("n8n", 0)], [kuma, _orow()], {}, 3, NOW, _ctx())
+    assert d.fail_polls == 0 and d.groups == []
+    assert d.messages == ["✅ Uptime Kuma is reachable again: watching service outages."]
+    assert [r["status"] for r in d.rows_to_upsert if r["fingerprint"] == kuma["fingerprint"]] == ["resolved"]
+
+
+def test_suppressed_fingerprints_are_skipped():
+    ctx = _ctx(suppressed=frozenset({"ubuntu-server|uptime_down|n8n"}))
+    d = decide([_mon("n8n", 0)], [], {}, 0, NOW, ctx)
+    assert d.rows_to_upsert == [] and d.groups == [] and d.messages == []
+
+
+def test_foreign_rows_are_never_touched():
+    row = _orow(desc="[alert] n8n is down")
+    d = decide([_mon("n8n", 0), _mon("zz", 1)], [row], {}, 0, NOW, _ctx())
+    assert [r for r in d.rows_to_upsert if r["status"] == "open" and r["timesSeen"] > 1] == []
+    d = decide([_mon("other", 1)], [row], {}, 0, NOW, _ctx())
+    assert d.rows_to_upsert == [] and d.messages == []
+
+
+def test_pipe_in_a_name_keeps_three_fingerprint_parts():
+    assert fingerprint("ubuntu-server", "a|b") == "ubuntu-server|uptime_down|a/b"
