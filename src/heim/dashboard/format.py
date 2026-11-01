@@ -674,7 +674,7 @@ def needs_you_label(inv: dict) -> str:
     if status == "pending_approval":
         return "Approval"
     if status == "needs_human":
-        return "Physical check" if physical_step(inv.get("report_md")) else "Needs you"
+        return "Physical check" if physical_step(inv.get("report_md")) else "Manual check"
     return ""
 
 

@@ -46,7 +46,8 @@ def client(tmp_path, monkeypatch):
 
 
 def _rows(html):
-    return re.findall(r"<tr(?: [^>]*)?>.*?</tr>", html.split("<tbody>", 1)[1], re.S)
+    rows = re.findall(r"<tr(?: [^>]*)?>.*?</tr>", html.split("<tbody>", 1)[1], re.S)
+    return [r for r in rows if not r.startswith('<tr class="xbody"')]  # the detail rows are separate
 
 
 def test_severity_and_status_cells_have_no_lamps(client):
@@ -81,3 +82,30 @@ def test_false_positive_verdict_has_a_lamp_before_its_words(client):
 def test_text_tokens_exist_per_mode_and_light_has_no_ok():
     for token in ("--t-crit", "--t-warn", "--t-open"):
         assert CSS.count(token + ":") == 3, token
+
+
+def test_detail_opens_as_its_own_row_with_the_forms(client):
+    html = client.get("/incidents").text
+    body = html.split("<tbody>", 1)[1]
+    assert body.count('<tr class="xbody">') == 4 and body.count('class="xrow"') == 4
+    for row in _rows(html):
+        after = body[body.index(row) + len(row):].lstrip()
+        assert after.startswith('<tr class="xbody"><td colspan="11">')
+        assert "<form" not in row                       # the forms live in the body row
+    assert body.count("<form") >= 4 and 'hx-post="/actions/' in body
+    css = open("src/heim/dashboard/static/heim.css").read()
+    assert "tr:has(details[open]) + tr.xbody { display: table-row; }" in css
+
+
+def test_fingerprints_break_only_after_a_pipe(client):
+    html = client.get("/incidents").text
+    assert "|<wbr>" in html.split("<tbody>", 1)[1]
+
+
+def test_flagged_first_cells_leave_room_for_the_bar(client):
+    html = client.get("/incidents").text
+    assert '<tr class="flag">\n        <td>' in html and 'class="tbl dense flg incs"' in html
+    css = open("src/heim/dashboard/static/heim.css").read()
+    assert ".tbl.flg td:first-child { padding-left: 12px; }" in css.replace(
+        ".tbl.flg th:first-child, ", "")
+    assert "tr.flag td:first-child { box-shadow: inset 4px 0 0 var(--signal); }" in css

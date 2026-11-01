@@ -413,7 +413,7 @@ def test_needs_you_lists_approvals_then_checks_and_links_to_detail(tmp_path, mon
     assert f'class="btn" href="/investigations/{ids["check"]}"' in check
     assert "View evidence" in check
 
-    assert ">Needs you<" in human
+    assert ">Manual check<" in human
     assert "Needs you — re-proposed next run" in human
     assert f'href="/investigations/{ids["human"]}"' in human
     # the card counts the same three
@@ -434,11 +434,11 @@ def test_needs_you_label_physical_vs_human():
     assert fmt.needs_you_label({"status": "needs_human",
                                 "report_md": PHYSICAL_REPORT}) == "Physical check"
     assert fmt.needs_you_label({"status": "needs_human",
-                                "report_md": REMOTE_REPORT}) == "Needs you"
+                                "report_md": REMOTE_REPORT}) == "Manual check"
     # only the remediation section counts: a fan in the summary is evidence
     summary_only = "## Summary\nThe fan curve is flat.\n\n## Remediation\n1. Wait a day.\n"
     assert fmt.needs_you_label({"status": "needs_human",
-                                "report_md": summary_only}) == "Needs you"
+                                "report_md": summary_only}) == "Manual check"
     for word in ("reseat the cable", "Replace the drive", "unplug the dock",
                  "power-cycle the switch", "physically inspect it", "swap the hardware"):
         report = f"## Remediation\n1. Please {word}.\n"
@@ -447,8 +447,8 @@ def test_needs_you_label_physical_vs_human():
     # a word that merely contains a keyword is not one
     assert fmt.needs_you_label({"status": "needs_human",
                                 "report_md": "## Remediation\n1. Lower power_on_hours.\n"}) \
-        == "Needs you"
-    assert fmt.needs_you_label({"status": "needs_human", "report_md": ""}) == "Needs you"
+        == "Manual check"
+    assert fmt.needs_you_label({"status": "needs_human", "report_md": ""}) == "Manual check"
 
 
 # ------------------------------------------------------------------ agents
