@@ -211,7 +211,7 @@ def test_recommendations_page_lists_and_acts(seeded_client):
     c = seeded_client
     html = c.get("/recommendations").text
     assert "Cap it" in html and "investigation #" in html
-    assert "DONE" in html and "DISMISS" in html
+    assert ">Done<" in html and ">Dismiss<" in html
     key = re.search(r'name="key" value="([0-9a-f]{40})"', html).group(1)
     r = c.post("/actions/recommendation",
                data={"key": key, "state": "done", "back": "/recommendations"},

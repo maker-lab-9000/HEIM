@@ -9,8 +9,8 @@
   {%- if r.state %}
   {{ m.pill(r.state) }}
   {%- else %}
-  {{ m.act('/actions/recommendation', 'DONE', {'key': r.key, 'state': 'done'}) }}
-  {{ m.act('/actions/recommendation', 'DISMISS', {'key': r.key, 'state': 'dismissed'}) }}
+  {{ m.act('/actions/recommendation', 'Done', {'key': r.key, 'state': 'done'}) }}
+  {{ m.act('/actions/recommendation', 'Dismiss', {'key': r.key, 'state': 'dismissed'}) }}
   {%- endif %}
   {% include "partials/_flash.html" %}
 </div>

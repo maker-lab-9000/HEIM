@@ -328,8 +328,8 @@ Known rough edges (accepted, not scheduled):
 - On phones most wide tables (tool usage, investigations, metrics, findings, security,
   costs, the step table) scroll sideways inside their card instead of restacking; only
   Needs attention, Agents, incidents and recommendations restack.
-- The recommendation keys still read `DONE` / `DISMISS` in caps (pinned by
-  `tests/test_recommendations.py`); the metrics refresh key reads `refresh` (pinned).
+- The metrics refresh key reads `refresh` in lower case (pinned by
+  `tests/test_metrics_page.py`).
 - Healthy blue-grey lamps sit near 2:1 on the light panel by design (`design.md`).
 - The overview's `all (n)` link always goes to `/incidents`, even when the cut rows
   were investigations; `/metrics#q-…` has no target when a filter hides the row;
