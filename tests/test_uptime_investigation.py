@@ -175,6 +175,10 @@ async def test_the_brief_notes_checks_that_recovered_before_approval(rt, monkeyp
     await run_investigation(rt, _req("n8n", "grafana"), require_approval=True)
     assert "these checks have recovered: n8n. Find out why they went down." in prompts[0]
     assert "grafana." not in prompts[0].split("recovered:")[1]
+    # the stored brief is the question the agent was asked (replay relies on it)
+    stored = rt.store.investigations()[0]["brief_md"]
+    assert "these checks have recovered: n8n" in stored
+    assert stored == prompts[0]
 
 
 def test_recovered_note_and_lock_fingerprints(rt):

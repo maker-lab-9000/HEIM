@@ -538,7 +538,7 @@ async def run_investigation(
     # *before* the approval gate and stored with the row: the human deciding on
     # a pending investigation — and anyone reading a declined one later — can
     # see exactly what the agent was going to be asked. The same string is
-    # handed to the agent below, unchanged.
+    # handed to the agent below, plus a recovered-checks note appended (and re-stored) on approval.
     brief = _render_brief(cfg, jenv, req)
 
     # --------------------------------------------------- tracking row (§5.1)
@@ -609,8 +609,10 @@ async def run_investigation(
                                         "Investigation declined", rt.now_iso())])
             return None
         log.info("investigation of %s approved via %s", req.host, source or "?")
-        rt.store.update_investigation(inv_id, status="running", approval_decision="approve")
         brief += recovered_note(rt.store, req.findings)
+        # store what the agent is actually asked (replay and the detail page read it)
+        rt.store.update_investigation(inv_id, status="running", approval_decision="approve",
+                                      brief_md=brief)
     await rt.emit_loki([_action(req.host, "started", req.fingerprint,
                                 "Investigation started by AI agent", rt.now_iso())])
 
