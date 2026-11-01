@@ -79,7 +79,7 @@ HEIM should treat a monitor going down as an incident:
 - **Recovery.** An incident resolves after **2 consecutive polls that see status 1**, the same `RESOLVE_AFTER` rule as the other paths.
 - **Flapping (decided with the operator).**
   - If a monitor goes down again **within an hour of its last recovery**, HEIM reopens the same incident quietly. It sends no new prompt and no "down" message, and recoveries while it flaps send no "back up" message.
-  - Instead, at most **one line per hour per monitor**, for example "n8n keeps flapping (3 outages in the last hour)".
+  - Instead, at most **one line per hour per monitor**, for example "n8n keeps flapping (3 outages since 03:02)".
   - Once the monitor has stayed up for a full hour, it counts as stable. One closing line follows, for example "✅ n8n stable again after 3 outages" *(my call)*, and the next outage is treated as new.
   - The flap state must survive a daemon restart.
 - **Paused or deleted monitors.** A monitor that disappears from `/metrics` while its incident is open (paused or deleted) resolves after **2 consecutive successful polls** without it, with a one-line note instead of a recovery message. *My call:* by the operator's rule a paused monitor is expected not to run. The second poll matters because Uptime Kuma starts its monitors one by one after a restart, so one poll right after a restart can list only some of them.

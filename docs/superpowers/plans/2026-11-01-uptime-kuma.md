@@ -44,7 +44,7 @@ Work on branch `feat/uptime-kuma`, created from `main`.
   - Joining a pending investigation: `🔴 Also down on {host}: {items} · added to pending investigation #{id}`
   - Recovery, one per host per poll: `✅ Back up on {host}: {name} (down {minutes} min), {name2} (down {m2} min)`
   - Paused or removed: `⏸ {name} on {host} is no longer monitored (paused or removed): closing its outage`
-  - Flapping: `🔁 {name} on {host} keeps flapping ({n} outages in the last hour)`
+  - Flapping: `🔁 {name} on {host} keeps flapping ({n} outages since {hhmm})`
   - Stable again: `✅ {name} on {host} stable again after {n} outages`
   - Uptime Kuma unreachable: `⚠️ Can't reach Uptime Kuma: service outages are not being watched.`
   - Uptime Kuma back: `✅ Uptime Kuma is reachable again: watching service outages.`
@@ -227,7 +227,7 @@ Rules (from the spec, decided with the operator):
 - **Stable again.** When the monitor is UP with no open row, `flap_outages > 0` and `last_recovered_at` is at least `FLAP_WINDOW_S` old: send the stable line with `n = flap_outages` and clear the state.
 
 - [ ] **Step 1: Write the failing tests**
-  - `test_down_within_an_hour_reopens_quietly_with_one_flap_line`: `last_recovered_at = now − 20 min` plus DOWN gives no groups, the row reopened with its old `firstSeen`, messages `["🔁 n8n on ubuntu-server keeps flapping (2 outages in the last hour)"]`, and state `flap_outages=2`, `flap_msg_at=now`.
+  - `test_down_within_an_hour_reopens_quietly_with_one_flap_line`: `last_recovered_at = now − 20 min` plus DOWN gives no groups, the row reopened with its old `firstSeen`, messages `["🔁 n8n on ubuntu-server keeps flapping (2 outages since 01:52)"]`, and state `flap_outages=2`, `flap_msg_at=now`.
   - `test_flap_lines_are_at_most_hourly`: `flap_msg_at = now − 30 min` and `flap_outages=2` plus DOWN gives no message and `flap_outages=3`.
   - `test_recovery_while_flapping_is_silent`: two UP polls while `flap_outages=3` give the row resolved and no messages.
   - `test_an_hour_up_ends_the_flap_with_one_stable_line`: no open row, `flap_outages=3`, `last_recovered_at = now − 61 min` and UP give `["✅ n8n on ubuntu-server stable again after 3 outages"]`, with the fingerprint in `state_clears`.

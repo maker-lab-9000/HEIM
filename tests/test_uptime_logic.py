@@ -326,13 +326,13 @@ def _ago(minutes):
 
 def test_down_within_an_hour_reopens_quietly_with_one_flap_line():
     st = {FLAP_FP: _ostate(FLAP_FP, last_recovered_at=_ago(20))}
-    d = decide([_mon("n8n", 0)], [_resolved()], st, 0, NOW, _ctx())
+    d = decide([_mon("n8n", 0)], [], st, 0, NOW, _ctx(), recent_rows=[_resolved()])
     assert d.groups == []
     assert len(d.rows_to_upsert) == 1
     row = d.rows_to_upsert[0]
     assert row["status"] == "open" and row["firstSeen"] == TEN_AGO
     assert row["resolvedAt"] == "" and row["investigated"] is True
-    assert d.messages == ["🔁 n8n on ubuntu-server keeps flapping (2 outages in the last hour)"]
+    assert d.messages == ["🔁 n8n on ubuntu-server keeps flapping (2 outages since 01:52)"]
     w = d.state_writes[0]
     assert w["flap_outages"] == 2 and w["flap_msg_at"] == NOW
 
@@ -340,7 +340,7 @@ def test_down_within_an_hour_reopens_quietly_with_one_flap_line():
 def test_flap_lines_are_at_most_hourly():
     st = {FLAP_FP: _ostate(FLAP_FP, last_recovered_at=_ago(5), flap_outages=2,
                            flap_msg_at=_ago(30))}
-    d = decide([_mon("n8n", 0)], [_resolved()], st, 0, NOW, _ctx())
+    d = decide([_mon("n8n", 0)], [], st, 0, NOW, _ctx(), recent_rows=[_resolved()])
     assert d.messages == [] and d.groups == []
     assert d.state_writes[0]["flap_outages"] == 3
     assert d.state_writes[0]["flap_msg_at"] == _ago(30)
@@ -365,23 +365,54 @@ def test_an_hour_up_ends_the_flap_with_one_stable_line():
 
 def test_down_more_than_an_hour_after_recovery_is_a_new_outage():
     st = {FLAP_FP: _ostate(FLAP_FP, last_recovered_at=_ago(61))}
-    d = decide([_mon("n8n", 0)], [_resolved()], st, 0, NOW, _ctx())
+    d = decide([_mon("n8n", 0)], [], st, 0, NOW, _ctx(), recent_rows=[_resolved()])
     assert len(d.groups) == 1 and d.groups[0].host == "ubuntu-server"
     assert d.rows_to_upsert[0]["firstSeen"] == NOW
 
 
 def test_flap_state_survives_a_restart(tmp_path):
+    path = tmp_path / "x.sqlite3"
     st = {FLAP_FP: _ostate(FLAP_FP, last_recovered_at=_ago(20))}
-    d1 = decide([_mon("n8n", 0)], [_resolved()], st, 0, NOW, _ctx())
-    store = IncidentStore(tmp_path / "x.sqlite3")
-    store.save_uptime_states(d1.state_writes)
-    reloaded = IncidentStore(tmp_path / "x.sqlite3").uptime_states()
-    # the monitor recovers (silently), then drops again 5 minutes later
-    later = "2026-11-01T02:07:00+00:00"
-    reopened = [{**d1.rows_to_upsert[0], "status": "resolved", "resolvedAt": NOW}]
-    mem = decide([_mon("n8n", 0)], reopened, {FLAP_FP: {**d1.state_writes[0], "last_recovered_at": NOW}},
-                 0, later, _ctx())
-    disk = decide([_mon("n8n", 0)], reopened, {FLAP_FP: {**reloaded[FLAP_FP], "last_recovered_at": NOW}},
-                  0, later, _ctx())
-    assert disk == mem
+    d1 = decide([_mon("n8n", 0)], [], st, 0, NOW, _ctx(), recent_rows=[_resolved()])
+    store = IncidentStore(path)
+    store.upsert([{**d1.rows_to_upsert[0], "status": "resolved", "resolvedAt": _ago(2)}])
+    store.save_uptime_states([{**d1.state_writes[0], "last_recovered_at": _ago(2)}])
+    mem_state = {FLAP_FP: {**d1.state_writes[0], "last_recovered_at": _ago(2)}}
+    mem_row = {**d1.rows_to_upsert[0], "status": "resolved", "resolvedAt": _ago(2)}
+    store2 = IncidentStore(path)  # restart
+    disk = decide([_mon("n8n", 0)], [], store2.uptime_states(), 0, NOW, _ctx(),
+                  recent_rows=[store2.incident(FLAP_FP)])
+    mem = decide([_mon("n8n", 0)], [], mem_state, 0, NOW, _ctx(), recent_rows=[mem_row])
+    assert disk.rows_to_upsert == mem.rows_to_upsert
+    assert disk.state_writes == mem.state_writes and disk.messages == mem.messages
     assert disk.state_writes[0]["flap_outages"] == 3 and disk.messages == []
+    assert disk.rows_to_upsert[0]["firstSeen"] == TEN_AGO
+
+
+def test_flapping_then_down_after_an_hour_is_a_clean_new_outage():
+    st = {FLAP_FP: _ostate(FLAP_FP, flap_outages=3, last_recovered_at=_ago(70),
+                           flap_msg_at=_ago(65))}
+    d = decide([_mon("n8n", 0)], [], st, 0, NOW, _ctx(), recent_rows=[_resolved()])
+    assert len(d.groups) == 1 and d.messages == []
+    w = {x["fingerprint"]: x for x in d.state_writes}[FLAP_FP]
+    assert w["flap_outages"] == 0 and w["flap_msg_at"] == ""
+    # its recovery now gets the normal line
+    st2 = {FLAP_FP: _ostate(FLAP_FP, up_polls=1)}
+    r = decide([_mon("n8n", 1)], [_orow(first=NOW)], st2, 0, NOW, _ctx())
+    assert r.messages == ["✅ Back up on ubuntu-server: n8n (down 1 min)"]
+
+
+def test_stale_flap_state_of_a_vanished_monitor_expires():
+    st = {FLAP_FP: _ostate(FLAP_FP, flap_outages=3, last_recovered_at=_ago(70))}
+    d = decide([], [], st, 0, NOW, _ctx())
+    assert FLAP_FP in d.state_clears
+    st = {FLAP_FP: _ostate(FLAP_FP, flap_outages=3, last_recovered_at=_ago(20))}
+    assert FLAP_FP not in decide([], [], st, 0, NOW, _ctx()).state_clears
+
+
+def test_only_resolved_uptime_rows_in_recent_rows_feed_a_reopen():
+    st = {FLAP_FP: _ostate(FLAP_FP, last_recovered_at=_ago(20))}
+    for bad in ({**_resolved(), "status": "open"},
+                {**_resolved(), "description": "[alert] n8n down"}):
+        d = decide([_mon("n8n", 0)], [], st, 0, NOW, _ctx(), recent_rows=[bad])
+        assert len(d.groups) == 1

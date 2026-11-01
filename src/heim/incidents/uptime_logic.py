@@ -254,7 +254,7 @@ def _age_s(iso: str, now_iso: str) -> float | None:
 
 
 def _flap_reopen(prior: dict, st: dict, name: str, host: str, now_iso: str,
-                 ) -> tuple[dict, dict, str | None]:
+                 tz: str) -> tuple[dict, dict, str | None]:
     """A new outage inside the flap window: the SAME row, quietly open again.
 
     Returns ``(row, state_changes, flap_line_or_None)``; the line goes out at
@@ -269,7 +269,8 @@ def _flap_reopen(prior: dict, st: dict, name: str, host: str, now_iso: str,
     line = None
     if age is None or age >= FLAP_WINDOW_S:
         changes["flap_msg_at"] = now_iso
-        line = f"🔁 {name} on {host} keeps flapping ({n} outages in the last hour)"
+        line = (f"🔁 {name} on {host} keeps flapping "
+                f"({n} outages since {_hhmm(row['firstSeen'], tz)})")
     return row, changes, line
 
 
@@ -320,17 +321,22 @@ def _unreachable(fail_polls: int, open_by_fp: dict[str, dict], now_iso: str,
 
 def decide(monitors: list[Monitor] | None, open_rows: list[dict],
            states: dict[str, dict], fail_polls: int, now_iso: str,
-           ctx: UptimeContext) -> UptimeDecision:
+           ctx: UptimeContext, *,
+           recent_rows: list[dict] | None = None) -> UptimeDecision:
     """Diff one Uptime Kuma poll against open ``[uptime] `` incidents. No I/O.
+
+    ``open_rows`` are the store's open incidents (open-only). ``recent_rows``
+    are RESOLVED ``[uptime] `` rows the caller supplies for fingerprints whose
+    state has ``last_recovered_at`` inside FLAP_WINDOW_S; only they feed the
+    quiet flap reopen (anything not resolved or not ``[uptime] `` is ignored).
 
     ``monitors=None`` is a failed poll: nothing about monitors is written or
     resolved, only the failure counter moves.
     """
     # a resolved row is only a candidate for a quiet flap reopen, never "open"
     open_by_fp = {str(r["fingerprint"]): r for r in open_rows
-                  if r and r.get("fingerprint") and is_uptime_row(r)
-                  and r.get("status") != "resolved"}
-    prior_by_fp = {str(r["fingerprint"]): r for r in open_rows
+                  if r and r.get("fingerprint") and is_uptime_row(r)}
+    prior_by_fp = {str(r["fingerprint"]): r for r in (recent_rows or [])
                    if r and r.get("fingerprint") and is_uptime_row(r)
                    and r.get("status") == "resolved"}
     foreign = {str(r["fingerprint"]) for r in open_rows
@@ -401,7 +407,7 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
                 continue
             age = _age_s(st.get("last_recovered_at") or "", now_iso)
             if fp in prior_by_fp and age is not None and 0 <= age < FLAP_WINDOW_S:
-                row, changes, line = _flap_reopen(prior_by_fp[fp], st, m.name, host, now_iso)
+                row, changes, line = _flap_reopen(prior_by_fp[fp], st, m.name, host, now_iso, ctx.timezone)
                 d.rows_to_upsert.append(row)
                 put(fp, **changes)
                 if line:
@@ -424,8 +430,9 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
             d.state_changed = True
             new_by_host.setdefault(host, []).append((row, m))
             hosts_mapped[host] = mapped_host is not None
-            if st.get("up_polls") or st.get("absent_polls"):
-                put(fp, up_polls=0, absent_polls=0)
+            if st.get("up_polls") or st.get("absent_polls") or _int(st.get("flap_outages")):
+                # a stale flap episode ends here: this outage is a fresh one
+                put(fp, up_polls=0, absent_polls=0, flap_outages=0, flap_msg_at="")
         elif m.status == UP:
             if r is None:
                 if (_int(st.get("flap_outages")) > 0
@@ -470,8 +477,6 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
             continue
         if any(fp == r["fingerprint"] for r, _ in
                (x for v in new_by_host.values() for x in v)):
-            continue
-        if _int(st.get("flap_outages")):
             continue
         rec = _parse(st.get("last_recovered_at") or "")
         if rec is None or now_dt is None or (now_dt - rec).total_seconds() > FLAP_WINDOW_S:
