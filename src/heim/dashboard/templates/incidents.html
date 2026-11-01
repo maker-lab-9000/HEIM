@@ -22,7 +22,7 @@
       <tr>
         <td>{{ m.sev(r.severity) }}</td>
         <td>{{ m.pill(r.status) }}{% if r.investigated %} <span class="lock"
-            title="investigated — the dispatch lock is held">🔒</span>{% endif %}
+            title="investigated — the dispatch lock is held">Locked</span>{% endif %}
           {%- if r.suppression %} {{ m.muted(r.suppression) }}{% endif %}</td>
         <td>{{ m.hostbadge(r.host) }}</td>
         <td class="mono ink2">{{ r.metric or DASH }}</td>
@@ -63,7 +63,7 @@
   <p class="loadmore">
     <a class="btn" href="/incidents?{{ qs_with(offset=next_offset) }}"
        hx-get="/incidents?{{ qs_with(offset=next_offset) }}" hx-select=".rows-and-more"
-       hx-target="closest .rows-and-more" hx-swap="outerHTML">LOAD 50 MORE</a>
+       hx-target="closest .rows-and-more" hx-swap="outerHTML">Load 50 more</a>
   </p>
   {%- endif %}
   </div>

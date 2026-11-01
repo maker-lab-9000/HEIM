@@ -64,7 +64,7 @@
     <li>{{ m.pill(r.status) }} {{ m.hostbadge(r.host) }}
       <a class="mono" href="/investigations/{{ r.id }}">#{{ r.id }}</a>
       {{ m.when(r.started_at) }}
-      <span class="acts">{{ m.act('/actions/retrigger', 'RE-RUN',
+      <span class="acts">{{ m.act('/actions/retrigger', 'Re-run',
         {'investigation_id': r.id},
         confirm='Re-run investigation #' ~ r.id ~ '?') }}</span>
       {%- if r.reason %}
@@ -77,7 +77,7 @@
   <p><a class="qlink" href="/investigations">all ({{ attention_count }})</a></p>
   {%- endif %}
   {%- else %}
-  <p class="empty ok-empty"><span aria-hidden="true">●</span> Nothing needs attention.</p>
+  <p class="empty ok-empty"><span class="lamp blue" aria-hidden="true"></span> Nothing needs attention.</p>
   {%- endif %}
 </section>
 
@@ -134,7 +134,7 @@
           '## Tooling feedback' report section — what would have made the
           tool more useful, said by the thing that used it -#}
       {%- if r.feedback %}
-      <tr class="tufb"><td colspan="7" class="ink3">💡 {{ r.feedback.suggestion }}
+      <tr class="tufb"><td colspan="7" class="ink3">Suggestion: {{ r.feedback.suggestion }}
         · <a class="mono" href="/investigations/{{ r.feedback.investigation_id }}">#{{ r.feedback.investigation_id }}</a>
         · {{ m.when(r.feedback.created_at) }}</td></tr>
       {%- endif %}
@@ -145,7 +145,7 @@
   {#- feedback naming something that is not one of the tools above: kept as a
       footnote rather than dropped, because it is usually the prompt drifting -#}
   {%- for f in tool_feedback_general %}
-  <p class="ink3 tufb-note">💡 general: {{ f.tool }}: {{ f.suggestion }}
+  <p class="ink3 tufb-note">Suggestion, general: {{ f.tool }}: {{ f.suggestion }}
     · <a class="mono" href="/investigations/{{ f.investigation_id }}">#{{ f.investigation_id }}</a></p>
   {%- endfor %}
   {%- endif %}

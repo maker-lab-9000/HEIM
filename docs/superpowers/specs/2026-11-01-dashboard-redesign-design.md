@@ -152,7 +152,7 @@ Sizes: `.lamp.lg` 32 px (the condition card), `.lamp.sm` 12 px (inside a segment
 | `backup` | Backup verifier | `_backup_job` | the backup or the prune failed | daily 03:30; stale after 26 h |
 | `investigator` | Investigator | **not recorded**; derived from `investigations` | the last finished run was failed or incomplete | on demand; never stale; running while one runs |
 
-**Status** (pure, `src/heim/agents.py`) is exactly one of: **healthy** (last run ok and fresh) · **degraded** (last ok, the one before errored) · **failed** (last run errored) · **paused** (disabled in config) · **unknown** (no runs yet; the word is "No data yet") · **stale** (last ok but older than stale-after; the word is "Overdue") · **running** (investigator only) · **idle** (investigator, nothing running, last outcome fine).
+**Status** (pure, `src/heim/agents.py`) is exactly one of: **healthy** (last run ok and fresh) · **degraded** (last ok, the one before errored) · **failed** (last run errored) · **paused** (disabled in config) · **unknown** (no runs yet; the word is "No data yet") · **stale** (the last run, whatever its result, is older than stale-after; the word is "Overdue"; checked before failed, so a watcher that stopped reporting after a failure reads Overdue and the condition reads unknown, while the failure stays visible in the strip and the last-error fields) · **running** (investigator only) · **idle** (investigator, nothing running, last outcome fine).
 
 **Coverage** comes from config and the latest run's `detail_json`: hosts, catalog query count, monitor and report-only counts, check count, investigable hosts.
 

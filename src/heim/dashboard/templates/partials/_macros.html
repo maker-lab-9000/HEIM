@@ -1,8 +1,27 @@
-{#- shared building blocks: status pill, tool badge, meta dot separator -#}
+{#- shared building blocks: lamps, status pills, the segmented switch, tool
+    and host badges. A status is a lamp plus its word, never a glyph: the
+    `.dot` inside a pill is an empty lamp the st-* class colours (design.md). -#}
+
+{% macro lamp(colour='') -%}
+<span class="lamp{{ ' ' ~ colour if colour }}" aria-hidden="true"></span>
+{%- endmacro %}
+
+{#- a segmented switch: plain links, so it works with no JS. Each item is
+    {"href", "label", "n" (optional), "on"}; the engaged one is lifted, lit
+    and says so to a screen reader. -#}
+{% macro seg(items, label='') -%}
+<div class="seg" role="group"{% if label %} aria-label="{{ label }}"{% endif %}>
+  {%- for i in items %}
+  <a href="{{ i.href }}"{% if i.on %} class="on" aria-current="true"{% endif %}>
+    {%- if i.on %}<span class="lamp sm orange" aria-hidden="true"></span>{% endif %}{{ i.label }}
+    {%- if i.n is defined and i.n is not none %}<span class="n">{{ i.n }}</span>{% endif %}</a>
+  {%- endfor %}
+</div>
+{%- endmacro %}
 
 {% macro pill(value) -%}
 {%- set p = value|pill -%}
-<span class="pill {{ p.cls }}"><span class="dot" aria-hidden="true">{{ p.icon }}</span>{{ p.label }}</span>
+<span class="pill {{ p.cls }}"><span class="dot" aria-hidden="true"></span>{{ p.label }}</span>
 {%- endmacro %}
 
 {% macro tool(name) -%}
@@ -21,7 +40,7 @@
 
 {% macro sev(value) -%}
 {%- set p = value|pill -%}
-<span class="sev {{ p.cls }}"><span class="dot" aria-hidden="true">{{ p.icon }}</span>{{ p.label }}</span>
+<span class="sev {{ p.cls }}"><span class="dot" aria-hidden="true"></span>{{ p.label }}</span>
 {%- endmacro %}
 
 {#- a timestamp. When the value is missing or unparseable `iso` gives the dash,
@@ -97,6 +116,6 @@
 {%- endmacro %}
 
 {% macro muted(sup) -%}
-<span class="pill st-muted"><span class="dot" aria-hidden="true">◌</span>muted · until
+<span class="pill st-muted"><span class="dot" aria-hidden="true"></span>muted · until
   {{ sup.until|day if sup.until else 'further notice' }}</span>
 {%- endmacro %}

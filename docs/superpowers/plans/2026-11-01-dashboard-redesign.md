@@ -68,6 +68,12 @@ Work on branch `feat/dashboard-redesign` (already created, stacked on `feat/upti
 | 2 | `test_dashboard_actions.py:249, 498, 503`; `test_needs_attention.py:198` | `RE-RUN` | `Re-run` |
 | 2 | `test_dashboard_actions.py:515, 523`; `test_findings_table.py:137, 154` | `✓ CONFIRM`, `✗ FALSE POSITIVE` | `>Confirm<`, `>False positive<` (count the exact `>Confirm<` so "confirmed" elsewhere never matches; if the `m.act` macro wraps the label, pin that exact markup) |
 | 2 | `test_pagination.py` (every `LOAD 50 MORE`) | `LOAD 50 MORE` | `Load 50 more` |
+| 2 | `test_dashboard_actions.py:478, 484` | `UNMUTE` | `Unmute` |
+| 2 | `test_dashboard_actions.py:496, 504` | `APPROVE`, `DECLINE` | `Approve`, `Decline` |
+| 2 | `test_dashboard_actions.py:315` | `"CONFIRM"` | `">Confirm<"` |
+| 2 | `test_metrics_page.py:296` (`test_nav_has_metrics_between_findings_and_hosts`) | the flat order findings < metrics < hosts | the grouped rail's Infrastructure order: `hosts < metrics < security`; presence checks unchanged |
+| 2 | `test_dashboard_actions.py:365` | `"UNMUTE" not in r.text` | `">Unmute<" not in r.text` (the flash sentence "Unmuted — …" would otherwise match the bare word) |
+| 2 | `test_dashboard.py:494` (the `heim.css` byte cap) | `<= 21_248` | `<= 32_768`, raised once for the whole redesign, with a docstring line naming the raise; Tasks 3–9 must fit under it |
 | 2 | `test_needs_attention.py:274` | `<span aria-hidden="true">●</span> Nothing needs attention.` | `<span class="lamp blue" aria-hidden="true"></span> Nothing needs attention.` |
 | 2 | `test_tool_feedback.py:278, 280, 294` | `💡 allow du…`, `💡 general: logs: …`, `"💡" not in html` | `Suggestion: allow du…`, `Suggestion, general: logs: …`, `"Suggestion" not in html` |
 | 2 | `test_dashboard.py:439` | `"🔒" in html` | `"Locked" in html` |

@@ -208,7 +208,7 @@ def test_htmx_investigate_from_an_incident_returns_the_incident_panel(client):
                     data={"host": "ubuntu-server", "fingerprint": FP_MEM}, headers=HX)
     assert r.status_code == 200
     assert "Queued as job #" in r.text
-    assert "INVESTIGATE NOW" in r.text and "MARK FALSE POSITIVE" in r.text
+    assert "Investigate now" in r.text and "Mark false positive" in r.text
 
 
 # -------------------------------------------------------------- retrigger
@@ -246,7 +246,7 @@ def test_htmx_retrigger_returns_the_header_actions(client, ids, store):
     assert r.status_code == 200 and "<html" not in r.text
     job_id = _jobs_by_dashboard(store)[0]["id"]
     assert f"Queued as job #{job_id}" in r.text
-    assert "RE-RUN" in r.text
+    assert "Re-run" in r.text
 
 
 # --------------------------------------------------------------- approval
@@ -312,7 +312,7 @@ def test_false_positive_sets_the_verdict_and_suppresses(client, ids, store, app_
     assert store.incident(FP_MEM)["status"] == "suppressed"
     # fragment: the verdict pill replaced the buttons, plus the feedback line
     assert "Marked false positive — muted until" in r.text
-    assert "CONFIRM" not in r.text
+    assert ">Confirm<" not in r.text
     assert "false positive" in r.text
 
 
@@ -362,7 +362,7 @@ def test_unmute_lifts_the_suppression_and_reopens_the_incident(client, store):
     assert store.incident(FP_HA)["status"] == "open"
     assert "Unmuted — the pipelines report this fingerprint again." in r.text
     # the panel now offers the pre-mute actions again
-    assert "INVESTIGATE NOW" in r.text and "UNMUTE" not in r.text
+    assert "Investigate now" in r.text and ">Unmute<" not in r.text
 
 
 def test_unmute_of_something_that_is_not_muted_is_404(client):
@@ -475,13 +475,13 @@ def test_incidents_page_shows_the_muted_row_with_unmute(client):
     html = client.get("/incidents").text
     assert FP_HA in html                       # suppressed rows are listed
     assert "muted · until" in html
-    assert "UNMUTE" in html
+    assert "Unmute" in html
     assert 'action="/actions/unmute"' in html
     # an open incident keeps the other two actions instead
-    assert "INVESTIGATE NOW" in html and "MARK FALSE POSITIVE" in html
+    assert "Investigate now" in html and "Mark false positive" in html
     # a muted row does not offer to investigate what it just silenced
     muted_cell = html.split(FP_HA)[-1]
-    assert "UNMUTE" in muted_cell.split("</details>")[0]
+    assert "Unmute" in muted_cell.split("</details>")[0]
 
 
 def test_incident_actions_post_the_fingerprint_as_a_form_field(client):
@@ -493,15 +493,15 @@ def test_incident_actions_post_the_fingerprint_as_a_form_field(client):
 
 def test_pending_approval_detail_offers_approve_and_decline(client, ids):
     html = client.get(f"/investigations/{ids['pending']}").text
-    assert "APPROVE" in html and "DECLINE" in html
+    assert "Approve" in html and "Decline" in html
     assert 'class="btn ember"' in html          # approve is the ember exception
-    assert "RE-RUN" in html
+    assert "Re-run" in html
 
 
 def test_finished_detail_has_re_run_but_no_approval_pair(client, ids):
     html = client.get(f"/investigations/{ids['done']}").text
-    assert "RE-RUN" in html
-    assert "APPROVE" not in html and "DECLINE" not in html
+    assert "Re-run" in html
+    assert "Approve" not in html and "Decline" not in html
 
 
 def test_retry_detail_links_back_to_the_original(client, ids):
@@ -512,7 +512,7 @@ def test_retry_detail_links_back_to_the_original(client, ids):
 
 def test_findings_page_offers_the_verdict_pair_then_shows_the_pill(client, ids):
     html = client.get("/findings").text
-    assert "✓ CONFIRM" in html and "✗ FALSE POSITIVE" in html
+    assert ">Confirm<" in html and ">False positive<" in html
     assert f'name="finding_id" value="{ids["finding_mem"]}"' in html
 
     _post(client, "/actions/verdict",
@@ -520,7 +520,7 @@ def test_findings_page_offers_the_verdict_pair_then_shows_the_pill(client, ids):
     after = client.get("/findings").text
     # that finding now renders a pill; the other one keeps its buttons
     assert "confirmed</span>" in after
-    assert after.count("✓ CONFIRM") == 1
+    assert after.count(">Confirm<") == 1
 
 
 def test_host_cards_offer_investigate(app_store):

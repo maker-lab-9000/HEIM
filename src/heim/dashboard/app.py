@@ -49,6 +49,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from heim.agents import AGENT_KEYS
 from heim.config import Config, load_config
 from heim.costing import cost_of
 from heim.dashboard import format as fmt
@@ -88,13 +89,16 @@ AUTH_EXEMPT = frozenset({"/healthz", "/telemetry"})
 THEME_COOKIE = "heim_theme"
 THEMES = frozenset({"auto", "light", "dark"})
 THEME_NEXT = {"auto": "light", "light": "dark", "dark": "auto"}
-THEME_ICON = {"auto": "◐", "light": "☀", "dark": "☾"}
+#: the toggle says its state as a word (operator ruling 2026-11-01: no emoji)
+THEME_WORD = {"auto": "Auto", "light": "Light", "dark": "Dark"}
 
 #: a daemon that has not recorded a run in this long is "quiet"
 DAEMON_FRESH_S = 20 * 60
+#: the daemon's every-5-minutes agents: their heartbeats say it is alive
+POLL_AGENTS = ("alert_poller", "thresholds", "uptime")
 
 #: rows per window on the three list pages. ``?offset=N`` moves the window;
-#: the LOAD 50 MORE control is a plain link to the next one, so the no-JS path
+#: the "Load 50 more" control is a plain link to the next one, so the no-JS path
 #: is a normal page load and htmx only saves the round trip through the shell.
 PAGE = 50
 
@@ -430,7 +434,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             current if current in THEMES else "auto")
         request.state.theme = resolved
         request.state.next_theme = THEME_NEXT[resolved]
-        request.state.theme_icon = THEME_ICON[resolved]
+        request.state.theme_icon = THEME_WORD[resolved]
         if chosen in THEMES:
             back = request.url.remove_query_params("theme")
             target = back.path + (f"?{back.query}" if back.query else "")
@@ -462,10 +466,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         query = request.url.query
         base = {
             "now": now,
-            "clock": now.strftime("%H:%M"),
-            "env_chip": _env_chip(cfg, now),
+            "clock": f"{now:%H:%M} {now.tzname() or cfg.settings.timezone}",
+            "date_line": f"{now:%A}, {now.day} {now:%B}",
+            "env_chip": _env_chip(cfg),
             "daemon": _daemon_chip(reader),
             "nav": NAV,
+            "nav_groups": NAV_GROUPS,
+            "rail_counts": _rail_counts(reader, cfg),
             # resolved by the theme middleware; here too so child templates
             # (not just base.html) can read it (spec §10)
             "theme": getattr(request.state, "theme", "auto"),
@@ -498,8 +505,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         return templates.TemplateResponse(
             request, "error.html",
             {"message": STORE_ERROR.format(path=reader.path), "detail": str(exc),
-             "nav": NAV, "clock": "", "env_chip": _env_chip(cfg, datetime.now(tz)),
-             "daemon": {"ok": False, "label": "daemon unreachable", "when": ""},
+             "nav": NAV, "nav_groups": NAV_GROUPS, "clock": "",
+             "env_chip": _env_chip(cfg),
+             "daemon": {"ok": False, "label": "Daemon quiet",
+                        "when": "the store is unreadable", "lamp": "amber"},
              "page_title": "error"},
             status_code=500,
         )
@@ -1020,17 +1029,27 @@ def exposition(stats: dict) -> str:
 
 # ---------------------------------------------------------------- helpers
 
-NAV = [
-    {"href": "/", "label": "overview", "icon": "◆"},
-    {"href": "/investigations", "label": "investigations", "icon": "▣"},
-    {"href": "/incidents", "label": "incidents", "icon": "▲"},
-    {"href": "/findings", "label": "findings", "icon": "▤"},
-    {"href": "/security", "label": "security", "icon": "⛨"},
-    {"href": "/recommendations", "label": "recommendations", "icon": "✓"},
-    {"href": "/metrics", "label": "metrics", "icon": "▥"},
-    {"href": "/costs", "label": "costs", "icon": "◍"},
-    {"href": "/hosts", "label": "hosts", "icon": "▢"},
+#: the rail, grouped as the console concept has it (redesign 2026-11-01);
+#: every item gets a lamp, lit orange when current. ``NAV`` is the flat list.
+NAV_GROUPS = [
+    ("Workspace", [
+        {"href": "/", "label": "Overview"},
+        {"href": "/agents", "label": "Agents"},
+        {"href": "/investigations", "label": "Investigations"},
+        {"href": "/incidents", "label": "Incidents"},
+    ]),
+    ("Infrastructure", [
+        {"href": "/hosts", "label": "Hosts"},
+        {"href": "/metrics", "label": "Metrics"},
+        {"href": "/security", "label": "Security"},
+    ]),
+    ("Insights", [
+        {"href": "/findings", "label": "Findings"},
+        {"href": "/recommendations", "label": "Recommendations"},
+        {"href": "/costs", "label": "Costs"},
+    ]),
 ]
+NAV = [item for _group, items in NAV_GROUPS for item in items]
 
 _TRIGGERS = ["daily", "poller", "manual", "security_audit", "uptime"]
 
@@ -1191,25 +1210,56 @@ def _next_offset(rows: list[dict], offset: int) -> tuple[list[dict], int | None]
     return rows, None
 
 
-def _env_chip(cfg: Config, now: datetime) -> str:
+def _env_chip(cfg: Config) -> str:
     n = len(cfg.hosts)
-    return f"{n} host{'s' if n != 1 else ''} · {now.tzname() or cfg.settings.timezone}"
+    return f"{n} host{'s' if n != 1 else ''}"
+
+
+def _rail_counts(reader: StoreReader, cfg: Config) -> dict[str, int]:
+    """The rail's counts, keyed by href. Each is a plain store read, so it
+    agrees with the list it summarises; one that fails is simply omitted."""
+    counts = {"/agents": len(AGENT_KEYS), "/hosts": len(cfg.hosts)}
+    try:
+        by_status = reader.read(lambda s: s.counts_by_status())
+        counts["/investigations"] = (by_status.get("running", 0)
+                                     + by_status.get("pending_approval", 0))
+    except sqlite3.Error:
+        pass
+    try:
+        # open_rows() is status='open' only: suppressed and clearing excluded
+        counts["/incidents"] = len(reader.read(lambda s: s.open_rows()))
+    except sqlite3.Error:
+        pass
+    return counts
 
 
 def _daemon_chip(reader: StoreReader) -> dict:
-    """Liveness derived from the freshest `runs` row (the daemon writes one per
-    cycle that did something) — the dashboard never probes the daemon itself."""
+    """Liveness from the newest poll heartbeat (`agent_runs`, written by the
+    daemon every cycle), falling back to the freshest `runs` row for a store
+    that predates heartbeats — the dashboard never probes the daemon itself."""
+    def newest(s: IncidentStore) -> str:
+        beats = [r.get("finished_at") or r.get("started_at")
+                 for a in POLL_AGENTS for r in s.agent_runs(a, limit=1)]
+        beats = [b for b in beats if fmt.parse_dt(b)]
+        if beats:
+            return max(beats, key=fmt.parse_dt)
+        runs = s.runs(limit=1)
+        return str(runs[0].get("run_at") or "") if runs else ""
+
     try:
-        rows = reader.read(lambda s: s.runs(limit=1))
+        at = reader.read(newest)
     except sqlite3.Error:  # pragma: no cover - surfaced by the error page
-        return {"ok": False, "label": "daemon unreachable", "when": ""}
-    if not rows:
-        return {"ok": False, "label": "daemon quiet", "when": "no runs yet"}
-    age = fmt.age_seconds(rows[0].get("run_at"))
-    when = fmt.rel_time(rows[0].get("run_at"))
+        return {"ok": False, "label": "Daemon quiet", "when": "the store is unreadable",
+                "lamp": "amber"}
+    if not at:
+        return {"ok": False, "label": "No heartbeat yet", "when": "nothing recorded",
+                "lamp": ""}
+    age = fmt.age_seconds(at)
+    when = fmt.rel_time(at)
     if age is not None and age < DAEMON_FRESH_S:
-        return {"ok": True, "label": "daemon", "when": f"last run {when}"}
-    return {"ok": False, "label": "daemon quiet", "when": when}
+        return {"ok": True, "label": "Connected", "when": f"Synced {when}", "lamp": "blue"}
+    return {"ok": False, "label": "Daemon quiet", "when": f"Last sync {when}",
+            "lamp": "amber"}
 
 
 def _incident_meta(rows: list[dict]) -> str:

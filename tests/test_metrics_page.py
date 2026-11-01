@@ -156,7 +156,7 @@ def test_trend_and_delta_cells(client):
 
 def test_na_row_is_muted_and_dashed(client):
     t = client.get("/metrics").text
-    assert '<span class="pill st-muted"><span class="dot" aria-hidden="true">·</span>n/a' in t
+    assert '<span class="pill st-muted"><span class="dot" aria-hidden="true"></span>n/a' in t
     assert '<td class="num mono c-delta">—</td>' in t   # changePct is null for a state
 
 
@@ -293,7 +293,8 @@ def test_failure_with_no_cache_shows_the_unreachable_copy(client, prom):
 def test_nav_has_metrics_between_findings_and_hosts(client):
     t = client.get("/").text
     assert '<a href="/metrics"' in t
-    assert t.index('href="/findings"') < t.index('href="/metrics"') < t.index('href="/hosts"')
+    # the grouped rail (2026-11-01): Metrics sits in Infrastructure, after Hosts
+    assert t.index('href="/hosts"') < t.index('href="/metrics"') < t.index('href="/security"')
 
 
 def test_header_offenders_are_sorted_by_status_then_by_the_biggest_mover():

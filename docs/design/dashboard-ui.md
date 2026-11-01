@@ -1,94 +1,75 @@
 # HEIM dashboard — UI design spec
 
-Design direction: **the night watch at the hearth**. HEIM is German for *home*; the
-product is an agent keeping watch over the house at night and writing down everything it
-does. The UI is a dense, dark operations room with one warm light source — ember amber —
-reserved for the agent's own activity. The agent works in a shell, so the interface is
-**mono-first**: commands, fingerprints, tokens, timestamps and section eyebrows are set
-in monospace; prose is quiet system sans. Density like Datadog; identity of its own.
+> **Superseded direction (2026-11-01, the operator's ruling).** The "night watch at the
+> hearth" dark direction, its "morning ash" light mode and the house glyph are retired.
+> The dashboard is now the operator's **Braun-inspired monitoring console**, locked in
+> [`design.md`](../../design.md) at the repo root (tokens, lamps, labels, components,
+> brand, motion) and specified in
+> `docs/superpowers/specs/2026-11-01-dashboard-redesign-design.md`. §1, §2 (the rail)
+> and §10 below describe the console; the other sections still hold for behaviour, and
+> where they name the old visual vocabulary (ember borders, mono-caps buttons, pulse
+> dots, glyph icons) `design.md` wins.
+
+Design direction: **a calibrated instrument**. Every agent is a channel on one front
+panel, read at a glance, and nothing lights up unless it needs a hand. A warm grey
+ground, off-white panels, brown-black ink and one orange signal; red and amber lamps are
+reserved for conditions that matter, and healthy states stay quiet.
 
 Constraints honored throughout: **no webfonts, no JS framework, no chart library** —
-system font stacks, vanilla CSS (~one file), htmx (~14 KB) for partial updates, inline
-SVG only where a mark is needed. One color mode (dark) in v1, built on CSS variables so
-a light mode can be added without markup changes.
+system font stacks, vanilla CSS (one file), htmx (~14 KB) for partial updates, inline
+SVG only where a mark is needed. Light and dark modes from one token set.
 
 ## 1. Tokens
 
-```css
-:root {
-  /* surfaces — warm charcoal, not neutral black */
-  --bg:      #131110;   /* app background */
-  --panel:   #1B1917;   /* cards, tables, rail */
-  --raised:  #232019;   /* hover rows, active nav, code blocks */
-  --line:    #2E2A24;   /* hairline borders, dividers */
+The token set lives in `static/heim.css` and is documented in [`design.md`](../../design.md):
+surfaces (`--bg`, `--panel`, `--raised`, `--line`, `--flag-bg`), ink (`--ink`, `--ink-2`,
+`--ink-3`), the orange for text and key faces (`--signal-ink`, `--signal-edge`,
+`--on-signal`), and the mode-invariant lamp colours (`--signal`, `--crit`, `--warn`,
+`--ok`, each with a `-hi` highlight). `:root` holds the dark values; the light override
+set and its `prefers-color-scheme` mirror close the file, declared identically. The tool
+palette (`--tool-*`) and the host slots (`--host-*`) are unchanged identity colours.
+`--ember` survives only as an alias of `--signal-ink`.
 
-  /* ink — warm cast */
-  --ink:     #E9E2D4;   /* primary text */
-  --ink-2:   #A89E8C;   /* secondary: labels, meta */
-  --ink-3:   #6E675B;   /* faint: placeholders, declined, disabled */
-
-  /* the ember — the agent's own light; links, focus, running state, burn line */
-  --ember:      #E88C3A;
-  --ember-dim:  #8A5524; /* borders/underlays of ember elements */
-
-  /* status (fixed set; ALWAYS paired with icon + label, never color alone) */
-  --ok:       #0ca30c;   /* complete, resolved */
-  --warn:     #fab219;   /* pending approval */
-  --serious:  #ec835a;   /* incomplete, needs_human */
-  --crit:     #d03b3b;   /* failed, critical severity */
-  /* declined/muted = --ink-3 · running = --ember with pulse dot */
-
-  /* tool badges — validated categorical, fixed per tool (color follows entity).
-     Every badge shows the tool NAME next to the dot (required: one CVD pair sits
-     in the 6–8 floor band, text label is the secondary encoding). */
-  --tool-ssh:        #C97A35;
-  --tool-prometheus: #4A8AC2;
-  --tool-ha:         #C2609A;
-  --tool-discover:   #4F9E5A;
-  --tool-proxmox:    #8A6FD1;
-
-  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-
-  --r: 6px;             /* base radius; pills 999px */
-  --pad: 8px;           /* base spacing unit; grid gaps 8/12/16 */
-}
-```
-
-Type scale (rem): 0.6875 eyebrow/mono-caps (letter-spacing .08em) · 0.8125 body-dense /
-table cells · 0.875 body · 1.0625 card titles · 1.375 page title · 1.75 hero numbers
-(mono, tabular-nums). All numbers everywhere: `font-family: var(--mono);
-font-variant-numeric: tabular-nums`.
+Type: system sans, 14 px / 1.45 body, three weights (400, 600, 800); the page title 40 px
+/ 800; panel titles 22 px / 800; figures 36 px / 800, tabular. Labels (card titles, table
+heads, rail groups) are mono caps, tracked: the operator's ruling, see `design.md`. Mono
+for hosts, ids, fingerprints, commands, timestamps and the date line.
 
 ## 2. Layout
 
-Fixed left rail (200px; collapses to 56px icon rail under 900px), thin top bar, fluid
-content column (max 1280px, 16px gutters).
+A fixed, grouped left rail (232 px; on phones under 60rem it becomes a wrapped row of
+lamp-chips above the page), a top bar inside the page column, and a page column of up to
+1440 px.
 
 ```
-┌──────────┬──────────────────────────────────────────────────────┐
-│ ✳ HEIM   │  overview                       homelab · 21:42 CET  │
-│──────────│──────────────────────────────────────────────────────│
-│ Overview │  ┌─────────┐┌─────────┐┌─────────┐┌─────────┐        │
-│ Investi- │  │ OPEN    ││ RUNNING ││ PENDING ││ TOKENS  │  KPI   │
-│  gations │  │ INCID.  ││ INVEST. ││ APPROV. ││ 24H     │  row   │
-│ Incidents│  │  3      ││  1 ●    ││  1      ││ 212k    │        │
-│ Findings │  └─────────┘└─────────┘└─────────┘└─────────┘        │
-│ Hosts    │  LATEST HEADLINE ────────────────────────────        │
-│          │  ⚠ Memory climbing on ubuntu-server …                │
-│──────────│  RECENT INVESTIGATIONS ──────────────────────        │
-│ ● daemon │  #14 ● running   ubuntu-server  mem_used   9 steps   │
-│   up 3d  │  #13 ✓ resolved  homelab        drive_temp 12 steps  │
-└──────────┴──────────────────────────────────────────────────────┘
+┌───────────────────┬──────────────────────────────────────────────────────┐
+│ heim              │  Overview                      4 hosts · 21:42 CET   │
+│ HOMELAB MONITOR   │  Sunday, 1 November                                  │
+│ H 01              │  ┌────────────┐┌────────────┐┌────────────┐          │
+│ WORKSPACE         │  │ panels and instrument cards …                     │
+│ (●) Overview      │                                                      │
+│ ( ) Agents      7 │                                                      │
+│ ( ) Investig.   2 │                                                      │
+│ ( ) Incidents   5 │                                                      │
+│ INFRASTRUCTURE    │                                                      │
+│ INSIGHTS          │                                                      │
+│───────────────────│                                                      │
+│ ( ) Connected     │                                                      │
+│ ( ) Appearance    │                                                      │
+└───────────────────┴──────────────────────────────────────────────────────┘
 ```
 
-Rail: wordmark — a minimal ink-style **house glyph** in ember (tall gable, chimney,
-round attic window, two windows, arched door; `static/logo.svg`, also the favicon) +
-`HEIM`; nav items
-(mono-caps, active item gets an ember left-border + `--raised` bg), and a footer daemon
-chip (`● daemon up 3d` — ok dot; `○ daemon unreachable` — ink-3) derived from the
-freshest `runs` row. Top bar: page title (lowercase, mono), right side environment chip
-+ clock. No breadcrumbs deeper than `investigations / #14`.
+Rail: the brand (lower-case "heim" in geometric arches, the i's dot an orange lamp;
+`class="spark"`, `aria-label="HEIM"`; the favicon `static/logo.svg` is the compact h
+mark), the brand line HOMELAB MONITOR / H 01, then three groups: **Workspace**
+(Overview, Agents, Investigations, Incidents), **Infrastructure** (Hosts, Metrics,
+Security), **Insights** (Findings, Recommendations, Costs). Every item has a lamp, orange
+when current (`aria-current="page"`); Agents, Investigations (running + pending
+approval), Incidents (open) and Hosts carry a count. The footer holds the daemon line
+(`class="daemon"`: **Connected** / **Daemon quiet** / **No heartbeat yet**, with
+"Synced 2m ago", read from the newest poll heartbeat in `agent_runs`, falling back to
+the `runs` table) and the **Appearance** switch. Top bar: the page title, the date in the
+configured timezone, "n hosts · HH:MM TZ" and a slot for a page's segmented switch.
 
 ## 3. Pages
 
@@ -328,47 +309,22 @@ paginated (few, always shown).
 
 ## 10. Light mode
 
-The token system was built for two modes; light mode is an override set, not a
-redesign. Direction: **morning ash** — the hearth gone cold by daylight: cool-neutral
-ash surfaces and neutral ink, with ember as the only warmth left glowing, and the SAME
-identity colors. (An earlier warm-cream direction was rejected by the operator as too
-close to the common cream/terracotta default — this direction is the ruling.)
-
-```css
-[data-theme="light"] {
-  --bg: #ECEEED;      /* morning ash — cool neutral, deliberately NOT cream */
-  --panel: #FAFBFA;   --raised: #E4E6E4;   --line: #D6D9D6;
-  --ink: #22252B;     --ink-2: #5B6169;    --ink-3: #8B9199;
-  --ember: #B05E1A;   /* validated 4.0–4.5:1 on the ash surfaces */
-  --ember-dim: #E8D0B4;
-  /* Tool/host categorical slots and the fixed status palette are
-     MODE-INVARIANT: the five identity hexes pass the validator on BOTH
-     surfaces (the light-mode CVD floor-band pair is mitigated by the
-     ever-present text labels), and the status palette's light-surface
-     contrast caveats are mitigated by icon+label per the dataviz rules.
-     Do not re-theme them. */
-}
-```
+Light and dark are one token set (§1, `design.md`): `:root` is dark, and
+`[data-theme="light"]` plus its `prefers-color-scheme` mirror override the surfaces, the
+ink and the signal text colours. The lamps, the tool and host palettes and the terminal
+islands are mode-invariant.
 
 - Selection: `data-theme` on `<html>`. Resolution order: `heim_theme` cookie →
-  `prefers-color-scheme` (via a tiny inline head script so there is no flash) → dark.
-  A sun/moon toggle in the topbar cycles auto → light → dark. No-JS path: the toggle is
-  a form GET `?theme=<auto|light|dark>` handled server-side (sets the cookie,
-  `SameSite=Lax`, 1 year, then redirects back).
-- Components read tokens only — any hardcoded dark hex discovered during
-  implementation is a bug to fix in place. ONE deliberate exception, and it is light
-  mode's signature: **the terminal surfaces stay dark**. Transcript command lines,
-  result previews, and code/pre blocks keep their charcoal treatment in light mode
-  (scoped rule, e.g. `[data-theme="light"] .cmd, [data-theme="light"] pre { background:
-  #1B1917; color: #E9E2D4; }` — literal values allowed HERE only, they are the terminal's
-  own colors, not theme tokens). Terminals do not have a light mode; the agent's shell
-  keeps its native habitat as dark islands on the paper. The burn line keeps the original
-  ember #E88C3A inside those dark blocks.
-- Design rationale (recorded so nobody "fixes" it later): the cool ash ground makes
-  ember read as the sole warm element — the residual glow in a cold hearth — which keeps
-  the accent's agent-activity meaning stronger in light mode than any warm ground could.
-  The dark terminal islands complete it: charcoal windows on an ash morning desk. The
-  theme toggle uses the lockup's own vocabulary: ☀ light · ☾ dark · ◐ auto.
+  `prefers-color-scheme` (pure CSS, the mirror block) → dark. The rail's **Appearance**
+  row cycles auto → light → dark and says its state as a word (Auto, Light, Dark; no
+  emoji, the operator's ruling of 2026-11-01). No-JS path: the toggle is a plain GET link
+  `?theme=<auto|light|dark>` handled server-side (sets the cookie, `SameSite=Lax`,
+  1 year, then a 303 back with the rest of the query string kept).
+- Components read tokens only. ONE deliberate exception: **the terminal surfaces stay
+  dark** in both modes (`.cmd`, `.rfull`, `.wrap`, `.prose code, .prose pre` on
+  `--term-bg` `#1B1917`, ink `#E9E2D4`, the prompt in `#E88C3A`). A terminal has no light
+  mode.
+- The "morning ash" set and its ☀ ☾ ◐ toggle are superseded (2026-11-01).
 
 ## 11. Token usage by weekday (overview chart)
 

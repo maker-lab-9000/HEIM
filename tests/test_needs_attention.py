@@ -195,7 +195,7 @@ def test_an_unrelated_later_run_does_not_hide_anything(tmp_path):
 def test_overview_needs_attention_card(seeded_client):
     html = seeded_client.get("/").text
     card = html[html.index("needs attention"):]
-    assert "incomplete" in card and "RE-RUN" in card and "budget" in card
+    assert "incomplete" in card and "Re-run" in card and "budget" in card
 
 
 def test_card_sits_under_the_health_card(seeded_client):
@@ -271,4 +271,4 @@ def test_empty_state_dot_is_hidden_from_screen_readers(empty_client):
     """Like every other dot in the UI (m.pill, m.hostbadge) the glyph is
     decoration — a reader should say the sentence, not "black circle"."""
     html = empty_client.get("/").text
-    assert '<span aria-hidden="true">●</span> Nothing needs attention.' in html
+    assert '<span class="lamp blue" aria-hidden="true"></span> Nothing needs attention.' in html

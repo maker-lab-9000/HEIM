@@ -1,4 +1,4 @@
-"""Pagination: offset on the store's list readers, and the "LOAD 50 MORE"
+"""Pagination: offset on the store's list readers, and the "Load 50 more"
 button the three list pages grow when the store has more than one page.
 
 The pages stay server-rendered: the button is a plain link first (a no-JS
@@ -188,21 +188,21 @@ def test_investigations_page_paginates(client_with_60_investigations):
     c = client_with_60_investigations
     html = c.get("/investigations").text
     assert html.count('href="/investigations/') == 50
-    assert "LOAD 50 MORE" in html
+    assert "Load 50 more" in html
     assert 'href="/investigations?offset=50' in _unesc(html)
     page2 = c.get("/investigations?offset=50").text
     assert page2.count('href="/investigations/') == 10
-    assert "LOAD 50 MORE" not in page2          # exhausted
+    assert "Load 50 more" not in page2          # exhausted
 
 
 def test_investigations_pagination_keeps_filters(client_with_60_investigations):
     c = client_with_60_investigations
     html = _unesc(c.get("/investigations?status=resolved").text)
-    assert "LOAD 50 MORE" in html
+    assert "Load 50 more" in html
     assert "status=resolved" in html and "offset=50" in html
     # a filter that matches nothing has nothing more to load
     empty = c.get("/investigations?status=failed").text
-    assert "LOAD 50 MORE" not in empty
+    assert "Load 50 more" not in empty
 
 
 def test_investigations_rows_partial_paginates(client_with_60_investigations):
@@ -212,10 +212,10 @@ def test_investigations_rows_partial_paginates(client_with_60_investigations):
     rows = c.get("/investigations/rows?offset=50").text
     assert rows.strip().startswith("<tbody")
     assert rows.count('href="/investigations/') == 10
-    assert "LOAD 50 MORE" not in rows
+    assert "Load 50 more" not in rows
     first = c.get("/investigations/rows").text
     assert first.count('href="/investigations/') == 50
-    assert "LOAD 50 MORE" in first
+    assert "Load 50 more" in first
     assert "offset=50" in _unesc(first)
 
 
@@ -223,11 +223,11 @@ def test_incidents_page_paginates(client_with_60_incidents):
     c = client_with_60_incidents
     html = c.get("/incidents").text
     assert html.count('class="xrow"') == 50
-    assert "LOAD 50 MORE" in html
+    assert "Load 50 more" in html
     assert 'href="/incidents?offset=50"' in _unesc(html)
     page2 = c.get("/incidents?offset=50").text
     assert page2.count('class="xrow"') == 10
-    assert "LOAD 50 MORE" not in page2
+    assert "Load 50 more" not in page2
 
 
 def test_findings_page_paginates_on_run_boundaries(client_with_60_findings):
@@ -238,13 +238,13 @@ def test_findings_page_paginates_on_run_boundaries(client_with_60_findings):
     assert html.count("<tbody>") == 10
     assert html.count("run 11 finding") == 5
     assert "run 1 finding 0" not in html
-    assert "LOAD 50 MORE" in html
+    assert "Load 50 more" in html
     assert 'href="/findings?offset=50"' in _unesc(html)
     page2 = c.get("/findings?offset=50").text
     assert page2.count("<tbody>") == 2
     assert "run 1 finding 0" in page2 and "run 0 finding 4" in page2
     assert "run 2 finding 0" not in page2
-    assert "LOAD 50 MORE" not in page2
+    assert "Load 50 more" not in page2
 
 
 def test_findings_header_describes_the_window_not_a_total(client_with_60_findings):
@@ -297,12 +297,12 @@ def test_findings_page_never_splits_a_run(tmp_path, monkeypatch):
         # whole runs (44 findings) rather than cutting run 1 in half
         assert html.count("<tbody>") == 4
         assert "run 1 finding" not in html
-        assert "LOAD 50 MORE" in html
+        assert "Load 50 more" in html
         assert 'href="/findings?offset=44"' in _unesc(html)
         page2 = c.get("/findings?offset=44").text
         assert page2.count("<tbody>") == 2
         assert "run 1 finding 0" in page2 and "run 0 finding 10" in page2
-        assert "LOAD 50 MORE" not in page2
+        assert "Load 50 more" not in page2
 
 
 def test_pagination_ignores_junk_offsets(client_with_60_investigations):
@@ -314,7 +314,7 @@ def test_pagination_ignores_junk_offsets(client_with_60_investigations):
     assert c.get("/investigations?offset=-10").text.count('href="/investigations/') == 50
     # past the end: an empty window, and nothing more to load
     beyond = c.get("/investigations?offset=500").text
-    assert "LOAD 50 MORE" not in beyond
+    assert "Load 50 more" not in beyond
 
 
 def test_ghost_rows_are_never_paginated(tmp_path, monkeypatch):
@@ -337,7 +337,7 @@ def test_loadmore_button_is_a_plain_link_first(client_with_60_investigations):
     href alone reaches the next window."""
     c = client_with_60_investigations
     html = _unesc(c.get("/investigations").text)
-    i = html.index("LOAD 50 MORE")
+    i = html.index("Load 50 more")
     anchor = html[html.rindex("<a", 0, i):i]
     assert anchor.startswith("<a ") and 'href="/investigations?offset=50"' in anchor
     assert 'class="btn"' in anchor

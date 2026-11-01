@@ -436,7 +436,7 @@ def test_incidents_page(client):
     html = client.get("/incidents").text
     assert "critical" in html and "warning" in html
     assert "open" in html and "resolved" in html
-    assert "🔒" in html                                   # dispatch lock
+    assert "Locked" in html                               # dispatch lock
     assert "×7" in html                                   # timesSeen
     assert "Working set grew 18% over three days." in html   # expansion body
     assert "linked investigations" in html
@@ -485,13 +485,14 @@ def test_weight_budget_and_no_cdn():
     fixed-column geometry, the rail tagline, the health card and the
     tool-usage card, landing at ~17 KB. It is still one hand-written file with no build step, and still
     the only stylesheet the pages load.
+    2026-11-01: the console redesign; one raise for all of it (32 KB).
     """
     static = Path(__file__).resolve().parent.parent / "src/heim/dashboard/static"
     # §11's token chart adds ~0.4 KB of SVG styling (7 rules), so 17.5 -> 20 KB
     # §9's recommendations table adds 6 column rules, so 20 -> 20.25 KB
     # §5.1's model picker adds one rule (5 declarations), so 20.25 -> 20.5 KB
     # /security (the audit by severity) adds 3 rules, so 20.5 -> 20.75 KB
-    assert (static / "heim.css").stat().st_size <= 21_248
+    assert (static / "heim.css").stat().st_size <= 32_768
     assert (static / "htmx.min.js").stat().st_size > 10_000
     templates = (Path(__file__).resolve().parent.parent
                  / "src/heim/dashboard/templates")

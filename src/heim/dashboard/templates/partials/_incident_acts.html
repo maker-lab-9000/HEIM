@@ -2,13 +2,13 @@
 <div class="acts">
   {%- if sup %}
   {{ m.muted(sup) }}
-  {{ m.act('/actions/unmute', 'UNMUTE', {'fingerprint': r.fingerprint}) }}
+  {{ m.act('/actions/unmute', 'Unmute', {'fingerprint': r.fingerprint}) }}
   {%- else %}
-  {{ m.act('/actions/investigate', 'INVESTIGATE NOW',
+  {{ m.act('/actions/investigate', 'Investigate now',
            {'host': r.host, 'fingerprint': r.fingerprint},
            confirm='Queue an investigation for ' ~ (r.host or 'this host') ~ ' now?',
            model=true) }}
-  {{ m.act('/actions/mute', 'MARK FALSE POSITIVE', {'fingerprint': r.fingerprint},
+  {{ m.act('/actions/mute', 'Mark false positive', {'fingerprint': r.fingerprint},
            confirm='Mark this a false positive and mute the fingerprint?') }}
   {%- endif %}
   {% include "partials/_flash.html" %}

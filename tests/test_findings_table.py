@@ -134,7 +134,7 @@ def test_detail_and_recommendation_fold_into_the_finding_cell(client):
 
 def test_verdict_cell_offers_the_pair_or_shows_the_pill(client, ids):
     table = _table(client.get("/findings").text)
-    assert table.count("✓ CONFIRM") == 3                 # drive_temp is judged
+    assert table.count(">Confirm<") == 3                 # drive_temp is judged
     assert 'class="verdict st-ok"' in table and "confirmed" in table
     # the form lives inside the verdict cell, with its finding id and back field
     cells = re.findall(r'<td class="c-verdict">(.*?)</td>', table, re.S)
@@ -151,7 +151,7 @@ def test_verdict_post_still_updates_the_cell(client, ids):
     assert r.status_code == 200
     assert "<html" not in r.text                         # a fragment for the cell
     assert 'class="verdict st-ok"' in r.text
-    assert "✓ CONFIRM" not in r.text
+    assert ">Confirm<" not in r.text
     assert "confirmed" in _table(client.get("/findings").text)
 
 
