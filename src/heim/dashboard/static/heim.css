@@ -434,7 +434,10 @@ details > summary:hover { color: var(--ink); }
 .links { margin: 4px 0 0; padding: 0; list-style: none; }
 .links li { display: flex; gap: 8px; align-items: center; padding: 4px 0; font-size: var(--text-13); }
 .hlist { margin: 0; padding: 0; list-style: none; }
-.hrow { display: grid; grid-template-columns: 11rem 1fr 1fr; gap: 4px 24px; align-items: start; padding: 12px 0 12px 12px; border-bottom: 1px solid var(--line); font-size: var(--text-13); }
+.hhead, .hrow { display: grid; grid-template-columns: 11rem minmax(0, 1.5fr) minmax(0, 1.3fr) minmax(0, 1fr) 9rem; gap: 4px 24px; align-items: start; padding: 12px 0 12px 12px; border-bottom: 1px solid var(--line); font-size: var(--text-13); }
+.hhead { padding-block: 8px; }
+.hhead p, .hrow .hline > .label { margin: 0; }
+.hrow .hline > .label { display: none; }
 .hrow:last-child { border-bottom: 0; }
 .hrow.flag { background: var(--flag-bg); box-shadow: inset 4px 0 0 var(--signal); }
 .hrow .hname { margin: 0; font-size: var(--text-16); }
@@ -442,8 +445,7 @@ details > summary:hover { color: var(--ink); }
 .hrow .role { margin-top: 4px; }
 .hrow .hopen .lamp { margin-right: 4px; vertical-align: -3px; }
 .hrow .hline, .hrow .hopen { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; color: var(--ink-2); }
-.hrow .hline + .hline { grid-column: 3; }
-.hrow .acts { grid-column: 2; grid-row: 2; margin: 0; }
+.hrow .acts { margin: 0; }
 .own { white-space: nowrap; }
 .incs th, .incs td { padding-right: 12px; }
 .inc { overflow-x: auto; }
@@ -457,7 +459,6 @@ details > summary:hover { color: var(--ink); }
 .incs tr:has(details[open]) + tr.xbody { display: table-row; }
 .incs tr.xbody td { padding: 4px 12px 16px; }
 .incs .xbody .prose { max-width: 70ch; }
-.hrow .hopen a { white-space: nowrap; }
 /* metrics: one fixed-layout table per category, all on one grid */
 .mline { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0; font-size: var(--text-13); }
 .mline .mref { margin-left: auto; }
@@ -539,7 +540,8 @@ details > summary:hover { color: var(--ink); }
   .flg tr.flag td:first-child { box-shadow: none; }
   .flg tbody tr { padding-left: 12px; }
   .hrow { grid-template-columns: 1fr; }
-  .hrow .acts, .hrow .hline + .hline { grid-column: 1; grid-row: auto; }
+  .hhead { display: none; }
+  .hrow .hline > .label { display: inline; }
   /* :nth-child(n) is every cell: it ties .incs td:nth-child(6) on specificity and wins by order */
   .incs td:nth-child(n) { max-width: none; }
 }

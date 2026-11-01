@@ -1,5 +1,6 @@
 name: heim
 role: guest
+vmid: 103
 investigable: all
 
 # No ssh: block — this host has no shell for the agent. The name matches the

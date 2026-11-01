@@ -514,6 +514,25 @@ def test_hosts_cards(client, cfg_hosts=("ubuntu-server", "homelab", "home-assist
     assert "no open incidents" in html          # home-assistant has none open
 
 
+def test_hosts_page_has_column_heads_and_vm_tags(client):
+    import re
+    html = client.get("/hosts").text
+    head = re.search(r'<div class="hhead".*?</div>', html, re.S).group(0)
+    for col in ("Host", "Open incidents", "Last finding", "Last investigation", "Action"):
+        assert f'<p class="label">{col}</p>' in head
+    assert "VM 100" in html and "VM 101" in html and "VM 103" in html
+    assert re.search(r'class="label role"[^>]*>Hypervisor<', html)
+
+
+def test_host_vmid_is_optional_and_yamls_carry_it(tmp_path, monkeypatch):
+    from heim.config import Host
+    assert Host(name="x", role="guest").vmid is None
+    assert Host(name="x", role="guest", vmid=7).vmid == 7
+    hosts = _config(tmp_path, monkeypatch).hosts
+    assert (hosts["ubuntu-server"].vmid, hosts["home-assistant"].vmid,
+            hosts["heim"].vmid, hosts["homelab"].vmid) == (100, 101, 103, None)
+
+
 # ---------------------------------------------------------------------- auth
 
 def test_auth_required_when_token_set(seeded, monkeypatch):

@@ -5,13 +5,14 @@
 {%- if cards %}
 <section class="panel hosts" aria-labelledby="h-hosts">
   <div class="panel-head"><h2 id="h-hosts">Hosts</h2><p class="label">{{ cards|length }} configured</p></div>
+  <div class="hhead" aria-hidden="true"><p class="label">Host</p><p class="label">Open incidents</p><p class="label">Last finding</p><p class="label">Last investigation</p><p class="label">Action</p></div>
   <ul class="hlist">
   {%- for c in cards %}
   {%- set crit = c.open|selectattr('severity', 'equalto', 'critical')|list %}
   <li class="hrow{{ ' flag' if crit }}">
     <div class="hid">
       <h3 class="hname mono">{{ c.name }}</h3>
-      <p class="label role">{{ c.role }}</p>
+      <p class="label role" title="role: {{ c.role }}">{{ c.tag }}</p>
     </div>
     <p class="hopen">{% if c.open %}<a href="/incidents">
       {%- if crit %}{{ m.lamp('red') }}<span class="mono">{{ crit|length }}</span> critical, {% endif %}
@@ -43,6 +44,7 @@
 <section class="panel hosts" aria-labelledby="h-watched">
   <div class="panel-head"><h2 id="h-watched">Watched, not investigated</h2>
     <p class="label">reported by uptime, no host profile</p></div>
+  <div class="hhead" aria-hidden="true"><p class="label">Host</p><p class="label">Open incidents</p><p class="label">Last seen</p></div>
   <ul class="hlist">
   {%- for w in watched %}
   <li class="hrow{{ ' flag' if w.severity == 'critical' }}">

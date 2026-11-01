@@ -927,6 +927,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             cards.append({
                 "name": host.name,
                 "role": host.role,
+                # a Proxmox guest reads as its VM number, anything else as its role
+                "tag": f"VM {host.vmid}" if host.vmid is not None else host.role.capitalize(),
                 "open": [i for i in open_incidents if i["host"] == host.name],
                 "finding": next((f for f in findings if f.get("host") == host.name), None),
                 "investigation": next((i for i in invs if i.get("host") == host.name), None),

@@ -240,6 +240,7 @@ class ApiCfg(BaseModel):
 class Host(BaseModel):
     name: str
     role: Literal["guest", "hypervisor", "ha-guest"]
+    vmid: int | None = None  # Proxmox VM id, display only (hosts page)
     # 'all' or a list of investigable categories (cpu, memory, disk, diskHealth,
     # temperature, network, container, ...)
     investigable: str | list[str] = "all"
