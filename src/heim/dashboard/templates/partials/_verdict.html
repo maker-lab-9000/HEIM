@@ -3,7 +3,7 @@
   {%- if f.verdict == 'confirmed' %}
   <span class="verdict st-ok"><span class="dot" aria-hidden="true"></span>confirmed</span>
   {%- elif f.verdict %}
-  <span class="verdict">{{ f.verdict|replace('_', ' ') }}</span>
+  <span class="verdict"><span class="dot" aria-hidden="true"></span>{{ f.verdict|replace('_', ' ') }}</span>
   {%- else %}
   {{ m.act('/actions/verdict', 'Confirm', {'finding_id': f.id, 'verdict': 'confirmed'}) }}
   {{ m.act('/actions/verdict', 'False positive',

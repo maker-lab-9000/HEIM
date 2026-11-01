@@ -18,14 +18,16 @@
       <th scope="col" class="num">missed</th>
       <th scope="col">first seen</th>
       <th scope="col">last seen</th>
+      <th scope="col">detail</th>
     </tr></thead>
     <tbody>
       {%- for r in rows %}
       <tr{% if r.status == 'open' and r.severity == 'critical' %} class="flag"{% endif %}>
-        <td>{{ m.sev(r.severity) }}</td>
-        <td>{{ m.pill(r.status) }}{% if r.investigated %} <span class="lock"
+        <td>{{ m.word(r.severity) }}</td>
+        <td>{{ m.word(r.status) }}{% if r.investigated %} <span class="lock"
             title="investigated — the dispatch lock is held">Locked</span>{% endif %}
-          {%- if r.suppression %} {{ m.muted(r.suppression) }}{% endif %}</td>
+          {%- if r.suppression %} <span class="word other">muted · until
+            {{ r.suppression.until|day if r.suppression.until else 'further notice' }}</span>{% endif %}</td>
         <td class="own">{{ r.description|ownership }}</td>
         <td>{{ m.hostbadge(r.host) }}</td>
         <td class="mono ink2">{{ r.metric or DASH }}</td>
@@ -34,11 +36,10 @@
         <td class="num mono">{{ r.missedRuns }}</td>
         <td>{{ m.when(r.firstSeen) }}</td>
         <td>{{ m.when(r.lastSeen) }}</td>
-      </tr>
-      <tr class="xrow">
-        <td colspan="10">
-          <details>
+        <td class="more">
+          <details class="xrow">
             <summary>what this incident says</summary>
+            <div class="xbody">
             <p class="prose">{{ r.description or 'No description stored for this incident.' }}</p>
             {%- if r.investigations %}
             <p class="eyebrow">linked investigations</p>
@@ -55,6 +56,7 @@
             {%- with sup = r.suppression %}
             {% include "partials/_incident_acts.html" %}
             {%- endwith %}
+            </div>
           </details>
         </td>
       </tr>

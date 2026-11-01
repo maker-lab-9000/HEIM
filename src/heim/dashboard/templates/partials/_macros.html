@@ -43,6 +43,14 @@
 <span class="sev {{ p.cls }}"><span class="dot" aria-hidden="true"></span>{{ p.label }}</span>
 {%- endmacro %}
 
+{#- a state as a coloured word, no lamp (the incidents list). The class names
+    the colour; critical/warning/open carry text tokens tuned for 4.5:1, resolved
+    is the ink, anything else the secondary ink. -#}
+{% macro word(value) -%}
+{%- set k = {'critical': 'crit', 'warning': 'warn', 'open': 'open', 'resolved': 'done'}.get(value, 'other') -%}
+<span class="word {{ k }}">{{ value or DASH }}</span>
+{%- endmacro %}
+
 {#- a timestamp. When the value is missing or unparseable `iso` gives the dash,
     which is not a valid `datetime=` — so the attributes (and the tooltip) are
     dropped and only the dash text remains. -#}
