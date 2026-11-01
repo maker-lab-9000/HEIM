@@ -2,13 +2,15 @@
 {% import "partials/_macros.html" as m with context %}
 {% block content %}
 
-<section class="card">
+<section class="panel inc">
+  <div class="panel-head"><h2>Incidents</h2><p class="label">newest first</p></div>
   {%- if rows %}
   <div class="rows-and-more">
-  <table class="tbl dense">
+  <table class="tbl dense incs">
     <thead><tr>
       <th scope="col">severity</th>
       <th scope="col">status</th>
+      <th scope="col">ownership</th>
       <th scope="col">host</th>
       <th scope="col">metric</th>
       <th scope="col">fingerprint</th>
@@ -19,11 +21,12 @@
     </tr></thead>
     <tbody>
       {%- for r in rows %}
-      <tr>
+      <tr{% if r.status == 'open' and r.severity == 'critical' %} class="flag"{% endif %}>
         <td>{{ m.sev(r.severity) }}</td>
         <td>{{ m.pill(r.status) }}{% if r.investigated %} <span class="lock"
             title="investigated — the dispatch lock is held">Locked</span>{% endif %}
           {%- if r.suppression %} {{ m.muted(r.suppression) }}{% endif %}</td>
+        <td class="own">{{ r.description|ownership }}</td>
         <td>{{ m.hostbadge(r.host) }}</td>
         <td class="mono ink2">{{ r.metric or DASH }}</td>
         <td class="mono ink2" title="{{ r.fingerprint }}">{{ r.fingerprint|fp }}</td>
@@ -33,7 +36,7 @@
         <td>{{ m.when(r.lastSeen) }}</td>
       </tr>
       <tr class="xrow">
-        <td colspan="9">
+        <td colspan="10">
           <details>
             <summary>what this incident says</summary>
             <p class="prose">{{ r.description or 'No description stored for this incident.' }}</p>

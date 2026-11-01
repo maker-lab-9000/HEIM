@@ -399,7 +399,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         rel=fmt.rel_time, iso=fmt.iso, clock=fmt.clock, day=fmt.day,
         dur_s=fmt.dur_s, dur_ms=fmt.dur_ms, tokens=fmt.tokens, size=fmt.size,
         fp=fmt.fingerprint, pill=fmt.status_pill, tool_key=fmt.tool_key,
-        command=fmt.command_of,
+        command=fmt.command_of, ownership=fmt.ownership_word,
     )
     templates.env.filters["ucfirst"] = lambda v: str(v)[:1].upper() + str(v)[1:]
     templates.env.filters.update(mval=fmt.value, mtrend=fmt.trend,
@@ -922,7 +922,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "finding": next((f for f in findings if f.get("host") == host.name), None),
                 "investigation": next((i for i in invs if i.get("host") == host.name), None),
             })
-        return page(request, "hosts.html", page_title="hosts", cards=cards)
+        return page(request, "hosts.html", page_title="hosts", cards=cards,
+                    watched=_report_only_hosts(cfg, open_incidents))
 
     # ------------------------------------------------------- action routes
     #
@@ -1550,6 +1551,28 @@ def _host_health(cfg: Config, open_incidents: list[dict]) -> list[dict]:
         chips.append({"name": name, "flag": flag, "label": label,
                       "open": len(mine)})
     return chips
+
+
+def _report_only_hosts(cfg: Config, open_incidents: list[dict]) -> list[dict]:
+    """Addresses Uptime Kuma reports on that HEIM has no profile for.
+
+    An open ``[uptime] `` incident on a host outside ``cfg.hosts`` can only be
+    reported — there is nothing to investigate it with — so the hosts page
+    lists it apart from the configured hosts. Worst severity first, then name.
+    """
+    seen: dict[str, list[dict]] = {}
+    for inc in open_incidents:
+        host = str(inc.get("host") or "")
+        if (host and host not in cfg.hosts
+                and fmt.ownership_word(inc.get("description")) == "Uptime"):
+            seen.setdefault(host, []).append(inc)
+    out = []
+    for host, mine in seen.items():
+        crit = any(str(i.get("severity") or "").lower().startswith("crit") for i in mine)
+        out.append({"name": host, "open": len(mine),
+                    "severity": "critical" if crit else "warning",
+                    "last_seen": max(str(i.get("lastSeen") or "") for i in mine)})
+    return sorted(out, key=lambda w: (w["severity"] != "critical", w["name"]))
 
 
 def _health_card(latest: dict | None, sev_counts: dict, cfg: Config,

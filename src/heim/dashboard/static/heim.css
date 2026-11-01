@@ -432,11 +432,22 @@ details > summary:hover { color: var(--ink); }
 .rec .eyebrow { display: inline; }
 .links { margin: 4px 0 0; padding: 0; list-style: none; }
 .links li { display: flex; gap: 8px; align-items: center; padding: 4px 0; font-size: var(--text-13); }
-.host .hname { margin: 0; font-size: var(--text-16); }
-.host .role, .host .hopen { margin: 8px 0; }
-.host .hopen { font-size: var(--text-13); }
-.host .hline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0 0; font-size: var(--text-13); color: var(--ink-2); }
-
+.hlist { margin: 0; padding: 0; list-style: none; }
+.hrow { display: grid; grid-template-columns: 11rem 1fr 1fr; gap: 4px 24px; align-items: start; padding: 12px 0 12px 12px; border-bottom: 1px solid var(--line); font-size: var(--text-13); }
+.hrow:last-child { border-bottom: 0; }
+.hrow.flag { background: var(--flag-bg); box-shadow: inset 4px 0 0 var(--signal); }
+.hrow .hname { margin: 0; font-size: var(--text-16); }
+.hrow p { margin: 0; }
+.hrow .role { margin-top: 4px; }
+.hrow .hopen .lamp { margin-right: 6px; vertical-align: -3px; }
+.hrow .hline, .hrow .hopen { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; color: var(--ink-2); }
+.hrow .hline + .hline { grid-column: 3; }
+.hrow .acts { grid-column: 2; grid-row: 2; margin: 0; }
+.own { white-space: nowrap; }
+.incs td:nth-child(6) { max-width: 13rem; }
+.incs th, .incs td { padding-right: 10px; }
+.incs td.mono { overflow-wrap: anywhere; }
+.hrow .hopen a { white-space: nowrap; }
 /* metrics: one fixed-layout table per category, all on one grid */
 .mline { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0; font-size: var(--text-13); }
 .mline .mref { margin-left: auto; }
@@ -490,6 +501,16 @@ details > summary:hover { color: var(--ink); }
   .agents .scope { padding-left: 0; }
   .agents tr.flag { padding-left: 12px; background: var(--flag-bg); box-shadow: inset 4px 0 0 var(--signal); }
   .agents tr.flag td { background: none; box-shadow: none; }
+  .incs thead { display: none; }
+  .incs, .incs tbody, .incs tr, .incs td { display: block; }
+  .incs td { padding: 2px 0; border: 0; text-align: left; }
+  .incs .num { text-align: left; }
+  .incs tr:not(.xrow) { padding: 12px 0 4px; }
+  .incs tr.flag { padding-left: 12px; box-shadow: inset 4px 0 0 var(--signal); background: var(--flag-bg); }
+  .incs tr.flag td { background: none; box-shadow: none; }
+  .hrow { grid-template-columns: 1fr; }
+  .hrow .acts, .hrow .hline + .hline { grid-column: 1; grid-row: auto; }
+  .incs td { max-width: none !important; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

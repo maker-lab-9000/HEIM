@@ -693,6 +693,19 @@ _STATUS = {
 }
 
 
+#: who owns an incident, from its description prefix (invariant 3)
+_OWNERS = (("[alert]", "Alert"), ("[metric]", "Metric"), ("[uptime]", "Uptime"))
+
+
+def ownership_word(description: str | None) -> str:
+    """The word for who opened and who may resolve an incident."""
+    text = str(description or "").lstrip().lower()
+    for prefix, word in _OWNERS:
+        if text.startswith(prefix):
+            return word
+    return "Daily analysis"
+
+
 def status_pill(value: str | None) -> dict:
     key = str(value or "").strip().lower()
     icon, cls, label = _STATUS.get(key, ("·", "st-muted", key or "unknown"))
