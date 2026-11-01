@@ -68,15 +68,15 @@
 {#- Needs attention (design spec §12 grown into the console): critical
     incidents, then the runs that did not finish cleanly, then warnings,
     oldest first within each. Past six rows the table stops (never on a
-    critical row) and an all (n) line links the rest, so the first screen
-    still reaches the Agents panel. Every row says what HEIM is doing about it;
+    critical row) and one all (n) line links the page that lists the rest,
+    so the first screen still reaches the Agents panel. Every row says what HEIM is doing about it;
     a run keeps the one action that helps, re-run it, and its reason line is
     the detail page's own sentence. The empty state stays visible as good
     news rather than disappearing. -#}
 <section class="panel att" aria-labelledby="h-att">
   <div class="panel-head">
     <h2 id="h-att">Needs attention</h2>
-    <span class="count">{{ attention_rows|length }} finding{{ '' if attention_rows|length == 1 else 's' }}</span>
+    <span class="count">{{ attention_total }} finding{{ '' if attention_total == 1 else 's' }}</span>
     <a class="more" href="/incidents">View incidents<span class="arr" aria-hidden="true">→</span></a>
   </div>
   {%- if attention_rows %}
@@ -107,11 +107,8 @@
       {%- endfor %}
     </tbody>
   </table>
-  {%- if attention_shown|length < attention_rows|length %}
-  <p class="over"><a class="more" href="/incidents">all ({{ attention_rows|length }})<span class="arr" aria-hidden="true">→</span></a></p>
-  {%- endif %}
-  {%- if attention_count > attention|length %}
-  <p><a class="qlink" href="/investigations">all ({{ attention_count }})</a></p>
+  {%- if attention_more %}
+  <p class="over"><a class="more" href="{{ attention_more }}">all ({{ attention_total }})<span class="arr" aria-hidden="true">→</span></a></p>
   {%- endif %}
   {%- else %}
   <p class="empty ok-empty"><span class="lamp blue" aria-hidden="true"></span> Nothing needs attention.</p>

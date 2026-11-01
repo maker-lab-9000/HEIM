@@ -297,7 +297,8 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: var(--text-13); }
 .agents .name, .agents .state { font-weight: 600; }
 .agents .scope { padding-left: 16px; }
 .agents .state { display: inline-flex; align-items: center; gap: 12px; }
-.agents .go { text-align: right; color: var(--ink-3); }
+.agents .go { text-align: right; }
+.agents .go a { padding: 4px 8px; color: var(--ink-3); text-decoration: none; }
 .gaps { display: grid; gap: 8px; padding: 0; list-style: none; }
 .gaps li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; }
 footer.foot { display: flex; justify-content: space-between; gap: 16px; padding-top: 12px; }

@@ -36,7 +36,7 @@
         <td>{% if a.strip %}<span class="runs" role="img" aria-label="{{ a.strip_label }}">
           {%- for t in a.strip %}<i{% if t.state != 'ok' %} class="{{ t.state }}"{% endif %}></i>{% endfor -%}
           </span>{% else %}{{ DASH }}{% endif %}</td>
-        <td class="go" aria-hidden="true">›</td>
+        <td class="go"><a href="{{ a.href }}" aria-label="Open {{ a.name }}">›</a></td>
       </tr>
       {%- endfor %}
     </tbody>

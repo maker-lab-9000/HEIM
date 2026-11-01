@@ -121,12 +121,12 @@ AGENT_FILTERS: dict[str, frozenset[str] | None] = {
 FLAGGED_STATES = frozenset({"stale", "failed"})
 #: the coverage card's hollow discs: no fresh word from the agent
 SILENT_STATES = frozenset({"stale", "unknown", "paused"})
-#: how many pending approvals and troubled runs the overview reads at once;
-#: Needs attention still lists only the newest ATTENTION_RUNS of the runs
+#: how many pending approvals and troubled runs the overview reads at once
 NEEDS_YOU_LIMIT = 50
+#: the legacy ``attention`` context key: the newest runs, as spec §12 had them
 ATTENTION_RUNS = 6
 #: the Needs attention table stops here, so the first screen reaches the
-#: Agents panel; a critical row is never the one cut (``_attention_shown``)
+#: Agents panel; a critical row is never the one cut (``_attention_view``)
 ATTENTION_CAP = 6
 
 try:
@@ -645,7 +645,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                                                          status="pending_approval"))
         agent_rows = _agent_rows(cfg, by_agent, invs, running, now_iso)
         needs_you = _needs_you(pending, troubled)
-        attention_rows = _attention_rows(open_incidents, attention, invs,
+        attention_rows = _attention_rows(open_incidents, troubled, invs,
                                          set(investigable_hosts(cfg)))
         feedback = reader.read(lambda s: s.latest_tool_feedback())
         tool_usage = _tool_usage(reader.read(lambda s: s.tool_usage(limit=12)), feedback)
@@ -677,7 +677,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             observations=_observations(agent_rows, by_agent, now_iso),
             requires_you=_requires_you(needs_you),
             attention_rows=attention_rows,
-            attention_shown=_attention_shown(attention_rows),
+            # runs past the wide read are still findings: they count, and the
+            # one "all (n)" line is what reaches them
+            **_attention_view(attention_rows,
+                              max(0, attention_count - len(troubled))),
             needs_you=needs_you,
             **_agents_panel(agent_rows, request.query_params.get("agents", "")),
             base_href="/",
@@ -1728,13 +1731,25 @@ def _attention_rows(open_incidents: list[dict], attention: list[dict],
     return crit + [run(i) for i in reversed(attention)] + warn
 
 
-def _attention_shown(rows: list[dict]) -> list[dict]:
-    """The rows the Needs attention table prints: at most ``ATTENTION_CAP``,
-    unless more than that are critical. Criticals lead the order, so cutting
-    the tail can only ever drop runs and warnings; the panel's header still
-    counts every row and an "all (n)" line links the rest."""
+def _attention_view(rows: list[dict], unread_runs: int = 0) -> dict:
+    """What the Needs attention table prints, and the one line past it.
+
+    At most ``ATTENTION_CAP`` rows, unless more than that are critical:
+    criticals lead the order, so cutting the tail only ever drops runs and
+    warnings. The header counts every finding, ``unread_runs`` (troubled runs
+    beyond the overview's wide read) included, and when anything is left out
+    one "all (n)" line links the page that lists it: /investigations when
+    every hidden row is a run, /incidents otherwise.
+    """
     crit = sum(r["kind"] == "incident" and r["severity"] == "critical" for r in rows)
-    return rows[:max(ATTENTION_CAP, crit)]
+    shown = rows[:max(ATTENTION_CAP, crit)]
+    hidden = rows[len(shown):]
+    total = len(rows) + unread_runs
+    more = ""
+    if total > len(shown):
+        runs_only = all(r["kind"] == "investigation" for r in hidden)
+        more = "/investigations" if runs_only else "/incidents"
+    return {"attention_shown": shown, "attention_total": total, "attention_more": more}
 
 
 def _findings_line(findings: list[dict]) -> str:

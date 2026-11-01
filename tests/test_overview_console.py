@@ -9,6 +9,7 @@ clock because the app reads it.
 import json
 import re
 from datetime import datetime, timedelta, timezone
+from importlib.metadata import version
 
 import pytest
 from fastapi.testclient import TestClient
@@ -163,7 +164,7 @@ def test_cards_show_condition_coverage_observations_and_requires_you(tmp_path, m
     assert 'href="?window=24h"' in switch and 'href="?window=7d"' in switch
     assert switch.count('aria-current="true"') == 1
     # the footer line
-    assert "HEIM / H 01" in html and "heim 0.1.0" in html
+    assert "HEIM / H 01" in html and f"heim {version('heim')}" in html
 
 
 def test_window_is_live_whatever_the_query_says(tmp_path, monkeypatch):
@@ -291,6 +292,35 @@ def test_attention_table_soft_caps_at_six_but_never_hides_a_critical(tmp_path, m
         panel = _attention(c.get("/").text)
     assert "7 findings" in panel and len(_rows(panel)) == 7
     assert "all (" not in panel
+
+
+def test_attention_counts_every_run_and_links_the_cut_rows_to_their_page(tmp_path, monkeypatch):
+    """Runs are findings too: seven failed runs read "7 findings", show six,
+    and one line links the rest — to /investigations, because every row it
+    hides is a run. Once an incident is among the hidden rows, /incidents."""
+    def runs(s):
+        _healthy_agents(s)
+        for i in range(7):
+            s.create_investigation(fingerprint=f"homelab|m{i}|Metric {i}", host="homelab",
+                                   agent_name="investigator", trigger="daily",
+                                   status="failed", started_at=_iso(600 - i),
+                                   incomplete_reason="ssh connection refused")
+
+    def runs_and_a_warning(s):
+        runs(s)
+        s.upsert([_incident("homelab|temp|Drive", "homelab", "warning", 90, "[alert] warm")])
+
+    with _client(tmp_path / "r", monkeypatch, runs) as c:
+        panel = _attention(c.get("/").text)
+    assert "7 findings" in panel and len(_rows(panel)) == 6
+    assert panel.count("all (") == 1
+    assert re.search(r'<a class="more" href="/investigations">all \(7\)', panel)
+
+    with _client(tmp_path / "w", monkeypatch, runs_and_a_warning) as c:
+        panel = _attention(c.get("/").text)
+    assert "8 findings" in panel and len(_rows(panel)) == 6
+    assert panel.count("all (") == 1
+    assert re.search(r'<a class="more" href="/incidents">all \(8\)', panel)
 
 
 def test_workflow_for_each_incident_kind():
@@ -435,6 +465,9 @@ def test_agents_panel_has_seven_rows_filter_and_flag(tmp_path, monkeypatch):
         ("/agents/uptime", "Uptime monitor"), ("/agents/investigator", "Investigator"),
         ("/agents/daily", "Daily analysis"), ("/agents/security", "Security audit"),
         ("/agents/backup", "Backup verifier")]
+    for row in rows:                                 # the chevron opens the agent too
+        href, name = re.search(r'class="name"><a href="([^"]+)">(.*?)</a>', row).groups()
+        assert f'<td class="go"><a href="{href}" aria-label="Open {name}">›</a></td>' in row
     flagged = [r for r in rows if r.startswith('<tr class="flag"')]
     assert len(flagged) == 1 and "Backup verifier" in flagged[0]
     assert 'class="lamp amber"' in flagged[0] and "Overdue" in flagged[0]
