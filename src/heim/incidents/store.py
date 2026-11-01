@@ -52,6 +52,10 @@ _SPEND_TABLES = (("investigations", "started_at"), ("runs", "run_at"))
 #: the shorter of the retention window and this many days.
 JOB_RETENTION_MAX_DAYS = 30
 
+#: Heartbeat rows (``agent_runs``) are written every 5 minutes per poll agent;
+#: two weeks is ample for the dashboard's strip and keeps the table small.
+AGENT_RUNS_RETENTION_DAYS = 14
+
 #: Reclaiming space costs a full file rewrite, so only do it when a prune
 #: actually freed something worth rewriting for.
 VACUUM_AFTER_DELETIONS = 500
@@ -195,6 +199,19 @@ CREATE TABLE IF NOT EXISTS threshold_streaks (
     last_seen   TEXT NOT NULL DEFAULT ''
 );
 
+-- Heartbeats: one row per scheduled run of a daemon agent (poll halves, daily,
+-- security audit, backup). Written by the daemon only, read by the dashboard to
+-- show whether each agent is actually functioning.
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent       TEXT NOT NULL,
+    started_at  TEXT NOT NULL,
+    finished_at TEXT NOT NULL DEFAULT '',
+    ok          INTEGER NOT NULL DEFAULT 1,
+    error       TEXT NOT NULL DEFAULT '',
+    detail_json TEXT NOT NULL DEFAULT '{}'
+);
+
 -- Uptime Kuma source: per-monitor hysteresis/flap state, and the count of
 -- consecutive failed polls of Kuma itself. Persisted so a daemon restart
 -- cannot reset a recovery streak, a flap window or the unreachable counter.
@@ -216,6 +233,7 @@ CREATE INDEX IF NOT EXISTS idx_steps_investigation ON investigation_steps (inves
 CREATE INDEX IF NOT EXISTS idx_tool_feedback_tool ON tool_feedback (tool, id);
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings (run_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status, id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent ON agent_runs (agent, started_at);
 """
 
 #: Columns added to tables that already exist in deployed databases. Applied
@@ -1011,6 +1029,47 @@ class IncidentStore:
         )
         return {str(r["fingerprint"]) for r in cur.fetchall()}
 
+    # ------------------------------------------------------- heartbeats
+
+    def record_agent_run(self, agent: str, started_at: str, finished_at: str, ok: bool,
+                         error: str = "", detail: dict | None = None) -> int:
+        cur = self._db.execute(
+            "INSERT INTO agent_runs (agent, started_at, finished_at, ok, error, detail_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (str(agent), str(started_at), str(finished_at), 1 if ok else 0, str(error or ""),
+             json.dumps(detail or {}, ensure_ascii=False, default=str)),
+        )
+        self._db.commit()
+        return int(cur.lastrowid or 0)
+
+    @staticmethod
+    def _agent_run_row(r) -> dict:
+        try:
+            detail = json.loads(r["detail_json"] or "{}")
+        except (TypeError, ValueError):
+            detail = {}
+        return {"agent": str(r["agent"]), "started_at": str(r["started_at"] or ""),
+                "finished_at": str(r["finished_at"] or ""), "ok": bool(r["ok"]),
+                "error": str(r["error"] or ""),
+                "detail": detail if isinstance(detail, dict) else {}}
+
+    def agent_runs(self, agent: str, limit: int = 24, since: str | None = None) -> list[dict]:
+        """Newest first. ``since`` is an inclusive lower bound on ``started_at``."""
+        sql = "SELECT * FROM agent_runs WHERE agent = ?"
+        params: list = [str(agent)]
+        if since:
+            sql += " AND started_at >= ?"
+            params.append(str(since))
+        sql += " ORDER BY started_at DESC, id DESC LIMIT ?"
+        params.append(int(limit))
+        return [self._agent_run_row(r) for r in self._db.execute(sql, params).fetchall()]
+
+    def agent_runs_by_agent(self, limit_per_agent: int = 24,
+                            since: str | None = None) -> dict[str, list[dict]]:
+        agents = [r["agent"] for r in self._db.execute(
+            "SELECT DISTINCT agent FROM agent_runs").fetchall()]
+        return {a: self.agent_runs(a, limit_per_agent, since) for a in agents}
+
     # ----------------------------------------------- threshold hysteresis
 
     def threshold_streaks(self) -> dict[str, dict]:
@@ -1198,6 +1257,8 @@ class IncidentStore:
                 "status IN ('done', 'failed', 'interrupted') "
                 "AND COALESCE(NULLIF(finished_at, ''), created_at) != '' "
                 "AND COALESCE(NULLIF(finished_at, ''), created_at) < ?", (job_cutoff,))
+        _delete("agent_runs", "started_at != '' AND started_at < ?",
+                (_shift_iso(now_iso, AGENT_RUNS_RETENTION_DAYS),))
         self._db.commit()
 
         if sum(counts.values()) > VACUUM_AFTER_DELETIONS:

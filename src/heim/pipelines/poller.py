@@ -226,6 +226,7 @@ async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
                 rt, run_at, dispatch_concurrently=dispatch_concurrently))
         except Exception:
             log.exception("the threshold half of the poll failed")
+            summary["threshold_failed"] = True
 
     if cfg.settings.uptime_kuma.url:
         try:
@@ -233,6 +234,7 @@ async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
                 rt, run_at, dispatch_concurrently=dispatch_concurrently))
         except Exception:
             log.exception("the uptime half of the poll failed")
+            summary["uptime_failed"] = True
 
     recordable = any(summary.get(k) for k in _RECORDABLE)
     # INFO only when the cycle did something: size counters such as
