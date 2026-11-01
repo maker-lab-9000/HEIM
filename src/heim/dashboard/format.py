@@ -623,7 +623,7 @@ def workflow_for(incident: dict, investigations: list[dict], investigable: set[s
         return ran("Awaiting approval", f"investigation {inv.get('id')}", inv)
     if investigations and investigations[0].get("status") == "needs_human":
         inv = investigations[0]
-        return ran("Needs a human", f"investigation {inv.get('id')}", inv)
+        return ran("Needs you", f"investigation {inv.get('id')}", inv)
 
     host = str(incident.get("host") or "")
     text = str(incident.get("description") or "")
@@ -674,7 +674,7 @@ def needs_you_label(inv: dict) -> str:
     if status == "pending_approval":
         return "Approval"
     if status == "needs_human":
-        return "Physical check" if physical_step(inv.get("report_md")) else "Needs a human"
+        return "Physical check" if physical_step(inv.get("report_md")) else "Needs you"
     return ""
 
 
@@ -758,7 +758,7 @@ _STATUS = {
     "complete": ("✓", "st-ok", "complete"),
     "resolved": ("✓", "st-ok", "resolved"),
     "incomplete": ("⚠", "st-serious", "incomplete"),
-    "needs_human": ("⚠", "st-serious", "needs human"),
+    "needs_human": ("⚠", "st-serious", "needs you"),
     "failed": ("✕", "st-crit", "failed"),
     "declined": ("○", "st-muted", "declined"),
     "open": ("●", "st-crit", "open"),

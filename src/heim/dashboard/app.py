@@ -1931,7 +1931,7 @@ def _attention_rows(open_incidents: list[dict], attention: list[dict],
                 "lamp": "red" if status == "failed" else "amber",
                 "title": _subject(inv) or f"Investigation {inv.get('id')}",
                 "sub": inv.get("reason", ""), "host": inv.get("host") or "",
-                "workflow": {"title": "Needs a human" if status == "needs_human" else "Stopped",
+                "workflow": {"title": "Needs you" if status == "needs_human" else "Stopped",
                              "sub": f"investigation {inv.get('id')}",
                              "href": f"/investigations/{inv.get('id')}"},
                 "age": fmt.age_text(inv.get("started_at")), "at": inv.get("started_at") or "",
@@ -2440,13 +2440,13 @@ def _outcome_line(row: dict) -> dict | None:
         return {"icon": "✓", "cls": "st-ok", "text": f"Resolved by operator · {when}"}
     # a timed-out ask is also stored as status=needs_human (pipelines/
     # investigate), so it has to be answered *before* the needs_human case —
-    # nobody said "needs human", the question simply went unanswered
+    # nobody said "needs you", the question simply went unanswered
     if outcome == "timeout":
         return {"icon": "◌", "cls": "st-muted",
                 "text": "No outcome confirmed — the ask timed out"}
     if outcome == "needs_human" or status == "needs_human":
         return {"icon": "⚠", "cls": "st-serious",
-                "text": "Needs human — re-proposed next run"}
+                "text": "Needs you — re-proposed next run"}
     if status == "declined":
         return {"icon": "○", "cls": "st-muted",
                 "text": "Declined — re-proposed next run"}

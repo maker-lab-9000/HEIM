@@ -344,7 +344,7 @@ def test_workflow_for_each_incident_kind():
     assert fmt.workflow_for(n8n, [inv(8, "pending_approval")], investigable) == {
         "title": "Awaiting approval", "sub": "investigation 8", "href": "/investigations/8"}
     assert fmt.workflow_for(n8n, [inv(7, "needs_human")], investigable) == {
-        "title": "Needs a human", "sub": "investigation 7", "href": "/investigations/7"}
+        "title": "Needs you", "sub": "investigation 7", "href": "/investigations/7"}
     # running wins over an older pending one; an old needs-human run under a
     # newer complete one no longer speaks for the incident
     assert fmt.workflow_for(n8n, [inv(9, "running"), inv(8, "pending_approval")],
@@ -413,8 +413,8 @@ def test_needs_you_lists_approvals_then_checks_and_links_to_detail(tmp_path, mon
     assert f'class="btn" href="/investigations/{ids["check"]}"' in check
     assert "View evidence" in check
 
-    assert ">Needs a human<" in human
-    assert "Needs human — re-proposed next run" in human
+    assert ">Needs you<" in human
+    assert "Needs you — re-proposed next run" in human
     assert f'href="/investigations/{ids["human"]}"' in human
     # the card counts the same three
     assert "1 approval · 1 physical check · 1 for a human" in _cards(html)["Requires you"]
@@ -434,11 +434,11 @@ def test_needs_you_label_physical_vs_human():
     assert fmt.needs_you_label({"status": "needs_human",
                                 "report_md": PHYSICAL_REPORT}) == "Physical check"
     assert fmt.needs_you_label({"status": "needs_human",
-                                "report_md": REMOTE_REPORT}) == "Needs a human"
+                                "report_md": REMOTE_REPORT}) == "Needs you"
     # only the remediation section counts: a fan in the summary is evidence
     summary_only = "## Summary\nThe fan curve is flat.\n\n## Remediation\n1. Wait a day.\n"
     assert fmt.needs_you_label({"status": "needs_human",
-                                "report_md": summary_only}) == "Needs a human"
+                                "report_md": summary_only}) == "Needs you"
     for word in ("reseat the cable", "Replace the drive", "unplug the dock",
                  "power-cycle the switch", "physically inspect it", "swap the hardware"):
         report = f"## Remediation\n1. Please {word}.\n"
@@ -447,8 +447,8 @@ def test_needs_you_label_physical_vs_human():
     # a word that merely contains a keyword is not one
     assert fmt.needs_you_label({"status": "needs_human",
                                 "report_md": "## Remediation\n1. Lower power_on_hours.\n"}) \
-        == "Needs a human"
-    assert fmt.needs_you_label({"status": "needs_human", "report_md": ""}) == "Needs a human"
+        == "Needs you"
+    assert fmt.needs_you_label({"status": "needs_human", "report_md": ""}) == "Needs you"
 
 
 # ------------------------------------------------------------------ agents
@@ -581,3 +581,16 @@ def test_existing_overview_blocks_still_render(tmp_path, monkeypatch):
         assert html.index(heading) > agents_end, heading     # below the console
     assert "open incidents" in html and "running invest." in html     # the five figures
     assert "waiting for your approval" in html and "👍" not in html
+
+
+def test_needs_human_status_pill_reads_needs_you(tmp_path, monkeypatch):
+    def seed(s):
+        s.create_investigation(
+            fingerprint="home-assistant|zigbee|Radio", host="home-assistant",
+            agent_name="investigator", status="needs_human", outcome="needs_human",
+            started_at=_iso(60 * 30), finished_at=_iso(60 * 30), report_md=REMOTE_REPORT)
+
+    with _client(tmp_path, monkeypatch, seed) as c:
+        html = c.get("/investigations").text
+    assert "needs you" in html
+    assert "needs human" not in html.lower() and "needs a human" not in html.lower()

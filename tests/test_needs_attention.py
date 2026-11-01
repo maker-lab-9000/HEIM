@@ -207,7 +207,7 @@ def test_card_sits_under_the_health_card(seeded_client):
 def test_card_shows_every_attention_status_and_no_clean_run(seeded_client):
     card = seeded_client.get("/").text
     card = card[card.index("Needs attention"):card.index("latest runs")]
-    assert "incomplete" in card and "failed" in card and "needs human" in card
+    assert "incomplete" in card and "failed" in card and "needs you" in card
     assert "cpu|Load" not in card and "#5" not in card     # the complete run
     # each row links its investigation and carries its own retrigger form
     for inv_id in (1, 2, 3, 4):
@@ -224,7 +224,7 @@ def test_reason_line_is_a_sentence_not_a_stored_keyword(seeded_client):
     card = card[card.index("Needs attention"):card.index("latest runs")]
     assert "budget exhausted after 12 steps" in card        # incomplete: its own reason
     assert "Failed before writing a report" in card         # failed with no reason stored
-    assert "Needs human — re-proposed next run" in card     # the operator said so
+    assert "Needs you — re-proposed next run" in card     # the operator said so
     assert "No outcome confirmed — the ask timed out" in card   # nobody answered
     # the stored keywords never reach the page
     assert "needs_human" not in card and "timeout" not in card
@@ -236,7 +236,7 @@ def test_reason_line_matches_the_detail_page(seeded_client):
     card = card[card.index("Needs attention"):card.index("latest runs")]
     for inv_id, phrase in ((1, "budget exhausted after 12 steps"),
                            (2, "Failed before writing a report"),
-                           (3, "Needs human — re-proposed next run"),
+                           (3, "Needs you — re-proposed next run"),
                            (4, "No outcome confirmed — the ask timed out")):
         assert phrase in card
         assert phrase in seeded_client.get(f"/investigations/{inv_id}").text
