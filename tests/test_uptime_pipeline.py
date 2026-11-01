@@ -372,3 +372,35 @@ def test_check_lines_reports_monitors_and_report_only_targets(rt):
         (False, "uptime kuma",
          "unreachable, or no monitors in /metrics (check UPTIME_KUMA)")]
     assert uptime.check_lines("", rt.config)[0][0] is False
+
+
+def _web_pair(http_status: int, port_status: int) -> str:
+    """Two Uptime Kuma checks named "Web" on one host: an http and a port check."""
+    return (
+        'monitor_status{monitor_id="1",monitor_name="Web",monitor_type="http",'
+        'monitor_url="http://10.0.0.10:80",monitor_hostname="null",monitor_port="null"}'
+        f' {http_status}\n'
+        'monitor_status{monitor_id="2",monitor_name="Web",monitor_type="port",'
+        'monitor_url="https://",monitor_hostname="10.0.0.10",monitor_port="80"}'
+        f' {port_status}\n')
+
+
+async def test_same_name_checks_never_fake_a_recovery_or_a_flap(rt, rig, monkeypatch):
+    """Probe from the final review: "Web" http down, "Web" port up. Before the
+    fix poll 3 said "Back up" while one Web was down, and poll 4 "keeps flapping"."""
+    t = lambda m: f"2026-11-01T10:{m:02d}:00.000+01:00"  # noqa: E731
+    for m in (0, 5, 10, 15, 20, 25):
+        _at(rt, monkeypatch, t(m))
+        await rig.poll(_web_pair(0, 1), t(m))
+    assert not any("Back up" in n for n in rig.notes), rig.notes
+    assert not any("flapping" in n for n in rig.notes), rig.notes
+    assert len(rig.dispatched) == 1
+    head = rig.dispatched[0][1][0]["headline"]
+    assert head.startswith("🔴 Down on ubuntu-server: Web (http://10.0.0.10:80, 10.0.0.10:80)")
+    assert [r["fingerprint"] for r in rt.store.open_rows()] == ["ubuntu-server|uptime_down|Web"]
+    for m in (30, 35):
+        _at(rt, monkeypatch, t(m))
+        await rig.poll(_web_pair(1, 1), t(m))
+    assert [n for n in rig.notes if "Back up" in n] == [
+        "✅ Back up on ubuntu-server: Web (down 35 min)"]
+    assert rt.store.open_rows() == []

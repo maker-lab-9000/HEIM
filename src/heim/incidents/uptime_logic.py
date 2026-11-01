@@ -129,6 +129,40 @@ def is_uptime_row(row: dict) -> bool:
     return str(row.get("description") or "").startswith(PREFIX)
 
 
+def _badness(status: int) -> int:
+    """DOWN > PENDING/MAINTENANCE (and anything unknown) > UP."""
+    return 2 if status == DOWN else (0 if status == UP else 1)
+
+
+def _uniq(values: Iterable[str]) -> list[str]:
+    out: list[str] = []
+    for v in values:
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def merge_same_fingerprint(same: list[Monitor]) -> Monitor:
+    """One monitor for checks that share a fingerprint (same host and name).
+
+    Two checks named "Web" on one host (an http and a port check, say) would
+    otherwise both drive ``host|uptime_down|Web`` in one poll: the down one
+    refreshes the outage while the up one counts toward resolving it, which
+    fakes a recovery and then an endless flap. The merged monitor is as bad as
+    its worst check and names every target (and type), in export order."""
+    if len(same) == 1:
+        return same[0]
+    worst = max(same, key=lambda m: _badness(m.status))  # first of the worst
+    return Monitor(
+        monitor_id=worst.monitor_id,
+        name=same[0].name,
+        type="/".join(_uniq(m.type for m in same)),
+        target=", ".join(_uniq(m.target for m in same)),
+        address=same[0].address,
+        status=worst.status,
+    )
+
+
 # ------------------------------------------------------------ the decision
 
 
@@ -392,10 +426,16 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
         d.state_changed = True
         return row
 
+    # Same host + same name = one fingerprint: collapse to the worst status
+    # first, or a down check and an up check fight over one incident.
+    by_fp: dict[str, tuple[str | None, str, list[Monitor]]] = {}
     for m in monitors:
         mapped_host = map_host(m.address, ctx.instance_host_map, names)
         host = mapped_host or m.address
-        fp = fingerprint(host, m.name)
+        by_fp.setdefault(fingerprint(host, m.name), (mapped_host, host, []))[2].append(m)
+
+    for fp, (mapped_host, host, same) in by_fp.items():
+        m = merge_same_fingerprint(same)
         seen.add(fp)
         if fp in ctx.suppressed or fp in foreign:  # foreign row: never duplicate
             continue

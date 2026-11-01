@@ -416,3 +416,42 @@ def test_only_resolved_uptime_rows_in_recent_rows_feed_a_reopen():
                 {**_resolved(), "description": "[alert] n8n down"}):
         d = decide([_mon("n8n", 0)], [], st, 0, NOW, _ctx(), recent_rows=[bad])
         assert len(d.groups) == 1
+
+
+# ------------------------------------------- two monitors, one fingerprint
+
+def _web(status, type_="http", mid="1"):
+    if type_ == "http":
+        return Monitor(mid, "Web", "http", "http://10.0.0.10:80", "10.0.0.10", status)
+    return Monitor(mid, "Web", "port", "10.0.0.10:80", "10.0.0.10", status)
+
+
+def test_same_name_monitors_collapse_to_the_worst_status_with_every_target():
+    """Two checks named "Web" on one host share ``host|uptime_down|Web``: the
+    pair is ONE monitor, as down as its worst check, naming both targets."""
+    d = decide([_web(0), _web(1, "port", "2")], [], {}, 0, NOW, _ctx())
+    assert len(d.groups) == 1 and len(d.rows_to_upsert) == 1
+    g = d.groups[0]
+    assert g.items == "Web (http://10.0.0.10:80, 10.0.0.10:80)"
+    assert len(g.findings) == 1
+    assert "http://10.0.0.10:80" in g.findings[0]["detail"]
+    assert "10.0.0.10:80" in g.findings[0]["detail"].split("http://10.0.0.10:80")[1]
+
+
+def test_one_same_name_check_up_never_counts_toward_a_resolve():
+    fp = fingerprint("ubuntu-server", "Web")
+    for order in ([_web(0), _web(1, "port", "2")], [_web(1, "port", "2"), _web(0)]):
+        d = decide(order, [_orow("Web")], {fp: _ostate(fp, up_polls=1)}, 0, NOW, _ctx())
+        assert d.messages == []
+        assert [r["status"] for r in d.rows_to_upsert] == ["open"]
+        assert [w["up_polls"] for w in d.state_writes] == [0]
+
+
+def test_same_name_pending_beats_up_and_both_up_resolves():
+    fp = fingerprint("ubuntu-server", "Web")
+    d = decide([_web(2), _web(1, "port", "2")], [_orow("Web")],
+               {fp: _ostate(fp, up_polls=1)}, 0, NOW, _ctx())
+    assert d.rows_to_upsert == [] and d.messages == [] and d.state_writes == []
+    d = decide([_web(1), _web(1, "port", "2")], [_orow("Web")],
+               {fp: _ostate(fp, up_polls=1)}, 0, NOW, _ctx())
+    assert d.messages == ["✅ Back up on ubuntu-server: Web (down 10 min)"]
