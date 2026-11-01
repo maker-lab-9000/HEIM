@@ -68,7 +68,7 @@ class AgentStatus:
 
 @dataclass(frozen=True)
 class Tick:
-    state: str   # ok | fail | miss | open
+    state: str   # ok | fail | miss | open | none
     at: str
 
 
@@ -246,6 +246,50 @@ def run_strip(runs: list[dict], cadence_s: int | None, now_iso: str, n: int = 24
         if age is not None and age > cadence_s:
             ticks.append(Tick("open", now_iso))
     return ticks[-n:]
+
+
+def bucket_runs(runs: list[dict], cadence_s: int | None, window_s: int, now_iso: str,
+                n: int = 24) -> list[Tick]:
+    """``[now - window_s, now]`` cut into ``n`` equal slots, oldest first.
+
+    A slot is ``fail`` if any run in it failed, else ``ok`` if it holds a run,
+    else ``miss`` when the agent has a cadence no longer than the slot (it
+    should have run), else ``open`` for the newest slot (not yet due), else
+    ``none``: an empty slot of an agent with no cadence. ``at`` is the slot's
+    start. Runs outside the window are ignored.
+    """
+    now = _parse(now_iso)
+    if now is None or n < 1 or window_s <= 0:
+        return []
+    slot_s = window_s / n
+    start = now.timestamp() - window_s
+    failed = [False] * n
+    seen = [False] * n
+    for r in runs:
+        at = _parse(str(r.get("started_at")))
+        if at is None:
+            continue
+        off = at.timestamp() - start
+        if off < 0 or off > window_s:
+            continue
+        i = min(int(off // slot_s), n - 1)
+        seen[i] = True
+        failed[i] = failed[i] or not r.get("ok")
+    ticks = []
+    for i in range(n):
+        if failed[i]:
+            state = "fail"
+        elif seen[i]:
+            state = "ok"
+        elif cadence_s and slot_s >= cadence_s:
+            state = "miss"
+        elif i == n - 1:
+            state = "open"
+        else:
+            state = "none"
+        at = datetime.fromtimestamp(start + i * slot_s, timezone.utc).isoformat()
+        ticks.append(Tick(state, at))
+    return ticks
 
 
 def overall_condition(open_incidents: list[dict], statuses: list[AgentStatus]) -> dict:

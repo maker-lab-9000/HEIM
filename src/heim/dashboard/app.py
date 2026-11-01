@@ -55,6 +55,7 @@ from heim.agents import (
     AGENT_KEYS,
     BACKUP_TIME,
     Tick,
+    bucket_runs,
     agent_specs,
     investigable_hosts,
     investigator_status,
@@ -645,7 +646,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         running = reader.read(lambda s: s.investigations(limit=5, status="running"))
         pending = reader.read(lambda s: s.investigations(limit=NEEDS_YOU_LIMIT,
                                                          status="pending_approval"))
-        agent_rows = _agent_rows(cfg, by_agent, invs, running, now_iso)
+        window, window_s = _window(request)
+        window_runs = _window_runs(reader, window_s, now_iso)
+        agent_rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s, window_runs)
         needs_you = _needs_you(pending, troubled)
         attention_rows = _attention_rows(open_incidents, troubled, invs,
                                          set(investigable_hosts(cfg)))
@@ -676,7 +679,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             condition=overall_condition(open_incidents,
                                         [r["status"] for r in agent_rows]),
             coverage=_coverage(agent_rows),
-            observations=_observations(agent_rows, by_agent, now_iso),
+            observations=_observations(agent_rows, by_agent, now_iso, window_s, window_runs),
             requires_you=_requires_you(needs_you),
             attention_rows=attention_rows,
             # runs past the wide read are still findings: they count, and the
@@ -686,8 +689,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             needs_you=needs_you,
             **_agents_panel(agent_rows, request.query_params.get("agents", "")),
             base_href="/",
-            # Task 5 wires 24 h and 7 d; until then the page reads live
-            window="live",
+            window=window,
             version=VERSION,
         )
 
@@ -700,8 +702,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/agents", response_class=HTMLResponse)
     async def agents_page(request: Request):
         by_agent, invs, running, now_iso = _agent_inputs()
-        rows = _agent_rows(cfg, by_agent, invs, running, now_iso)
-        return page(request, "agents.html", page_title="agents",
+        window, window_s = _window(request)
+        rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s,
+                           _window_runs(reader, window_s, now_iso))
+        return page(request, "agents.html", page_title="agents", window=window,
                     **_agents_panel(rows, request.query_params.get("agents", "")),
                     base_href="/agents")
 
@@ -1175,6 +1179,26 @@ def _offset(request: Request) -> int:
         return 0
 
 
+#: ``?window=`` -> seconds the run strips cover (``None`` = live, the last runs)
+WINDOWS: dict[str, int | None] = {"live": None, "24h": 86_400, "7d": 604_800}
+
+
+def _window(request: Request) -> tuple[str, int | None]:
+    """The switch's engaged window; anything unknown is ``live``."""
+    key = request.query_params.get("window", "")
+    key = key if key in WINDOWS else "live"
+    return key, WINDOWS[key]
+
+
+def _window_runs(reader, window_s: int | None, now_iso: str) -> dict[str, list[dict]] | None:
+    """Every heartbeat inside the window, or ``None`` for live. No row cap:
+    ``agent_runs`` retention (14 days) already bounds a 7 d read."""
+    if window_s is None:
+        return None
+    since = (datetime.fromisoformat(now_iso) - timedelta(seconds=window_s)).isoformat()
+    return reader.read(lambda s: s.agent_runs_by_agent(limit_per_agent=-1, since=since))
+
+
 def _qs_with(request: Request) -> Callable[..., str]:
     """``qs_with(offset=50)``: this page's query string with overrides applied.
 
@@ -1579,12 +1603,15 @@ def _strip_label(strip: list[Tick]) -> str:
 
 
 def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
-                running: list[dict], now_iso: str) -> list[dict]:
+                running: list[dict], now_iso: str, window_s: int | None = None,
+                window_runs: dict[str, list[dict]] | None = None) -> list[dict]:
     """One row per agent, in ``AGENT_KEYS`` order: spec, status and run strip.
 
     The investigator records no heartbeats; its runs are its investigations
     (``invs``, newest first), and ``running`` names the one in flight for
     its scope line. A paused agent's strip shows what it did, never a miss.
+    With ``window_s`` the strip is that window's slots (``bucket_runs``) from
+    ``window_runs``; status always comes from the newest runs.
     """
     detail = {key: rows[0].get("detail") or {} for key, rows in by_agent.items() if rows}
     live = next(iter(_own_runs(running)), None)
@@ -1600,11 +1627,15 @@ def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
                          "ok": i.get("status") not in ("failed", "incomplete")}
                         for i in own
                         if i.get("status") not in ("pending_approval", "declined", "running")]
-            strip = run_strip(finished, None, now_iso)
+            strip = (bucket_runs(finished, None, window_s, now_iso) if window_s
+                     else run_strip(finished, None, now_iso))
         else:
             runs = by_agent.get(spec.key, [])
             status = status_of(spec, runs, now_iso)
-            strip = run_strip(runs, None if spec.paused else spec.cadence_s, now_iso)
+            cadence = None if spec.paused else spec.cadence_s
+            strip = (bucket_runs((window_runs or {}).get(spec.key, []), cadence, window_s,
+                                 now_iso) if window_s
+                     else run_strip(runs, cadence, now_iso))
         rows.append({"key": spec.key, "name": spec.name, "scope": spec.scope,
                      "status": status, "last_ok": status.last_ok_at, "strip": strip,
                      "strip_label": _strip_label(strip),
@@ -1725,21 +1756,26 @@ def _coverage(rows: list[dict]) -> dict:
             "missing": [r["name"] for r, on in zip(rows, discs) if not on]}
 
 
-def _observations(rows: list[dict], by_agent: dict[str, list[dict]], now_iso: str) -> dict:
+def _observations(rows: list[dict], by_agent: dict[str, list[dict]], now_iso: str,
+                  window_s: int | None = None,
+                  window_runs: dict[str, list[dict]] | None = None) -> dict:
     """The Observations card: how old the newest poll is, and the last polls
     as a ruler. A poll cycle records each running half under one start time,
-    so the halves merge into one tick that fails when any half failed."""
+    so the halves merge into one tick that fails when any half failed. In a
+    window the ruler is that window's slots, red where any poll failed or
+    was missed."""
     polling = [r["key"] for r in rows
                if r["key"] in POLL_AGENTS and r["status"].state != "paused"]
     cycles: dict[str, bool] = {}
     for key in polling:
-        for run in by_agent.get(key, []):
+        for run in (window_runs if window_s else by_agent).get(key, []):
             at = run["started_at"]
             cycles[at] = cycles.get(at, True) and run["ok"]
     epoch = datetime.min.replace(tzinfo=timezone.utc)
     merged = sorted(({"started_at": at, "ok": ok} for at, ok in cycles.items()),
                     key=lambda r: fmt.parse_dt(r["started_at"]) or epoch, reverse=True)
-    ticks = run_strip(merged, POLL_CADENCE_S, now_iso)
+    ticks = (bucket_runs(merged, POLL_CADENCE_S, window_s, now_iso) if window_s
+             else run_strip(merged, POLL_CADENCE_S, now_iso))
     beats = [r.get("finished_at") or r.get("started_at")
              for key in POLL_AGENTS for r in by_agent.get(key, [])[:1]]
     beats = [b for b in beats if fmt.parse_dt(b)]

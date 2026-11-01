@@ -167,15 +167,6 @@ def test_cards_show_condition_coverage_observations_and_requires_you(tmp_path, m
     assert "HEIM / H 01" in html and f"heim {version('heim')}" in html
 
 
-def test_window_is_live_whatever_the_query_says(tmp_path, monkeypatch):
-    """Task 5 wires 24 h and 7 d; until then the page stays on Live."""
-    with _client(tmp_path, monkeypatch, _healthy_agents) as c:
-        html = c.get("/?window=7d").text
-    switch = _section(html, 'aria-label="Window"', "</div>")
-    live = re.search(r"<a[^>]*>.*?Live</a>", switch, re.S).group(0)
-    assert 'aria-current="true"' in live and switch.count('aria-current="true"') == 1
-
-
 def test_no_heartbeats_reads_unknown_not_normal(tmp_path, monkeypatch):
     """A silent daemon is not good news: no heartbeats is Unknown with a grey
     lamp, nothing reporting, and every agent row says No data yet."""

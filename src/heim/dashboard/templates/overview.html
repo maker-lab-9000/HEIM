@@ -2,15 +2,7 @@
 {#- `with context` so the action macro can read `back` (partials/_macros.html) -#}
 {% import "partials/_macros.html" as m with context %}
 
-{#- the top bar's window switch: plain links. Only Live is wired so far; the
-    other two keep the rest of the query string. -#}
-{% block switch %}
-{{ m.seg([
-  {'href': '?' ~ qs_with(window='live'), 'label': 'Live', 'on': window == 'live'},
-  {'href': '?' ~ qs_with(window='24h'), 'label': '24 h', 'on': window == '24h'},
-  {'href': '?' ~ qs_with(window='7d'), 'label': '7 d', 'on': window == '7d'},
-], 'Window') }}
-{% endblock %}
+{% block switch %}{% include "partials/_window_switch.html" %}{% endblock %}
 
 {% block content %}
 
