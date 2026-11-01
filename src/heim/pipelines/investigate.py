@@ -91,6 +91,7 @@ class InvestigationRequest:
     findings: list[dict] = field(default_factory=list)
     retry_of: int = 0                 # investigation id this one re-runs (§5.5)
     model_override: str = ""          # this run only; "" = the configured model (§5.1)
+    headline: str = ""                # leads the approval prompt (grouped Uptime Kuma outages)
 
     @property
     def tag(self) -> str:
@@ -111,7 +112,10 @@ def with_model(agent: AgentCfg, model: str | None) -> AgentCfg:
 
 
 def findings_text(findings: list[dict]) -> str:
-    """Port of Build Brief's findings formatting."""
+    """Port of Build Brief's findings formatting.
+
+    (Uptime Kuma grouped prompts, 2026-11-01: unchanged here; group findings
+    pass through it as ordinary findings, so a multi-monitor brief lists each.)"""
     if not findings:
         return "(no structured findings were passed; investigate the general health of the host)"
     lines = []
@@ -133,7 +137,11 @@ def _has_ssh(cfg, host: str) -> bool:
 
 
 def _approval_text(req: InvestigationRequest, ftext: str, *, has_ssh: bool = True) -> str:
-    """Port of the n8n 'Ask Approval (Telegram)' message."""
+    """Port of the n8n 'Ask Approval (Telegram)' message.
+
+    Extended (Uptime Kuma grouped prompts, 2026-11-01): a non-empty
+    ``req.headline`` leads the text; with none the output is unchanged.
+    """
     note = ""
     if req.host_role == "hypervisor":
         note = (
@@ -152,8 +160,9 @@ def _approval_text(req: InvestigationRequest, ftext: str, *, has_ssh: bool = Tru
     # §5.1: name the model only when the trigger chose one — on the default
     # path there is nothing to disclose, and the line would be noise.
     chosen = f" · model: {req.model_override}" if req.model_override else ""
+    lead = f"{req.headline}\n\n" if req.headline else ""
     return (
-        f"🔍 Investigation approval needed for host \"{req.host}\".{chosen}{note}\n\n"
+        f"{lead}🔍 Investigation approval needed for host \"{req.host}\".{chosen}{note}\n\n"
         f"Findings that triggered it:\n{ftext}\n\n"
         f"Approve to let the monitoring agent {how} and find the root cause. If you decline or "
         f"don't respond, no investigation runs and it will be re-proposed on the next monitoring run."
@@ -421,6 +430,81 @@ def rearm_pending_approvals(rt: Runtime) -> int:
     return len(rows)
 
 
+def _render_brief(cfg, jenv: Environment, req: InvestigationRequest) -> str:
+    """Render the role brief for ``req`` (pure; no side effects)."""
+    ftext = findings_text(req.findings)
+    template = _ROLE_TEMPLATE.get(req.host_role, "guest")
+    return expand_env(
+        jenv.get_template(f"briefs/{template}.md.j2").render(
+            host=req.host, findings_text=ftext, is_temperature=bool(_TEMP_RE.search(ftext)),
+            # Not every guest has a shell. Promising SSH to a host that has
+            # none sends the agent hunting for a tool it cannot use, and the
+            # ssh_diagnostic tool is bound to one host anyway.
+            has_ssh=_has_ssh(cfg, req.host),
+        ),
+        source=f"briefs/{template}.md.j2",
+    )
+
+
+def _lock_fingerprints(req: InvestigationRequest) -> list[str]:
+    """Every incident this investigation holds the dispatch lock for: the
+    request's own fingerprint first, then each (unique) finding fingerprint."""
+    out: list[str] = []
+    for fp in [req.fingerprint, *(f.get("fingerprint") for f in req.findings)]:
+        if fp and fp not in out:
+            out.append(str(fp))
+    return out
+
+
+def _unlock(rt: Runtime, req: InvestigationRequest) -> None:
+    for fp in _lock_fingerprints(req):
+        rt.store.set_investigated(fp, False)
+
+
+def recovered_note(store, findings: list[dict]) -> str:
+    """A brief addendum naming checks whose incident resolved while the
+    approval waited ("" when none did)."""
+    names: list[str] = []
+    for f in findings:
+        fp = f.get("fingerprint")
+        inc = store.incident(fp) if fp else None
+        if inc is not None and inc.get("status") == "resolved":
+            names.append(str(f.get("metric") or fp))
+    if not names:
+        return ""
+    return ("\n\nNote: since this investigation was proposed, these checks have recovered: "
+            f"{', '.join(names)}. Find out why they went down.")
+
+
+def extend_pending_investigation(rt: Runtime, investigation_id: int, findings: list[dict]) -> bool:
+    """Fold more findings into a ``pending_approval`` investigation.
+
+    Merges by finding ``fingerprint`` (stored first), re-renders the brief and
+    rewrites both columns. Any other status returns False and changes nothing.
+    """
+    row = rt.store.investigation(investigation_id)
+    if not row or row.get("status") != "pending_approval":
+        return False
+    req = request_from_investigation(row)
+    seen = {f.get("fingerprint") for f in req.findings if f.get("fingerprint")}
+    merged = list(req.findings)
+    for f in findings:
+        fp = f.get("fingerprint")
+        if fp and fp in seen:
+            continue
+        if fp:
+            seen.add(fp)
+        merged.append(f)
+    req.findings = merged
+    jenv = Environment(loader=FileSystemLoader(rt.config.prompts_dir))
+    rt.store.update_investigation(
+        investigation_id,
+        findings_json=json.dumps(merged, ensure_ascii=False, default=str),
+        brief_md=_render_brief(rt.config, jenv, req),
+    )
+    return True
+
+
 async def run_investigation(
     rt: Runtime,
     req: InvestigationRequest,
@@ -455,17 +539,7 @@ async def run_investigation(
     # a pending investigation — and anyone reading a declined one later — can
     # see exactly what the agent was going to be asked. The same string is
     # handed to the agent below, unchanged.
-    template = _ROLE_TEMPLATE.get(req.host_role, "guest")
-    brief = expand_env(
-        jenv.get_template(f"briefs/{template}.md.j2").render(
-            host=req.host, findings_text=ftext, is_temperature=bool(_TEMP_RE.search(ftext)),
-            # Not every guest has a shell. Promising SSH to a host that has
-            # none sends the agent hunting for a tool it cannot use, and the
-            # ssh_diagnostic tool is bound to one host anyway.
-            has_ssh=_has_ssh(cfg, req.host),
-        ),
-        source=f"briefs/{template}.md.j2",
-    )
+    brief = _render_brief(cfg, jenv, req)
 
     # --------------------------------------------------- tracking row (§5.1)
     require = cfg.settings.approvals.require if require_approval is None else require_approval
@@ -513,19 +587,30 @@ async def run_investigation(
             cfg.settings.approvals.approve_timeout_s,
             send_prompt=resume_id is None,
         )
+        # Findings may have been folded into the row while it waited: the
+        # stored row, not the request we started with, is what was approved.
+        row = rt.store.investigation(inv_id) or {}
+        try:
+            stored = json.loads(row.get("findings_json") or "")
+        except (ValueError, TypeError):
+            stored = None
+        if isinstance(stored, list) and stored:
+            req.findings = stored
+            ftext = findings_text(req.findings)
+        brief = str(row.get("brief_md") or brief)
         if answer is not True:
             log.info("investigation of %s declined/timed out (%s)", req.host, source or "no answer")
             rt.store.update_investigation(
                 inv_id, status="declined", finished_at=rt.now_iso(),
                 approval_decision="decline" if answer is False else "timeout",
             )
-            if req.fingerprint:
-                rt.store.set_investigated(req.fingerprint, False)
+            _unlock(rt, req)
             await rt.emit_loki([_action(req.host, "declined", req.fingerprint,
                                         "Investigation declined", rt.now_iso())])
             return None
         log.info("investigation of %s approved via %s", req.host, source or "?")
         rt.store.update_investigation(inv_id, status="running", approval_decision="approve")
+        brief += recovered_note(rt.store, req.findings)
     await rt.emit_loki([_action(req.host, "started", req.fingerprint,
                                 "Investigation started by AI agent", rt.now_iso())])
 
@@ -682,8 +767,7 @@ async def _confirm_outcome(rt: Runtime, req: InvestigationRequest, inv_id: int) 
                 outcome="needs_human" if outcome is False else "timeout",
                 finished_at=rt.now_iso(),
             )
-            if req.fingerprint:
-                rt.store.set_investigated(req.fingerprint, False)
+            _unlock(rt, req)
             await rt.emit_loki([_action(req.host, "needs_human", req.fingerprint, "Flagged needs human", rt.now_iso())])
     except asyncio.CancelledError:
         raise
@@ -695,7 +779,11 @@ def request_from_dispatch(item: dict, rt: Runtime) -> InvestigationRequest:
     Port of 'Investigations To Items' / 'Dispatch Items': the findings list is
     synthesized from the incident row. host_role comes from the host's config
     file (the n8n poller hardcoded hypervisor-vs-guest; using the config role
-    also routes ha-guest correctly)."""
+    also routes ha-guest correctly).
+
+    Extended (Uptime Kuma grouped prompts, 2026-11-01): a non-empty
+    ``item["findings"]`` list is used as-is and ``item["headline"]`` carried;
+    items without them behave exactly as before."""
     host = str(item.get("host") or "")
     host_cfg = rt.config.hosts.get(host)
     role = str(item.get("hostRole") or (host_cfg.role if host_cfg else "guest"))
@@ -703,7 +791,7 @@ def request_from_dispatch(item: dict, rt: Runtime) -> InvestigationRequest:
         host=host,
         host_role=role,
         fingerprint=str(item.get("fingerprint") or ""),
-        findings=[{
+        findings=list(item["findings"]) if item.get("findings") else [{
             "severity": item.get("severity", ""),
             "host": host,
             "metric": item.get("metric", ""),
@@ -711,6 +799,7 @@ def request_from_dispatch(item: dict, rt: Runtime) -> InvestigationRequest:
             "detail": item.get("description", ""),
             "recommendation": "",
         }],
+        headline=str(item.get("headline") or ""),
     )
 
 
