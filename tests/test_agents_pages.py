@@ -113,3 +113,25 @@ def test_title_keeps_case_and_backup_file_is_newest_successful(tmp_path, monkeyp
     assert "heim-20261031.sqlite3" in html
     assert 'class="ihost"><span class="lamp red"' in html
     assert "<title>Overview" in client.get("/").text
+
+
+def test_dashboard_reads_and_actions_never_write_heartbeats(tmp_path, monkeypatch):
+    """The daemon is the only writer of agent_runs: pages and actions only read it."""
+    from heim.incidents.store import IncidentStore
+
+    def count():
+        s = IncidentStore(tmp_path / "heim.sqlite3")
+        try:
+            return s._db.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0]
+        finally:
+            s.close()
+
+    with _client(tmp_path, monkeypatch, _healthy_agents) as c:
+        before = count()
+        assert c.get("/").status_code == 200
+        assert c.get("/?window=7d").status_code == 200
+        assert c.get("/agents").status_code == 200
+        r = c.post("/actions/mute", data={"fingerprint": "homelab|temp|Drive", "days": "1"},
+                   follow_redirects=False)
+        assert r.status_code in (200, 303)
+        assert count() == before > 0

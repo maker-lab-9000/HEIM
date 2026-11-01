@@ -1070,6 +1070,15 @@ class IncidentStore:
             "SELECT DISTINCT agent FROM agent_runs").fetchall()]
         return {a: self.agent_runs(a, limit_per_agent, since) for a in agents}
 
+    def agent_first_seen(self) -> dict[str, str]:
+        """``agent -> started_at`` of its oldest stored heartbeat. Bounded by
+        the 14-day ``agent_runs`` retention, so it means "first seen in what
+        the store still holds". The window strips use it so slots before an
+        agent's first run never read as missed. (Lexical MIN, like the
+        ``since`` bound: the daemon writes one timezone's ISO strings.)"""
+        return {str(r["agent"]): str(r["first"] or "") for r in self._db.execute(
+            "SELECT agent, MIN(started_at) AS first FROM agent_runs GROUP BY agent").fetchall()}
+
     # ----------------------------------------------- threshold hysteresis
 
     def threshold_streaks(self) -> dict[str, dict]:

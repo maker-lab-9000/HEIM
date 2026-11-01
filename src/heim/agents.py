@@ -152,8 +152,12 @@ def agent_specs(cfg, latest_detail: dict[str, dict]) -> list[AgentSpec]:
         "security": f"{n('security', 'checks')} checks",
         "backup": f"Expected daily at {bh:02d}:{bm:02d}",
     }
+    # the watchers run every poll (the daemon schedules from the same key);
+    # three missed polls in a row is "overdue"
+    poll_s = int(st.schedules.poll_minutes) * 60
     timing = {
-        "alert_poller": (300, 900), "thresholds": (300, 900), "uptime": (300, 900),
+        "alert_poller": (poll_s, 3 * poll_s), "thresholds": (poll_s, 3 * poll_s),
+        "uptime": (poll_s, 3 * poll_s),
         "investigator": (None, None),
         "daily": (daily_cadence, daily_cadence + 3600),
         "security": (604800, 691200),
@@ -249,20 +253,24 @@ def run_strip(runs: list[dict], cadence_s: int | None, now_iso: str, n: int = 24
 
 
 def bucket_runs(runs: list[dict], cadence_s: int | None, window_s: int, now_iso: str,
-                n: int = 24) -> list[Tick]:
+                n: int = 24, first_seen_iso: str | None = None) -> list[Tick]:
     """``[now - window_s, now]`` cut into ``n`` equal slots, oldest first.
 
     A slot is ``fail`` if any run in it failed, else ``ok`` if it holds a run,
-    else ``miss`` when the agent has a cadence no longer than the slot (it
-    should have run), else ``open`` for the newest slot (not yet due), else
-    ``none``: an empty slot of an agent with no cadence. ``at`` is the slot's
-    start. Runs outside the window are ignored.
+    else ``none`` when it ends before ``first_seen_iso`` (the agent's
+    first-ever run: nothing was due before it existed), else ``miss`` when the
+    agent has a cadence no longer than the slot (it should have run), else
+    ``open`` for the newest slot (not yet due), else ``none``: an empty slot
+    of an agent with no cadence. ``at`` is the slot's start. Runs outside the
+    window are ignored.
     """
     now = _parse(now_iso)
     if now is None or n < 1 or window_s <= 0:
         return []
     slot_s = window_s / n
     start = now.timestamp() - window_s
+    first = _parse(first_seen_iso) if first_seen_iso else None
+    first_ts = first.timestamp() if first is not None else None
     failed = [False] * n
     seen = [False] * n
     for r in runs:
@@ -281,6 +289,8 @@ def bucket_runs(runs: list[dict], cadence_s: int | None, window_s: int, now_iso:
             state = "fail"
         elif seen[i]:
             state = "ok"
+        elif first_ts is not None and start + (i + 1) * slot_s <= first_ts:
+            state = "none"
         elif cadence_s and slot_s >= cadence_s:
             state = "miss"
         elif i == n - 1:

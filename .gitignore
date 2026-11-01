@@ -21,3 +21,7 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# local design / agent-workflow scratch (never committed)
+.hallmark/
+.superpowers/sdd/

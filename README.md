@@ -233,8 +233,8 @@ The pages:
 - **Hosts** — per-host cards with one-click investigate.
 
 Dense and resource-light: system fonts, one ~31 KB stylesheet, vendored htmx, no build
-step, no chart library, and it works on a phone (the rail becomes a row of chips, no
-sideways scrolling at 320 px). The design system — tokens, lamps, labels, components —
+step, no chart library, and it works on a phone (the rail becomes a row of chips; the
+page never scrolls sideways; wide tables scroll inside their card). The design system — tokens, lamps, labels, components —
 is locked in [`design.md`](design.md); change it there, on purpose. `/telemetry` exposes HEIM's own counters in Prometheus text
 format so your existing Prometheus/Grafana can watch the watcher. Scrape it with a job
 like this (this homelab's copy sits commented out in the ansible-homelab repo's

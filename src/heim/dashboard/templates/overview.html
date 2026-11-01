@@ -30,7 +30,7 @@
     <div class="discs" role="img" aria-label="{{ coverage.total }} agents, {{ coverage.reporting }} reporting">
       {%- for on in coverage.discs %}<i{% if not on %} class="open"{% endif %}></i>{% endfor -%}
     </div>
-    <p class="foot">{% if coverage.missing %}Not reporting: {{ coverage.missing|join(', ') }}{% else %}Every agent reporting{% endif %}</p>
+    <p class="foot">{% if coverage.missing %}Not reporting: {{ coverage.missing|join(', ') }}{% else %}Every agent reporting{% endif %}{% if coverage.paused %} · {{ coverage.paused|length }} paused: {{ coverage.paused|join(', ') }}{% endif %}</p>
   </div>
   <div class="card">
     <p class="label">Observations</p>

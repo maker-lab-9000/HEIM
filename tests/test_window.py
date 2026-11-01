@@ -61,11 +61,12 @@ def test_window_param_switches_strips_and_marks_segment(tmp_path, monkeypatch):
     assert "agents=all" in switch                    # other params survive
     rows = _rows(_agents(html))
     row = rows[0]
-    # alert poller beat only inside the newest 7 h slot: 1 ok, 23 slots a 5-min
-    # cadence should have filled
+    # alert poller beat only inside the newest 7 h slot, and that was its
+    # first-ever beat: 1 ok, and the 23 slots before it are blank, not missed
+    # (ruling 23 -- nothing was due before the agent first ran)
     assert "Alert poller" in row
-    assert row.count('class="miss"') == 23 and row.count("<i") == 24
-    assert 'class="none"' not in row
+    assert row.count('class="none"') == 23 and row.count("<i") == 24
+    assert 'class="miss"' not in row
     # the investigator has no cadence: its empty slots are dots, never misses
     inv = next(r for r in rows if "Investigator" in r)
     assert 'class="miss"' not in inv and inv.count('class="none"') >= 22
@@ -88,3 +89,50 @@ def test_bad_window_falls_back_to_live(tmp_path, monkeypatch):
     live = re.search(r"<a[^>]*>.*?Live</a>", switch, re.S).group(0)
     assert 'aria-current="true"' in live and switch.count('aria-current="true"') == 1
     assert _rows(_agents(html)) == _rows(_agents(plain))
+
+
+# ------------------------------------------- first heartbeat (ruling 23)
+
+def _five_minute_runs(hours):
+    return [_run(m / 60) for m in range(0, int(hours * 60), 5)]
+
+
+def test_bucket_runs_never_misses_before_the_first_heartbeat():
+    """A fresh deploy: 2 h of 5-minute polls in a 24 h window. The 22 slots
+    before the first-ever run are not misses; nothing was due yet."""
+    runs = _five_minute_runs(2)
+    first = min(r["started_at"] for r in runs)
+    ticks = bucket_runs(runs, 300, 24 * HOUR, NOW, first_seen_iso=first)
+    states = [t.state for t in ticks]
+    assert "miss" not in states
+    assert states[:22] == ["none"] * 22 and states[22:] == ["ok", "ok"]
+
+
+def test_bucket_runs_still_misses_a_gap_after_the_first_heartbeat():
+    # first run 10.5 h ago, then silence until 0.5 h ago
+    runs = [_run(0.5), _run(10.5)]
+    ticks = bucket_runs(runs, 300, 24 * HOUR, NOW, first_seen_iso=_run(10.5)["started_at"])
+    states = [t.state for t in ticks]
+    assert states[:13] == ["none"] * 13          # slots ending before the first run
+    assert states[13] == "ok" and states[23] == "ok"
+    assert states[14:23] == ["miss"] * 9         # the real gap after it
+
+
+def test_window_misses_a_gap_after_the_first_heartbeat(tmp_path, monkeypatch):
+    """A poller first seen 3 days ago, then silent until the last 22 min: the
+    7 d strip is blank before day -3 and missed between then and now."""
+    from test_overview_console import _beat
+
+    def seed(store):
+        _healthy_agents(store)
+        _beat(store, "alert_poller", 3 * 24 * 60, detail={"hosts": 4})
+
+    with _client(tmp_path, monkeypatch, seed) as c:
+        html = c.get("/?window=7d").text
+    row = _rows(_agents(html))[0]
+    assert "Alert poller" in row
+    assert row.count('class="miss"') > 0 and row.count('class="none"') > 0
+    label = re.search(r'class="ruler" role="img" aria-label="\d+ polls?, \d+ failed, (\d+) missed"',
+                      html)
+    # first beat 72 h ago lands in slot 13 of 24 seven-hour slots; 14..22 missed
+    assert label and int(label.group(1)) == 9

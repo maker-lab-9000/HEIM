@@ -110,8 +110,6 @@ THEME_WORD = {"auto": "Auto", "light": "Light", "dark": "Dark"}
 DAEMON_FRESH_S = 20 * 60
 #: the daemon's every-5-minutes agents: their heartbeats say it is alive
 POLL_AGENTS = ("alert_poller", "thresholds", "uptime")
-#: how often the poll agents run, for the Observations ruler's missed polls
-POLL_CADENCE_S = 300
 
 #: the Agents panel's switch (``?agents=``): the states each segment keeps
 AGENT_FILTERS: dict[str, frozenset[str] | None] = {
@@ -121,8 +119,9 @@ AGENT_FILTERS: dict[str, frozenset[str] | None] = {
 }
 #: a flagged row: the agent stopped reporting or its last run errored
 FLAGGED_STATES = frozenset({"stale", "failed"})
-#: the coverage card's hollow discs: no fresh word from the agent
-SILENT_STATES = frozenset({"stale", "unknown", "paused"})
+#: the coverage card's hollow discs: no fresh word from the agent (a paused
+#: agent is not expected to report, so it leaves the count instead)
+SILENT_STATES = frozenset({"stale", "unknown"})
 #: how many pending approvals and troubled runs the overview reads at once
 NEEDS_YOU_LIMIT = 50
 #: the legacy ``attention`` context key: the newest runs, as spec §12 had them
@@ -648,7 +647,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                                                          status="pending_approval"))
         window, window_s = _window(request)
         window_runs = _window_runs(reader, window_s, now_iso)
-        agent_rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s, window_runs)
+        first_seen = _first_seen(reader, window_s)
+        agent_rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s, window_runs,
+                                 first_seen)
         needs_you = _needs_you(pending, troubled)
         attention_rows = _attention_rows(open_incidents, troubled, invs,
                                          set(investigable_hosts(cfg)))
@@ -679,7 +680,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             condition=overall_condition(open_incidents,
                                         [r["status"] for r in agent_rows]),
             coverage=_coverage(agent_rows),
-            observations=_observations(agent_rows, by_agent, now_iso, window_s, window_runs),
+            observations=_observations(agent_rows, by_agent, now_iso, window_s, window_runs,
+                                       first_seen),
             requires_you=_requires_you(needs_you),
             attention_rows=attention_rows,
             # runs past the wide read are still findings: they count, and the
@@ -704,7 +706,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         by_agent, invs, running, now_iso = _agent_inputs()
         window, window_s = _window(request)
         rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s,
-                           _window_runs(reader, window_s, now_iso))
+                           _window_runs(reader, window_s, now_iso),
+                           _first_seen(reader, window_s))
         return page(request, "agents.html", page_title="agents", window=window,
                     **_agents_panel(rows, request.query_params.get("agents", "")),
                     base_href="/agents")
@@ -1210,6 +1213,14 @@ def _window_runs(reader, window_s: int | None, now_iso: str) -> dict[str, list[d
     return reader.read(lambda s: s.agent_runs_by_agent(limit_per_agent=-1, since=since))
 
 
+def _first_seen(reader, window_s: int | None) -> dict[str, str]:
+    """Each agent's oldest stored heartbeat, for the window strips (a slot
+    before an agent first ran is not a miss); live strips do not need it."""
+    if window_s is None:
+        return {}
+    return reader.read(lambda s: s.agent_first_seen())
+
+
 def _qs_with(request: Request) -> Callable[..., str]:
     """``qs_with(offset=50)``: this page's query string with overrides applied.
 
@@ -1648,14 +1659,16 @@ def _strip_label(strip: list[Tick]) -> str:
 
 def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
                 running: list[dict], now_iso: str, window_s: int | None = None,
-                window_runs: dict[str, list[dict]] | None = None) -> list[dict]:
+                window_runs: dict[str, list[dict]] | None = None,
+                first_seen: dict[str, str] | None = None) -> list[dict]:
     """One row per agent, in ``AGENT_KEYS`` order: spec, status and run strip.
 
     The investigator records no heartbeats; its runs are its investigations
     (``invs``, newest first), and ``running`` names the one in flight for
     its scope line. A paused agent's strip shows what it did, never a miss.
     With ``window_s`` the strip is that window's slots (``bucket_runs``) from
-    ``window_runs``; status always comes from the newest runs.
+    ``window_runs``, and slots before the agent's ``first_seen`` heartbeat
+    are blank rather than missed; status always comes from the newest runs.
     """
     detail = {key: rows[0].get("detail") or {} for key, rows in by_agent.items() if rows}
     live = next(iter(_own_runs(running)), None)
@@ -1678,7 +1691,8 @@ def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
             status = status_of(spec, runs, now_iso)
             cadence = None if spec.paused else spec.cadence_s
             strip = (bucket_runs((window_runs or {}).get(spec.key, []), cadence, window_s,
-                                 now_iso) if window_s
+                                 now_iso, first_seen_iso=(first_seen or {}).get(spec.key))
+                     if window_s
                      else run_strip(runs, cadence, now_iso))
         rows.append({"key": spec.key, "name": spec.name, "scope": spec.scope,
                      "status": status, "last_ok": status.last_ok_at, "strip": strip,
@@ -1700,9 +1714,10 @@ _AGENT_EVIDENCE = {
 
 
 def _last_backup_file(runs: list[dict]) -> str:
-    """The file the newest *successful* backup run wrote (runs newest first)."""
-    ok = next((r for r in runs if r.get("ok")), None)
-    return str(((ok or {}).get("detail") or {}).get("backup_file") or "")
+    """The file the newest backup run that wrote one names (runs newest
+    first). A run whose prune failed is not ok but still wrote its file."""
+    return next((str(f) for r in runs
+                 if (f := (r.get("detail") or {}).get("backup_file"))), "")
 
 
 def _cadence_text(cfg: Config, key: str) -> str:
@@ -1794,15 +1809,20 @@ def _agents_panel(rows: list[dict], wanted: str) -> dict:
 
 
 def _coverage(rows: list[dict]) -> dict:
-    """The Agent coverage card: one disc per agent, hollow when it is silent."""
-    discs = [r["status"].state not in SILENT_STATES for r in rows]
-    return {"reporting": sum(discs), "total": len(rows), "discs": discs,
-            "missing": [r["name"] for r, on in zip(rows, discs) if not on]}
+    """The Agent coverage card: one disc per expected agent, hollow when it
+    is silent. A paused agent is switched off, not silent: it leaves the
+    count and is named on its own foot line."""
+    expected = [r for r in rows if r["status"].state != "paused"]
+    discs = [r["status"].state not in SILENT_STATES for r in expected]
+    return {"reporting": sum(discs), "total": len(expected), "discs": discs,
+            "missing": [r["name"] for r, on in zip(expected, discs) if not on],
+            "paused": [r["name"] for r in rows if r["status"].state == "paused"]}
 
 
 def _observations(rows: list[dict], by_agent: dict[str, list[dict]], now_iso: str,
                   window_s: int | None = None,
-                  window_runs: dict[str, list[dict]] | None = None) -> dict:
+                  window_runs: dict[str, list[dict]] | None = None,
+                  first_seen: dict[str, str] | None = None) -> dict:
     """The Observations card: how old the newest poll is, and the last polls
     as a ruler. A poll cycle records each running half under one start time,
     so the halves merge into one tick that fails when any half failed. In a
@@ -1818,8 +1838,12 @@ def _observations(rows: list[dict], by_agent: dict[str, list[dict]], now_iso: st
     epoch = datetime.min.replace(tzinfo=timezone.utc)
     merged = sorted(({"started_at": at, "ok": ok} for at, ok in cycles.items()),
                     key=lambda r: fmt.parse_dt(r["started_at"]) or epoch, reverse=True)
-    ticks = (bucket_runs(merged, POLL_CADENCE_S, window_s, now_iso) if window_s
-             else run_strip(merged, POLL_CADENCE_S, now_iso))
+    # the poll cadence is the alert poller's spec (it is never paused)
+    cadence = next((r["cadence_s"] for r in rows if r["key"] == "alert_poller"), None)
+    firsts = [f for k in polling if (f := (first_seen or {}).get(k)) and fmt.parse_dt(f)]
+    first = min(firsts, key=fmt.parse_dt) if firsts else None
+    ticks = (bucket_runs(merged, cadence, window_s, now_iso, first_seen_iso=first) if window_s
+             else run_strip(merged, cadence, now_iso))
     beats = [r.get("finished_at") or r.get("started_at")
              for key in POLL_AGENTS for r in by_agent.get(key, [])[:1]]
     beats = [b for b in beats if fmt.parse_dt(b)]

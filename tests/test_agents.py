@@ -237,7 +237,7 @@ async def test_poll_job_records_three_agents(rt, monkeypatch):
     rt.config.settings.uptime_kuma.url = "http://kuma.invalid"
 
     async def fake_poll(_rt, **_kw):
-        return {"aborted": "prometheus down", "threshold_samples": 0, "uptime_unreachable": True,
+        return {"aborted": "prometheus unreachable", "threshold_samples": 0, "uptime_unreachable": True,
                 "uptime_monitors": 5, "uptime_report_only": 2}
 
     monkeypatch.setattr(daemon, "run_poll", fake_poll)
@@ -276,6 +276,15 @@ async def test_daily_job_failure_records_error(rt, monkeypatch):
     assert row["error"].startswith("RuntimeError: xxx") and len(row["error"]) == 200
 
 
+def test_poll_cadence_follows_poll_minutes(rt):
+    rt.config.settings.schedules.poll_minutes = 15
+    specs = {s.key: s for s in agents.agent_specs(rt.config, {})}
+    for key in ("alert_poller", "thresholds", "uptime"):
+        assert (specs[key].cadence_s, specs[key].stale_after_s) == (900, 2700)
+    st = agents.status_of(specs["alert_poller"], [run(20 * 60)], NOW_ISO)
+    assert st.state == "healthy"
+
+
 def test_report_only_count_is_unmapped_or_non_investigable(rt):
     from types import SimpleNamespace
     from heim.pipelines.uptime import _report_only_count
@@ -286,3 +295,136 @@ def test_report_only_count_is_unmapped_or_non_investigable(rt):
     mons = [SimpleNamespace(address="10.9.9.1"), SimpleNamespace(address="10.9.9.2")]
     assert _report_only_count(mons, ctx) == 1
     assert _report_only_count(None, ctx) == 0
+
+
+def test_agent_first_seen_is_the_oldest_run_per_agent(tmp_path):
+    s = IncidentStore(tmp_path / "t.sqlite3")
+    assert s.agent_first_seen() == {}
+    s.record_agent_run("daily", ago(100), ago(90), True)
+    s.record_agent_run("daily", ago(300), ago(290), False, error="x")
+    s.record_agent_run("backup", ago(50), ago(40), True)
+    assert s.agent_first_seen() == {"daily": ago(300), "backup": ago(50)}
+
+
+# ------------------------------------------------------ heartbeat hardening
+
+
+def _backup_rt(rt, tmp_path):
+    rt.config.settings.db_path = str(tmp_path / "rt.sqlite3")
+    return rt
+
+
+async def test_alert_half_error_is_the_poller_reason_unless_prometheus(rt, monkeypatch):
+    async def fake_poll(_rt, **_kw):
+        return {"aborted": "alert half failed"}
+
+    monkeypatch.setattr(daemon, "run_poll", fake_poll)
+    await daemon._poll_job(rt)
+    (row,) = rt.store.agent_runs("alert_poller")
+    assert row["ok"] is False and row["error"] == "alert half failed"
+
+
+async def test_jobs_survive_a_failing_heartbeat_write(rt, tmp_path, monkeypatch):
+    _backup_rt(rt, tmp_path)
+    rt.config.settings.deadman_url = "http://deadman.invalid/ping"
+    pings = []
+
+    async def fake_ping(url):
+        pings.append(url)
+
+    async def ok_poll(_rt, **_kw):
+        return {"upserts": 0}
+
+    async def ok_daily(_rt, **_kw):
+        return {"ok": True}
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("store is locked")
+
+    monkeypatch.setattr(daemon.deadman, "ping", fake_ping)
+    monkeypatch.setattr(daemon, "run_poll", ok_poll)
+    monkeypatch.setattr(daemon, "run_daily", ok_daily)
+    monkeypatch.setattr(rt.store, "record_agent_run", boom)
+    await daemon._daily_job(rt)
+    await daemon._poll_job(rt)
+    await daemon._backup_job(rt)
+    assert pings == ["http://deadman.invalid/ping"]
+    assert list((tmp_path / "backups").glob("heim-*.sqlite3"))
+
+
+async def test_poll_job_pings_even_if_recording_the_halves_raises(rt, monkeypatch):
+    rt.config.settings.deadman_url = "http://deadman.invalid/ping"
+    pings = []
+
+    async def fake_ping(url):
+        pings.append(url)
+
+    async def ok_poll(_rt, **_kw):
+        return {"upserts": 0}
+
+    def boom(*_a, **_kw):
+        raise KeyError("bad summary")
+
+    monkeypatch.setattr(daemon.deadman, "ping", fake_ping)
+    monkeypatch.setattr(daemon, "run_poll", ok_poll)
+    monkeypatch.setattr(daemon, "_record_poll_agents", boom)
+    await daemon._poll_job(rt)
+    assert pings == ["http://deadman.invalid/ping"]
+
+
+async def test_security_audit_job_writes_a_heartbeat(rt, monkeypatch):
+    async def fake_audit(_rt, **_kw):
+        return {"checks": 47}
+
+    monkeypatch.setattr(daemon, "run_security_audit", fake_audit)
+    await daemon._security_audit_job(rt)
+    (row,) = rt.store.agent_runs("security")
+    assert row["ok"] is True and row["detail"] == {"checks": 47}
+
+
+async def test_backup_job_writes_one_ok_heartbeat_with_the_file(rt, tmp_path):
+    _backup_rt(rt, tmp_path)
+    await daemon._backup_job(rt)
+    (row,) = rt.store.agent_runs("backup")
+    assert row["ok"] is True and row["error"] == ""
+    assert row["detail"]["backup_file"].startswith("heim-")
+    assert (tmp_path / "backups" / row["detail"]["backup_file"]).exists()
+
+
+async def test_backup_job_records_a_prune_failure_after_the_backup(rt, tmp_path, monkeypatch):
+    _backup_rt(rt, tmp_path)
+
+    def bad_prune(*_a, **_kw):
+        raise ValueError("disk I/O error")
+
+    monkeypatch.setattr(rt.store, "prune", bad_prune)
+    await daemon._backup_job(rt)
+    (row,) = rt.store.agent_runs("backup")
+    assert row["ok"] is False
+    assert row["error"] == "prune failed: ValueError: disk I/O error"
+    assert row["detail"]["backup_file"].startswith("heim-")
+
+
+async def test_backup_job_failure_skips_prune_and_records_error(rt, tmp_path, monkeypatch):
+    _backup_rt(rt, tmp_path)
+    pruned = []
+
+    def bad_backup(_rt):
+        raise OSError("no space left")
+
+    monkeypatch.setattr(daemon, "run_backup", bad_backup)
+    monkeypatch.setattr(rt.store, "prune", lambda *a, **k: pruned.append(1))
+    await daemon._backup_job(rt)
+    (row,) = rt.store.agent_runs("backup")
+    assert row["ok"] is False and row["error"] == "OSError: no space left"
+    assert "backup_file" not in row["detail"] and pruned == []
+
+
+def test_last_backup_file_reads_a_failed_prune_run():
+    from heim.dashboard.app import _last_backup_file
+    runs = [{"ok": False, "error": "OSError: x", "detail": {}},
+            {"ok": False, "error": "prune failed: ValueError: y",
+             "detail": {"backup_file": "heim-20261101.sqlite3"}},
+            {"ok": True, "detail": {"backup_file": "heim-20261031.sqlite3"}}]
+    assert _last_backup_file(runs) == "heim-20261101.sqlite3"
+    assert _last_backup_file([]) == ""

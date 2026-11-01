@@ -98,8 +98,15 @@ def _record_poll_agents(rt: Runtime, started: str, summary: dict) -> None:
     """One heartbeat per poll half; a half that is switched off gets none."""
     cfg = rt.config
     aborted = summary.get("aborted")
-    _record_agent_run(rt, "alert_poller", started, not aborted,
-                      "Prometheus unreachable" if aborted else "",
+    # poller_logic aborts with "prometheus unreachable"; anything else (the
+    # poller's own "alert half failed") is recorded as the reason it gave
+    if not aborted:
+        reason = ""
+    elif str(aborted).strip().lower() == "prometheus unreachable":
+        reason = "Prometheus unreachable"
+    else:
+        reason = str(aborted)
+    _record_agent_run(rt, "alert_poller", started, not aborted, reason,
                       {"hosts": len(cfg.hosts), **({"aborted": str(aborted)} if aborted else {})})
     if cfg.settings.threshold_detection:
         if summary.get("threshold_failed"):
@@ -131,7 +138,10 @@ async def _poll_job(rt: Runtime) -> None:
         log.exception("alert poll failed")  # next poll retries in a few minutes
         _record_agent_run(rt, "alert_poller", started, False, _exc_text(exc))
         return
-    _record_poll_agents(rt, started, summary or {})
+    try:
+        _record_poll_agents(rt, started, summary or {})
+    except Exception:  # a heartbeat must never cost the dead-man ping
+        log.exception("recording the poll heartbeats failed")
     # Every *completed* cycle pings, including the no-op ones: the switch
     # asserts "the scheduler is alive", not "an incident happened". A poll
     # that raised deliberately stays silent — that is the outage to report.
@@ -218,6 +228,9 @@ async def _backup_job(rt: Runtime) -> None:
     still contains everything retention is about to delete. If the backup
     fails the prune is skipped entirely: deleting history we just failed to
     copy is the one way this job could do real damage.
+
+    One heartbeat, written last: a failed prune makes the run not ok (the
+    store keeps growing), while ``backup_file`` still names the file written.
     """
     started = rt.now_iso()
     try:
@@ -226,14 +239,17 @@ async def _backup_job(rt: Runtime) -> None:
         log.exception("nightly backup failed — skipping the retention prune")
         _record_agent_run(rt, "backup", started, False, _exc_text(exc))
         return
-    _record_agent_run(rt, "backup", started, True, detail={"backup_file": dest.name})
 
+    error = ""
     try:
         counts = rt.store.prune(rt.now_iso(), int(rt.config.settings.retention_days))
         if counts:
             log.info("retention prune deleted %s", counts)
-    except Exception:
+    except Exception as exc:
         log.exception("retention prune failed")
+        error = f"prune failed: {_exc_text(exc)}"[:200]
+    _record_agent_run(rt, "backup", started, not error, error,
+                      detail={"backup_file": dest.name})
 
 
 async def run_job(rt: Runtime, job: dict) -> None:

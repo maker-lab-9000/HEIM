@@ -331,12 +331,16 @@ Known rough edges (accepted, not scheduled):
 - The metrics refresh key reads `refresh` in lower case (pinned by
   `tests/test_metrics_page.py`).
 - Healthy blue-grey lamps sit near 2:1 on the light panel by design (`design.md`).
-- The overview's `all (n)` link always goes to `/incidents`, even when the cut rows
-  were investigations; `/metrics#q-…` has no target when a filter hides the row;
-  `/security#check-…` opens the latest audit, not the finding's own run.
-- Poll heartbeats: any aborted alert half is labelled "Prometheus unreachable"; if
-  `run_poll` itself raises, only `alert_poller` is recorded and the other two halves
-  drift to Overdue.
+- `/metrics#q-…` has no target when a filter hides the row; `/security#check-…` opens
+  the latest audit, not the finding's own run.
+- Poll heartbeats: if `run_poll` itself raises, only `alert_poller` is recorded and the
+  other two halves drift to Overdue.
+- `agent_first_seen()` is bounded by the 14-day `agent_runs` retention and is a lexical
+  `MIN` of the daemon's local-time ISO strings, so across a DST change a window strip
+  may blank (rather than miss) one extra slot.
+- The top bar's "Daemon quiet" chip still uses a fixed 20-minute threshold
+  (`DAEMON_FRESH_S`), not `poll_minutes`; with `poll_minutes` ≥ 20 it would flag a
+  healthy daemon between polls.
 - `page_title|ucfirst` is fine for today's titles; a cost chart's "n observations"
   caption counts zero-filled days.
 
