@@ -403,11 +403,12 @@ def test_flapping_then_down_after_an_hour_is_a_clean_new_outage():
 
 
 def test_stale_flap_state_of_a_vanished_monitor_expires():
+    others = [_mon("other", 1)]           # a successful poll without n8n
     st = {FLAP_FP: _ostate(FLAP_FP, flap_outages=3, last_recovered_at=_ago(70))}
-    d = decide([], [], st, 0, NOW, _ctx())
+    d = decide(others, [], st, 0, NOW, _ctx())
     assert FLAP_FP in d.state_clears
     st = {FLAP_FP: _ostate(FLAP_FP, flap_outages=3, last_recovered_at=_ago(20))}
-    assert FLAP_FP not in decide([], [], st, 0, NOW, _ctx()).state_clears
+    assert FLAP_FP not in decide(others, [], st, 0, NOW, _ctx()).state_clears
 
 
 def test_only_resolved_uptime_rows_in_recent_rows_feed_a_reopen():
@@ -455,3 +456,46 @@ def test_same_name_pending_beats_up_and_both_up_resolves():
     d = decide([_web(1), _web(1, "port", "2")], [_orow("Web")],
                {fp: _ostate(fp, up_polls=1)}, 0, NOW, _ctx())
     assert d.messages == ["✅ Back up on ubuntu-server: Web (down 10 min)"]
+
+
+def test_parse_skips_infinite_and_nan_values():
+    text = (
+        'monitor_status{monitor_id="1",monitor_name="a",monitor_type="http",'
+        'monitor_url="http://10.0.0.10",monitor_hostname="null",monitor_port="null"} +Inf\n'
+        'monitor_status{monitor_id="2",monitor_name="b",monitor_type="http",'
+        'monitor_url="http://10.0.0.10",monitor_hostname="null",monitor_port="null"} -Inf\n'
+        'monitor_status{monitor_id="3",monitor_name="c",monitor_type="http",'
+        'monitor_url="http://10.0.0.10",monitor_hostname="null",monitor_port="null"} NaN\n'
+        'monitor_status{monitor_id="4",monitor_name="d",monitor_type="http",'
+        'monitor_url="http://10.0.0.10",monitor_hostname="null",monitor_port="null"} 1\n'
+    )
+    assert [m.name for m in parse_metrics(text)] == ["d"]
+
+
+def test_an_empty_monitor_list_is_a_failed_poll_not_an_empty_one():
+    """Defense in depth: a caller handing decide() [] must not close outages."""
+    fp = fingerprint("ubuntu-server", "n8n")
+    d = decide([], [_orow()], {fp: _ostate(fp, absent_polls=1)}, 0, NOW, _ctx())
+    assert d.fail_polls == 1
+    assert d.rows_to_upsert == [] and d.messages == []
+    assert d.state_writes == [] and d.state_clears == []
+    d = decide([], [], {}, 1, NOW, _ctx())
+    assert d.messages == ["⚠️ Can't reach Uptime Kuma: service outages are not being watched."]
+
+
+def test_hypervisor_findings_point_at_the_journal_and_prometheus():
+    """The hypervisor brief says the Proxmox API has no process list, so the
+    finding must not ask for "which container or process" there."""
+    d = decide([_mon("pve-ui", 0, addr="10.0.0.2")], [], {}, 0, NOW, _ctx())
+    g = d.groups[0]
+    assert g.host == "homelab" and g.investigable
+    detail = g.findings[0]["detail"]
+    assert detail.startswith("Uptime Kuma check 'pve-ui' (http http://10.0.0.2:5678) "
+                             "has been failing since 02:02.")
+    assert "/nodes/homelab/journal" in detail and "Prometheus" in detail
+    assert "container or process" not in detail
+    other = decide([_mon("n8n", 0)], [], {}, 0, NOW, _ctx()).groups[0].findings[0]["detail"]
+    assert other == ("Uptime Kuma check 'n8n' (http http://10.0.0.10:5678) has been failing "
+                     "since 02:02. Find which container or process on ubuntu-server serves "
+                     "http://10.0.0.10:5678, whether it is running, its recent logs, and why "
+                     "it stopped.")

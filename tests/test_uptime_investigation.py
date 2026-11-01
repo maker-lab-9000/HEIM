@@ -210,3 +210,77 @@ async def test_old_investigations_behave_as_before(rt, monkeypatch):
                                findings=[{"severity": "warning", "metric": "m", "detail": "d"}])
     assert await run_investigation(rt, req, require_approval=True) is None
     assert calls == ["h|q|n"]
+
+
+# --------------------------------------------------- final-review fix wave
+
+
+def test_extend_refuses_a_pending_row_whose_decision_is_already_written(rt):
+    """A dashboard/Telegram decline writes approval_decision first; the status
+    stays pending_approval until the waiter's next poll (up to ~5 s). Folding
+    into that row would hide the new outages behind a declined investigation."""
+    for decision in ("decline", "approve", "timeout"):
+        inv = rt.store.create_investigation(
+            host=HOST, host_role="guest", fingerprint=_fp("n8n"), status="pending_approval",
+            findings_json=json.dumps([_finding("n8n")]), brief_md="old")
+        rt.store.set_approval_decision(inv, decision)
+        assert extend_pending_investigation(rt, inv, [_finding("grafana")]) is False
+        row = rt.store.investigation(inv)
+        assert row["brief_md"] == "old" and len(json.loads(row["findings_json"])) == 1
+
+
+def test_enqueue_retry_of_a_group_keeps_every_finding(rt):
+    from heim.pipelines.queue import enqueue_retry
+
+    _seed(rt, "n8n", "grafana")
+    group = [_finding("n8n"), _finding("grafana")]
+    original = rt.store.create_investigation(
+        host=HOST, host_role="guest", fingerprint=_fp("n8n"), status="complete",
+        trigger="uptime", findings_json=json.dumps(group))
+    payload = rt.store.job(enqueue_retry(rt.store, original, requested_by="dashboard"))["payload"]
+    assert [f["fingerprint"] for f in payload["findings"]] == [_fp("n8n"), _fp("grafana")]
+    assert payload["findings"] == group and payload["fingerprint"] == _fp("n8n")
+
+
+def test_enqueue_retry_without_fingerprinted_findings_behaves_as_before(rt):
+    from heim.pipelines.queue import enqueue_retry
+
+    _seed(rt, "n8n")
+    original = rt.store.create_investigation(
+        host=HOST, host_role="guest", fingerprint=_fp("n8n"), status="complete",
+        trigger="daily", findings_json=json.dumps([{"metric": "stale", "detail": "old"}]))
+    payload = rt.store.job(enqueue_retry(rt.store, original, requested_by="cli"))["payload"]
+    assert payload["findings"] == [{
+        "severity": "critical", "host": HOST, "metric": "n8n", "trend": "",
+        "detail": "[uptime] n8n down", "recommendation": ""}]
+
+
+async def test_needs_human_unlocks_every_incident_including_folded_ones(rt, monkeypatch):
+    from heim.pipelines.investigate import drain_background
+
+    _stub_agent(monkeypatch)
+    _seed(rt, "a", "b", "c")
+    rt.dry_run = False
+
+    class Tg:
+        async def ask(self, text, **kw):
+            return False                  # ⚠️ Needs human
+
+        async def send_chunks(self, text):
+            pass
+
+        async def notify(self, text):
+            pass
+
+    rt.telegram = Tg()
+
+    async def fake_await(rt_, inv_id, text, timeout_s, *, send_prompt=True):
+        assert extend_pending_investigation(rt_, inv_id, [_finding("c")])
+        return True, "test"
+
+    monkeypatch.setattr("heim.pipelines.investigate._await_approval", fake_await)
+    res = await run_investigation(rt, _req("a", "b"), require_approval=True)
+    await drain_background()
+    assert rt.store.investigation(res["id"])["status"] == "needs_human"
+    for n in "abc":
+        assert rt.store.incident(_fp(n))["investigated"] is False, n

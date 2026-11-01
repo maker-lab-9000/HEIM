@@ -7,8 +7,9 @@ poll halves, so the approval gate and the mutes apply unchanged.
 
 Rules this edge owns:
 
-* a failed fetch AND a body with no monitors are both ``monitors=None`` — an
-  empty list would count as a successful poll and could falsely close outages;
+* a failed fetch, a body that fails to parse AND a body with no monitors are
+  all ``monitors=None`` — an empty list would count as a successful poll and
+  could falsely close outages (``decide`` also treats ``[]`` as a failed poll);
 * in dry-run nothing at all is written (no incidents, state or fail counter);
 * rows and state are written first, so every later step (each host group,
   the messages, the Loki events, the dispatches) is isolated: one failing
@@ -137,7 +138,14 @@ async def run_uptime(rt: Runtime, run_at: str, *, dispatch_concurrently: bool) -
     cfg = rt.config
     store = rt.store
     body = await fetch_metrics(cfg.settings.uptime_kuma.url, os.environ.get(ENV_KEY) or None)
-    monitors = parse_metrics(body) if body is not None else None
+    monitors: list | None = None
+    if body is not None:
+        try:
+            monitors = parse_metrics(body)
+        except Exception:
+            # an unreadable export is no data, never "every monitor gone"
+            log.exception("parsing Uptime Kuma /metrics failed: treated as a failed poll")
+            monitors = None
     if monitors is not None and not monitors:
         log.warning("Uptime Kuma /metrics held no monitors: treated as a failed poll")
         monitors = None

@@ -234,11 +234,17 @@ async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
         except Exception:
             log.exception("the uptime half of the poll failed")
 
-    if any(v for v in summary.values()):
+    recordable = any(summary.get(k) for k in _RECORDABLE)
+    # INFO only when the cycle did something: size counters such as
+    # uptime_monitors / threshold_samples are non-zero on every quiet poll and
+    # would put a line in the log every 5 minutes.
+    if recordable or summary.get("aborted"):
         log.info("poll result: %s", summary)
+    else:
+        log.debug("poll result: %s", summary)
     # Record the poll only when it actually changed something — a poll runs
     # every 5 minutes and silent no-ops would drown the runs table.
-    if any(summary.get(k) for k in _RECORDABLE):
+    if recordable:
         try:
             rt.store.insert_run(
                 kind="poll", run_at=run_at, overall="", model_used="",

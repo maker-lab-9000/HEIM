@@ -75,7 +75,7 @@ def parse_metrics(text: str) -> list[Monitor]:
             continue
         try:
             status = int(float(m.group(2)))
-        except ValueError:
+        except (ValueError, OverflowError):  # NaN / ±Inf: no status to read
             continue
         labels = {k: _unescape(v) for k, v in _LABEL_RE.findall(m.group(1))}
         target, address = target_of(labels)
@@ -327,9 +327,23 @@ def down_headline(host: str, items: str, mapped: bool, investigable: bool,
     return head
 
 
+def _finding_detail(m: Monitor, host: str, since: str, hypervisor: bool) -> str:
+    head = (f"Uptime Kuma check '{m.name}' ({m.type} {m.target}) has been "
+            f"failing since {since}.")
+    if hypervisor:
+        # no shell, and the Proxmox API lists no processes (see the hypervisor
+        # brief): point at what the agent CAN read there
+        return (f"{head} {host} is the Proxmox hypervisor: the Proxmox API has no "
+                f"process list, so use the Proxmox journal (/nodes/{host}/journal) "
+                f"and Prometheus to find what serves {m.target}, whether it is "
+                f"running, and why it stopped.")
+    return (f"{head} Find which container or process on {host} serves "
+            f"{m.target}, whether it is running, its recent logs, and why it stopped.")
+
+
 def _group_for(host: str, rows: list[dict], mons: list[Monitor], mapped: bool,
                investigable: bool, pending_id: int | None, now_iso: str,
-               tz: str) -> DownGroup:
+               tz: str, *, hypervisor: bool = False) -> DownGroup:
     items = ", ".join(f"{m.name} ({m.target})" for m in mons)
     head = down_headline(host, items, mapped, investigable, pending_id,
                          now_iso, tz)
@@ -337,10 +351,7 @@ def _group_for(host: str, rows: list[dict], mons: list[Monitor], mapped: bool,
     findings = [{
         "severity": "critical", "host": host, "metric": m.name, "trend": "",
         "fingerprint": r["fingerprint"], "recommendation": "",
-        "detail": (f"Uptime Kuma check '{m.name}' ({m.type} {m.target}) has been "
-                   f"failing since {since}. Find which container or process on "
-                   f"{host} serves {m.target}, whether it is running, its recent "
-                   f"logs, and why it stopped."),
+        "detail": _finding_detail(m, host, since, hypervisor),
     } for r, m in zip(rows, mons)]
     return DownGroup(host, rows, investigable, pending_id, head, findings, items)
 
@@ -377,7 +388,9 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
     quiet flap reopen (anything not resolved or not ``[uptime] `` is ignored).
 
     ``monitors=None`` is a failed poll: nothing about monitors is written or
-    resolved, only the failure counter moves.
+    resolved, only the failure counter moves. An empty list is one too —
+    Uptime Kuma always exports its active monitors, so "none at all" is no
+    data, never "every monitor paused" (it would close every open outage).
     """
     # a resolved row is only a candidate for a quiet flap reopen, never "open"
     open_by_fp = {str(r["fingerprint"]): r for r in open_rows
@@ -387,7 +400,7 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
                    and r.get("status") == "resolved"}
     foreign = {str(r["fingerprint"]) for r in open_rows
                if r and r.get("fingerprint") and not is_uptime_row(r)}
-    if monitors is None:
+    if not monitors:
         return _unreachable(fail_polls, open_by_fp, now_iso, ctx)
 
     d = UptimeDecision(fail_polls=0)
@@ -540,8 +553,9 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
         mapped = hosts_mapped[host]
         inv = mapped and is_investigable_host(host, ctx.routing)
         pending = ctx.pending_by_host.get(host) if inv else None
-        d.groups.append(_group_for(host, rows, mons, mapped, inv, pending,
-                                   now_iso, ctx.timezone))
+        d.groups.append(_group_for(
+            host, rows, mons, mapped, inv, pending, now_iso, ctx.timezone,
+            hypervisor=mapped and host == ctx.routing.hypervisor_host))
     for host, parts in recoveries.items():
         d.messages.append(f"✅ Back up on {host}: " + ", ".join(p for _, p in sorted(parts, key=lambda x: x[0])))
 

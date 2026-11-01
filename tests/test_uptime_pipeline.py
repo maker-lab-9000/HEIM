@@ -333,6 +333,15 @@ async def test_daily_run_leaves_uptime_incidents_alone(rt, monkeypatch):
         "timesSeen": 3, "missedRuns": 1, "description": "[uptime] Plex is down",
         "investigated": 0,
     }])
+    other_fp = "homelab|cpu_load|homelab"
+    rt.store.upsert([{
+        "fingerprint": other_fp, "host": "homelab", "metric": "CPU load",
+        "severity": "warning", "status": "open",
+        "firstSeen": "2026-11-01T08:00:00.000+01:00",
+        "lastSeen": "2026-11-01T08:00:00.000+01:00", "resolvedAt": "",
+        "timesSeen": 1, "missedRuns": 0, "description": "CPU load trending up",
+        "investigated": 0,
+    }])
     payload = {"generatedAt": "2026-11-01T07:00:00.000+01:00", "windowDays": 3,
                "hosts": [], "counts": {"crit": 0, "warn": 0, "naQueries": 0},
                "overall": "healthy", "categories": {}, "topAlerts": []}
@@ -359,6 +368,10 @@ async def test_daily_run_leaves_uptime_incidents_alone(rt, monkeypatch):
     row = next(r for r in rt.store.all_rows() if r["fingerprint"] == fp)
     assert row["status"] == "open"
     assert row["missedRuns"] == 1
+    # ...and the filter is not an over-filter: an ordinary open row the LLM
+    # didn't mention is still miss-counted and resolved by the same two runs
+    other = next(r for r in rt.store.all_rows() if r["fingerprint"] == other_fp)
+    assert other["status"] == "resolved" and other["missedRuns"] == 2
 
 
 def test_check_lines_reports_monitors_and_report_only_targets(rt):
@@ -480,3 +493,45 @@ async def test_dispatches_count_only_what_was_dispatched(rt, rig):
     out = await rig.poll(_metrics(("n8n", "10.0.0.10", 0), ("ha", "10.0.0.3", 0)))
     assert out["uptime_dispatches"] == 1      # n8n folded in, ha dispatched
     assert [i["host"] for _, items in rig.dispatched for i in items] == ["home-assistant"]
+
+
+async def test_a_parse_error_is_a_failed_poll(rt, rig, monkeypatch, caplog):
+    """An exception while parsing (e.g. a value parse_metrics cannot read) must
+    count toward "Can't reach Uptime Kuma", not vanish into the poller's log."""
+    def broken(_text):
+        raise OverflowError("cannot convert float infinity to integer")
+
+    monkeypatch.setattr(uptime, "parse_metrics", broken)
+    with caplog.at_level(logging.WARNING):
+        out = await rig.poll(_metrics(("n8n", "10.0.0.10", 0)))
+    assert out["uptime_unreachable"] is True and out["uptime_monitors"] == 0
+    assert rt.store.uptime_fail_polls() == 1
+    await rig.poll(_metrics(("n8n", "10.0.0.10", 0)))
+    assert rig.notes == ["⚠️ Can't reach Uptime Kuma: service outages are not being watched."]
+    assert any("parsing Uptime Kuma /metrics failed" in r.getMessage() for r in caplog.records)
+
+
+async def test_an_infinite_value_does_not_fail_the_poll(rt, rig):
+    body = _metrics(("n8n", "10.0.0.10", 0)) + _metrics(("odd", "10.0.0.10", 1)).replace(" 1\n", " +Inf\n")
+    out = await rig.poll(body)
+    assert out["uptime_unreachable"] is False and out["uptime_monitors"] == 1
+    assert len(rig.dispatched) == 1
+
+
+async def test_a_quiet_poll_logs_no_poll_result(rt, rig, monkeypatch, caplog):
+    async def no_alerts(_u):
+        return {"status": "success", "data": {"alerts": []}}
+
+    monkeypatch.setattr(poller, "_fetch_alerts", no_alerts)
+    rt.config.settings.threshold_detection = False
+    rig.body = _metrics(("n8n", "10.0.0.10", 1))
+    with caplog.at_level(logging.INFO, logger="heim.pipelines.poller"):
+        out = await poller.run_poll(rt, dispatch_concurrently=False)
+    assert out["uptime_monitors"] == 1
+    assert not [r for r in caplog.records if r.getMessage().startswith("poll result:")]
+
+    caplog.clear()
+    rig.body = _metrics(("n8n", "10.0.0.10", 0))
+    with caplog.at_level(logging.INFO, logger="heim.pipelines.poller"):
+        await poller.run_poll(rt, dispatch_concurrently=False)
+    assert [r for r in caplog.records if r.getMessage().startswith("poll result:")]

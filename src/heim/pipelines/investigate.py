@@ -480,10 +480,16 @@ def extend_pending_investigation(rt: Runtime, investigation_id: int, findings: l
     """Fold more findings into a ``pending_approval`` investigation.
 
     Merges by finding ``fingerprint`` (stored first), re-renders the brief and
-    rewrites both columns. Any other status returns False and changes nothing.
+    rewrites both columns. Any other status returns False and changes nothing,
+    and so does a row whose ``approval_decision`` is already written: a
+    dashboard/Telegram answer lands there first and the status only follows
+    on the waiter's next poll (up to ~5 s), so folding in then would hide the
+    new outages behind an investigation that was just declined.
     """
     row = rt.store.investigation(investigation_id)
     if not row or row.get("status") != "pending_approval":
+        return False
+    if str(row.get("approval_decision") or ""):
         return False
     req = request_from_investigation(row)
     seen = {f.get("fingerprint") for f in req.findings if f.get("fingerprint")}
