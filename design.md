@@ -20,7 +20,7 @@ The locked system. Every Hallmark run reads this first and pages share it. Chang
   --shade: rgb(0 0 0 / 0.45);  --glint: rgb(255 255 255 / 0.06);           /* light: rgb(31 26 21 / 0.14), rgb(255 255 255 / 0.85) */
   /* mode-invariant, :root only */
   --signal: #E8541E;  --signal-hi: #F8713A;  --crit: #D42B1F;  --crit-hi: #F08274;
-  --warn: #C9961C;  --warn-hi: #EFCB6A;  --ok: #9FB0BA;  --ok-hi: #D3DDE2;
+  --warn: #B07F0A;  --warn-hi: #EFCB6A;  --ok: #9FB0BA;  --ok-hi: #D3DDE2;
   --sans: system-ui, …;  --mono: ui-monospace, …;  --r: 8px;  --r-ctl: 6px;  --dur-micro: 120ms;
 }
 ```
@@ -40,8 +40,10 @@ A lamp (`.lamp`, and the empty `.dot` inside `.pill`, `.sev`, `.verdict`, `.outc
 
 Sizes: `.lamp.lg` 32 px, `.lamp.sm` 12 px. No glyph or emoji is ever a status: words and lamps only.
 
+Contrast: red, orange and amber hold 3:1 on both panels (`--warn` was deepened from `#C9961C` to `#B07F0A` for the light one). Healthy blue-grey (`--ok`) is deliberately quiet, about 2:1 on the light panel: a healthy lamp should not draw the eye, so it is never alone; the word beside it carries the state and the `--line` bezel gives the disc its edge.
+
 ## Labels (the operator's ruling)
-`.label` is `600 11px/1 var(--mono)`, tracked `0.14em`, upper case, `--ink-3`: card titles, table heads, rail groups, the brand line, the Needs-you task type, the footer. This departs from Hallmark Floor 67 / Reflex 64 on purpose, as do the task-type label above a Needs-you heading (54), arrows on action links (63) and middle-dot meta strings (63). They are recorded as `waive` lines in the stamp; sloplint still lists them, and that is expected. Secondary captions keep lower-case DOM text (tests slice pages on it); CSS sets the caps.
+`.label` is `600 11px/1 var(--mono)`, tracked `0.14em`, upper case, `--ink-3`: card titles, table heads, rail groups, the brand line, the Needs-you task type, the footer. This departs from Hallmark Floor 67 / Reflex 64 on purpose, as do the task-type label above a Needs-you heading (54), arrows on action links (63) and middle-dot meta strings (63). They are recorded in the stamp as one plain line, `ruled: 67 64 54 63`, not as `waive` lines (sloplint rejects waivers on Floor gates); sloplint still lists them, and that is expected. Secondary captions keep lower-case DOM text (tests slice pages on it); CSS sets the caps.
 
 ## Components
 - **Panels and cards** (`.panel`, `.card`): `--panel`, 1 px `--line`, radius 8 px, `inset 0 1px 0 var(--glint), 0 1px 2px var(--shade)`. Instrument cards (`.cards .card`) reserve 48 px on the right for the `.grille` (a 3 × 7 dot grid). A panel title is `h2` 22 px / 800 / `-0.02em` in `.panel-head`.
@@ -50,6 +52,7 @@ Sizes: `.lamp.lg` 32 px, `.lamp.sm` 12 px. No glyph or emoji is ever a status: w
 - **Segmented switch** (`m.seg(items)`): a recessed `--raised` tray; plain links; the engaged segment is lifted, carries a `.lamp.sm.orange` and `aria-current="true"`.
 - **Tables** (`.tbl`): label heads, 12 px rows, hairlines. A flagged row (`tr.flag`) is `--flag-bg` with a 4 px `--signal` bar.
 - **Run strip** (`.runs`): 10 px dots, 8 px apart: `--ink` success, `--crit` failed, `--warn` missed, a hollow ring for the slot not yet received. `.gap` names a monitoring gap with its `.bang`; `.key` explains the dots.
+- **Selects** (`.filters select`, `.mselect`): a 1 px `--ink-3` border, not `--line`, so the control's edge holds 3:1 against the panel.
 - **Focus:** `outline: 2px solid var(--ink); outline-offset: 2px`, instant, on everything interactive.
 
 ## Brand

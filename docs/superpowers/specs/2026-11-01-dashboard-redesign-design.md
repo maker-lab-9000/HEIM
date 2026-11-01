@@ -100,9 +100,11 @@ Tokens live in `static/heim.css` (one stylesheet, no build step; the tests read 
 |---|---|---|
 | signal lamp, engaged segment, flagged bar | `--signal`, `--signal-hi` | `#E8541E`, `#F8713A` |
 | critical / failed | `--crit`, `--crit-hi` | `#D42B1F`, `#F08274` |
-| warning / degraded / overdue / missed | `--warn`, `--warn-hi` | `#C9961C`, `#EFCB6A` |
+| warning / degraded / overdue / missed | `--warn`, `--warn-hi` | `#B07F0A`, `#EFCB6A` |
 | healthy | `--ok`, `--ok-hi` | `#9FB0BA`, `#D3DDE2` |
 | terminal islands | `--term-bg`, `--term-ink`, `--term-ember` | `#1B1917`, `#E9E2D4`, `#E88C3A` (pinned by tests; declared in the light block too, as today) |
+
+Note (Task 10, 2026-11-01): `--warn` was `#C9961C` (2.4:1 on the light panel); deepened to `#B07F0A` so the amber lamp holds 3:1 on the light panel (3.2:1) and on the dark one (4.4:1).
 
 ### Lamps
 

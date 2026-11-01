@@ -5,10 +5,7 @@
  * display: system sans, heavy and tight · labels: mono caps, tracked (the operator's concept) · mono for hosts, ids, times
  * signature: the agents panel, one run strip per channel · states: full, stale, running, error, missed · the system is locked in design.md */
 /* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 · weakest: the tracked mono labels are a deliberate operator ruling, recorded in the spec */
-/* Hallmark · waive 67 · .label sets card titles, table heads and rail groups in tracked caps · operator's console concept, 2026-11-01: engraved panel labels */
-/* Hallmark · waive 64 · the same .label is the one mono costume, hosts and ids are real mono data · operator's console concept, 2026-11-01: labels engraved in mono */
-/* Hallmark · waive 54 · the Needs-you task type sits above its heading as a .label · operator's console concept, 2026-11-01: task type over each Needs-you item */
-/* Hallmark · waive 63 · arrows on action links and middle dots in meta strings · operator's console concept, 2026-11-01: arrows on actions, middle-dot meta lines */
+/* Hallmark · ruled: 67 64 54 63 — the operator's console concept, 2026-11-01 */
 
 /* tokens (design.md): :root is dark; the light set closes the file */
 :root {
@@ -19,7 +16,7 @@
   --signal-ink: #F4722F; --signal-edge: #B8450F; --on-signal: #1C1916;
   /* mode-invariant: the lamps' own colours */
   --signal: #E8541E; --signal-hi: #F8713A; --crit: #D42B1F; --crit-hi: #F08274;
-  --warn: #C9961C; --warn-hi: #EFCB6A; --ok: #9FB0BA; --ok-hi: #D3DDE2;
+  --warn: #B07F0A; --warn-hi: #EFCB6A; --ok: #9FB0BA; --ok-hi: #D3DDE2;
   /* legacy name for the accent, still read by the day charts */
   --ember: var(--signal-ink);
   --tool-ssh: #C97A35; --tool-prometheus: #4A8AC2; --tool-ha: #C2609A;
@@ -191,6 +188,8 @@ b, strong, th { font-weight: 600; }
 }
 .empty { margin: 4px 0; font-size: var(--text-13); color: var(--ink-2); }
 .errmsg { margin: 4px 0; color: var(--signal-ink); font-weight: 600; }
+.errpanel h2 { display: flex; gap: 12px; align-items: center; }
+.errpanel p { max-width: 64ch; }
 .runline { margin: 0 0 8px; font-size: var(--text-13); color: var(--ink-2); }
 .card > h2.runline, .card > h2.ihost { font-size: var(--text-16); font-weight: 600; color: var(--ink); }
 .subhead { margin-bottom: 12px; }
@@ -249,7 +248,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: var(--text-13); }
 .runs i, .key i { display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--ink); }
 .runs .fail, .key .fail { background: var(--crit); }
 .runs .miss, .key .miss { background: var(--warn); }
-.runs .none { background: var(--grille); width: 4px; height: 4px; margin: 3px; }
+.runs .none { background: var(--grille) content-box; border: 3px solid transparent; }
 .runs .open, .discs .open { background: transparent; box-shadow: inset 0 0 0 2px var(--ink); }
 .gap {
   display: flex; align-items: center; gap: 24px; padding: 16px 4px 0;
@@ -422,6 +421,7 @@ details > summary:hover { color: var(--ink); }
 .htbl tr.on td { background: var(--raised); }
 .fbgrid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 .rtbl .c-src { width: 14em; }
+.rtbl .qlink { white-space: nowrap; }
 .rtbl .c-when { width: 7em; }
 .rtbl td .acts { margin: 0; }
 .fsum, .rtbl .rectext { color: var(--ink); }
@@ -439,13 +439,13 @@ details > summary:hover { color: var(--ink); }
 .hrow .hname { margin: 0; font-size: var(--text-16); }
 .hrow p { margin: 0; }
 .hrow .role { margin-top: 4px; }
-.hrow .hopen .lamp { margin-right: 6px; vertical-align: -3px; }
+.hrow .hopen .lamp { margin-right: 4px; vertical-align: -3px; }
 .hrow .hline, .hrow .hopen { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; color: var(--ink-2); }
 .hrow .hline + .hline { grid-column: 3; }
 .hrow .acts { grid-column: 2; grid-row: 2; margin: 0; }
 .own { white-space: nowrap; }
 .incs td:nth-child(6) { max-width: 13rem; }
-.incs th, .incs td { padding-right: 10px; }
+.incs th, .incs td { padding-right: 12px; }
 .incs td.mono { overflow-wrap: anywhere; }
 .hrow .hopen a { white-space: nowrap; }
 /* metrics: one fixed-layout table per category, all on one grid */
@@ -508,10 +508,10 @@ details > summary:hover { color: var(--ink); }
   .gap { gap: 12px; }
   .runs { flex-wrap: wrap; }
   /* the console's tables restack into rows: the name leads each one */
-  .att thead, .agents thead, .agents .go { display: none; }
-  .att table, .att tbody, .att tr, .att td, .agents table, .agents tbody, .agents tr, .agents td { display: block; }
-  .att td, .agents td { width: auto; padding: 2px 0; border: 0; text-align: left; }
-  .att tr, .agents tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .att thead, .agents thead, .agents .go, .rtbl thead { display: none; }
+  .att table, .att tbody, .att tr, .att td, .agents table, .agents tbody, .agents tr, .agents td, .rtbl, .rtbl tbody, .rtbl tr, .rtbl td { display: block; }
+  .att td, .agents td, .rtbl td { width: auto; padding: 2px 0; border: 0; text-align: left; }
+  .att tr, .agents tr, .rtbl tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
   .agents .scope { padding-left: 0; }
   .agents tr.flag { padding-left: 12px; background: var(--flag-bg); box-shadow: inset 4px 0 0 var(--signal); }
   .agents tr.flag td { background: none; box-shadow: none; }
@@ -524,6 +524,7 @@ details > summary:hover { color: var(--ink); }
   .incs tr.flag td { background: none; box-shadow: none; }
   .hrow { grid-template-columns: 1fr; }
   .hrow .acts, .hrow .hline + .hline { grid-column: 1; grid-row: auto; }
+  /* :nth-child(n) is every cell: it ties .incs td:nth-child(6) on specificity and wins by order */
   .incs td:nth-child(n) { max-width: none; }
 }
 @media (prefers-reduced-motion: reduce) {

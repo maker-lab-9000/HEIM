@@ -188,3 +188,22 @@ def test_seg_macro_marks_the_engaged_segment(client):
     assert 'aria-current="true"' in live and 'class="lamp sm orange"' in live
     day = re.search(r'<a[^>]*href="\?window=24h"[^>]*>.*?</a>', out).group(0)
     assert "aria-current" not in day and '<span class="n">3</span>' in day
+
+
+def test_error_page_uses_the_system(client):
+    r = client.get("/investigations/999999")
+    assert r.status_code == 404
+    html = r.text
+    # the shell: rail, top bar with the page title, the main landmark
+    assert 'class="rail"' in html and 'class="topbar"' in html
+    assert '<h1 class="ptitle">Not found</h1>' in html
+    main = html[html.index('<main id="main">'):html.index("</main>")]
+    # one console panel: a display heading in plain language, a lamp beside
+    # it, the store's own sentence, and a key home
+    assert 'class="panel errpanel"' in main
+    assert re.search(r'<h2[^>]*><span class="lamp amber" aria-hidden="true"></span>'
+                     r'Nothing to show here</h2>', main)
+    assert "No investigation #999999." in main
+    assert re.search(r'<a class="btn" href="/">[^<]*overview[^<]*</a>', main)
+    # the old shouted eyebrow is gone
+    assert "something is off" not in main and "eyebrow" not in main

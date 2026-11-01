@@ -1215,10 +1215,13 @@ class IncidentStore:
         - ``jobs`` in a terminal state (done/failed/interrupted), on the
           shorter of the retention window and ``JOB_RETENTION_MAX_DAYS`` —
           a closed job is a receipt, not history worth months of disk
+        - ``agent_runs`` (heartbeats) older than ``AGENT_RUNS_RETENTION_DAYS``,
+          on their own fixed window, whatever ``retention_days`` says
 
         Never touched: suppressions, open/clearing/suppressed incidents,
         unfinished investigations, queued/running jobs. ``retention_days <= 0``
-        means "keep forever" and is a no-op. Only non-zero counts are returned,
+        means "keep forever": every table above is kept, except that the
+        heartbeat window still applies. Only non-zero counts are returned,
         so an idle night logs nothing.
 
         Timestamps are compared lexically (the store's convention, cf.

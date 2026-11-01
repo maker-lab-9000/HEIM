@@ -1,9 +1,15 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card">
-  <h2 class="eyebrow">something is off</h2>
+{#- one console panel: a plain heading with its lamp, the sentence the route
+    or the store gave, the detail in a quieter voice, and a key home. The
+    heading follows the page title the handler set (not found, bad request,
+    error); the store-error shell lights red, a refusal amber. -#}
+{%- set heading = {"not found": "Nothing to show here",
+                   "bad request": "That request was refused"}.get(page_title, "The store could not be read") %}
+<section class="panel errpanel" aria-labelledby="h-err">
+  <div class="panel-head"><h2 id="h-err"><span class="lamp {{ 'red' if page_title == 'error' else 'amber' }}" aria-hidden="true"></span>{{ heading }}</h2></div>
   <p class="errmsg">{{ message }}</p>
-  {%- if detail %}<p class="mono ink3">{{ detail }}</p>{% endif %}
-  <p><a href="/">Back to overview</a></p>
+  {%- if detail %}<p class="ink2">{{ detail }}</p>{% endif %}
+  <p><a class="btn" href="/">Back to overview</a></p>
 </section>
 {% endblock %}
