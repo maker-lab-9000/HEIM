@@ -68,7 +68,7 @@ def test_toggle_is_inside_the_incident_row(client):
     rows = _rows(client.get("/incidents").text)
     assert len(rows) == 4
     for row in rows:
-        assert row.count("<details") == 1 and "what this incident says" in row
+        assert row.count("<details") == 1 and ">Details</summary>" in row
         assert row.rstrip().endswith("</details>\n        </td>\n      </tr>")
 
 

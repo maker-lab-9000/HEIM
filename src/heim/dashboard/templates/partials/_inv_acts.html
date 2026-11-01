@@ -1,6 +1,10 @@
 {% import "partials/_macros.html" as m with context %}
 <div class="acts">
-  {%- if inv.status == 'pending_approval' %}
+  {%- if inv.approval_decision == 'approve' %}
+  {{ m.pressed('Approve', 'open', 'approved') }}
+  {%- elif inv.approval_decision == 'decline' %}
+  {{ m.pressed('Decline', 'crit', 'declined') }}
+  {%- elif inv.status == 'pending_approval' %}
   {{ m.act('/actions/approval', 'Approve', {'investigation_id': inv.id, 'decision': 'approve'},
            cls='ember') }}
   {{ m.act('/actions/approval', 'Decline', {'investigation_id': inv.id, 'decision': 'decline'}) }}

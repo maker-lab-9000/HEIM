@@ -344,7 +344,7 @@ def test_workflow_for_each_incident_kind():
     assert fmt.workflow_for(n8n, [inv(8, "pending_approval")], investigable) == {
         "title": "Awaiting approval", "sub": "investigation 8", "href": "/investigations/8"}
     assert fmt.workflow_for(n8n, [inv(7, "needs_human")], investigable) == {
-        "title": "Needs you", "sub": "investigation 7", "href": "/investigations/7"}
+        "title": "", "sub": "investigation 7", "href": "/investigations/7"}
     # running wins over an older pending one; an old needs-human run under a
     # newer complete one no longer speaks for the incident
     assert fmt.workflow_for(n8n, [inv(9, "running"), inv(8, "pending_approval")],

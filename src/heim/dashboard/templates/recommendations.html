@@ -47,7 +47,7 @@
           <td class="rectext ink2">{{ r.text }}</td>
           <td class="c-src mono ink2"><a class="qlink" href="{{ r.source_href }}">{{ r.source }}</a></td>
           <td class="c-when">{{ m.when(r.acted_at) }}</td>
-          <td class="c-acts">{{ m.pill(r.state) }}</td>
+          <td class="c-acts">{% if r.state == 'done' %}{{ m.pressed('Done', 'open', 'marked done') }}{% else %}{{ m.pressed('Dismiss', 'crit', 'dismissed') }}{% endif %}</td>
         </tr>
         {%- endfor %}
       </tbody>

@@ -86,7 +86,7 @@
         <td><span class="title">{{ r.title }}</span>
           {%- if r.sub %}<span class="sub">{{ r.sub }}</span>{% endif %}</td>
         <td class="mono">{{ r.host }}</td>
-        <td>{% if r.kind == 'investigation' %}<div class="wf"><div>{% endif %}<span class="title">{{ wf.title }}</span><span class="sub">
+        <td>{% if r.kind == 'investigation' %}<div class="wf"><div>{% endif %}{% if wf.title %}<span class="title">{{ wf.title }}</span>{% endif %}<span class="sub">
           {%- if wf.href %}{% set lead, run, n = wf.sub.rpartition('investigation ') %}{{ lead }}<a href="{{ wf.href }}">{{ run }}{{ n }}</a>
           {%- else %}{{ wf.sub }}{% endif %}</span>
           {%- if r.kind == 'investigation' %}</div>

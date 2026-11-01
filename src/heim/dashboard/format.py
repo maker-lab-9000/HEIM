@@ -603,7 +603,8 @@ def workflow_for(incident: dict, investigations: list[dict], investigable: set[s
 
     ``investigations`` are the rows on the incident's fingerprint, newest
     first. A run in flight or waiting speaks first; then the newest run, if it
-    ended asking for a human. Otherwise the incident is Open, and the sub-line
+    ended asking for a human (its title is empty: the row's own left column
+    already says "Needs you"). Otherwise the incident is Open, and the sub-line
     says who is watching it: nobody has looked yet on a host an agent can
     reach (Needs attention); an Uptime Kuma check no agent can reach
     (Report-only target); a threshold (``[metric]``) or an alert rule
@@ -623,7 +624,7 @@ def workflow_for(incident: dict, investigations: list[dict], investigable: set[s
         return ran("Awaiting approval", f"investigation {inv.get('id')}", inv)
     if investigations and investigations[0].get("status") == "needs_human":
         inv = investigations[0]
-        return ran("Needs you", f"investigation {inv.get('id')}", inv)
+        return ran("", f"investigation {inv.get('id')}", inv)
 
     host = str(incident.get("host") or "")
     text = str(incident.get("description") or "")

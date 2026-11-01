@@ -95,6 +95,13 @@
 </form>
 {%- endmacro %}
 
+{#- a key that has been pressed and now shows the outcome: inset, disabled,
+    in the colour of the result, and still carrying its word. `tone` is `open`
+    (green) or `crit` (red); `title` is the tooltip naming the state. -#}
+{% macro pressed(label, tone, title) -%}
+<button class="btn pressed {{ tone }}" type="button" disabled aria-pressed="true" title="{{ title }}">{{ label }}</button>
+{%- endmacro %}
+
 {#- a daily bar chart (spec §11), server-rendered: `c` is fmt.bar_chart()'s
     precomputed geometry, so this places already-computed numbers and nothing
     else. Two call sites — the overview's tokens-per-day and /costs' spend-per-

@@ -1933,7 +1933,7 @@ def _attention_rows(open_incidents: list[dict], attention: list[dict],
                 "lamp": "red" if status == "failed" else "amber",
                 "title": _subject(inv) or f"Investigation {inv.get('id')}",
                 "sub": inv.get("reason", ""), "host": inv.get("host") or "",
-                "workflow": {"title": "Needs you" if status == "needs_human" else "Stopped",
+                "workflow": {"title": "" if status == "needs_human" else "Stopped",   # the left column says "Needs you"
                              "sub": f"investigation {inv.get('id')}",
                              "href": f"/investigations/{inv.get('id')}"},
                 "age": fmt.age_text(inv.get("started_at")), "at": inv.get("started_at") or "",
