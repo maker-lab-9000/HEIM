@@ -303,6 +303,8 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
     """
     open_by_fp = {str(r["fingerprint"]): r for r in open_rows
                   if r and r.get("fingerprint") and is_uptime_row(r)}
+    foreign = {str(r["fingerprint"]) for r in open_rows
+               if r and r.get("fingerprint") and not is_uptime_row(r)}
     if monitors is None:
         return _unreachable(fail_polls, open_by_fp, now_iso, ctx)
 
@@ -321,7 +323,7 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
     seen: set[str] = set()
     new_by_host: dict[str, list[tuple[dict, Monitor]]] = {}
     hosts_mapped: dict[str, bool] = {}
-    recoveries: dict[str, list[str]] = {}
+    recoveries: dict[str, list[tuple[str, str]]] = {}
     writes: dict[str, dict] = {}
     clears: list[str] = []
 
@@ -347,7 +349,7 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
         host = mapped_host or m.address
         fp = fingerprint(host, m.name)
         seen.add(fp)
-        if fp in ctx.suppressed:
+        if fp in ctx.suppressed or fp in foreign:  # foreign row: never duplicate
             continue
         r = open_by_fp.get(fp)
         st = states.get(fp) or {}
@@ -393,8 +395,8 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
             if ups >= RESOLVE_AFTER:
                 row = resolve(fp, r)
                 put(fp, up_polls=0, absent_polls=0, last_recovered_at=now_iso)
-                recoveries.setdefault(row["host"], []).append(
-                    f"{row['metric']} (down {_down_minutes(row['firstSeen'], now_iso)} min)")
+                recoveries.setdefault(row["host"], []).append((
+                    row["firstSeen"], f"{row['metric']} (down {_down_minutes(row['firstSeen'], now_iso)} min)"))
             else:
                 put(fp, up_polls=ups, absent_polls=0)
         else:  # pending / maintenance: no change, but the monitor is present
@@ -438,7 +440,7 @@ def decide(monitors: list[Monitor] | None, open_rows: list[dict],
         d.groups.append(_group_for(host, rows, mons, mapped, inv, pending,
                                    now_iso, ctx.timezone))
     for host, parts in recoveries.items():
-        d.messages.append(f"✅ Back up on {host}: " + ", ".join(parts))
+        d.messages.append(f"✅ Back up on {host}: " + ", ".join(p for _, p in sorted(parts, key=lambda x: x[0])))
 
     d.state_writes = list(writes.values())
     d.state_clears = clears

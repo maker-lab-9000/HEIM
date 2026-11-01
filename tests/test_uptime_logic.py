@@ -287,10 +287,22 @@ def test_suppressed_fingerprints_are_skipped():
 
 def test_foreign_rows_are_never_touched():
     row = _orow(desc="[alert] n8n is down")
-    d = decide([_mon("n8n", 0), _mon("zz", 1)], [row], {}, 0, NOW, _ctx())
-    assert [r for r in d.rows_to_upsert if r["status"] == "open" and r["timesSeen"] > 1] == []
+    d = decide([_mon("n8n", 0)], [row], {}, 0, NOW, _ctx())
+    assert [r for r in d.rows_to_upsert if r["fingerprint"] == row["fingerprint"]] == []
+    assert d.groups == [] and d.messages == []
+    d = decide([_mon("n8n", 1)], [row], {}, 0, NOW, _ctx())
+    assert d.rows_to_upsert == [] and d.messages == []
     d = decide([_mon("other", 1)], [row], {}, 0, NOW, _ctx())
     assert d.rows_to_upsert == [] and d.messages == []
+
+
+def test_recoveries_are_listed_in_first_seen_order():
+    a, b = "ubuntu-server|uptime_down|a", "ubuntu-server|uptime_down|b"
+    rows = [_orow("a", first="2026-11-01T01:57:00+00:00"),
+            _orow("b", first="2026-11-01T01:52:00+00:00")]
+    sts = {a: _ostate(a, up_polls=1), b: _ostate(b, up_polls=1)}
+    d = decide([_mon("a", 1), _mon("b", 1)], rows, sts, 0, NOW, _ctx())
+    assert d.messages == ["✅ Back up on ubuntu-server: b (down 10 min), a (down 5 min)"]
 
 
 def test_pipe_in_a_name_keeps_three_fingerprint_parts():
