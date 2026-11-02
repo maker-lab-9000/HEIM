@@ -54,8 +54,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from heim.agents import (
     AGENT_KEYS,
     BACKUP_TIME,
+    AGENT_LABELS,
     TOOL_AGENTS,
     TOOL_HISTORY_LIMIT,
+    agent_key_for,
     Tick,
     bucket_runs,
     agent_specs,
@@ -725,7 +727,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                            _window_runs(reader, window_s, now_iso),
                            _first_seen(reader, window_s))
         _add_tool_counts(reader, rows, window_s, now_iso)
+        every = reader.read(lambda s: s.tool_feedback_rows(limit=None))
+        shown = every if request.query_params.get("feedback") == "all" else every[:FEEDBACK_LIMIT]
         return page(request, "agents.html", page_title="agents", window=window,
+                    feedback=[_feedback_row(f) for f in shown],
+                    feedback_total=len(every), feedback_capped=len(every) > len(shown),
                     **_agents_panel(rows, request.query_params.get("agents", "")),
                     base_href="/agents")
 
@@ -743,7 +749,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         history = None if calls is None else [
             {**c, "short": (a := short_args(c["tool"], c["args_json"]))[0], "full": a[1]}
             for c in calls]
+        stats = tool_summary(calls or [])
+        fb = ([_feedback_row(f) for f in reader.read(
+            lambda s: s.tool_feedback_rows(limit=None, agent_names=TOOL_AGENTS[key]))]
+            if key in TOOL_AGENTS else [])
         return page(request, "agent.html", page_title=f"agents / {row['name']}",
+                    tool_feedback=fb[:AGENT_FEEDBACK_LIMIT],
+                    **_agent_feedback(fb, stats),
                     tool_history=history, tool_stats=tool_summary(calls or []),
                     agent=row, cadence=_cadence_text(cfg, key),
                     evidence=_AGENT_EVIDENCE.get(key),
@@ -1585,6 +1597,29 @@ def _tool_usage(rows: list[dict], feedback: dict[str, dict] | None = None) -> li
             "feedback": note,
         })
     return out
+
+
+#: rows on the Agents page's feedback panel, and on one agent's list
+FEEDBACK_LIMIT = 50
+AGENT_FEEDBACK_LIMIT = 20
+
+
+def _feedback_row(f: dict) -> dict:
+    """A feedback row plus the agent key and display name its investigation maps to."""
+    key = agent_key_for(f.get("agent_name", ""))
+    return {**f, "agent_key": key, "agent_label": AGENT_LABELS.get(key, f.get("agent_name", ""))}
+
+
+def _agent_feedback(rows: list[dict], stats: list[dict]) -> dict:
+    """One agent's newest-first feedback split for its tool summary: the
+    latest note per tool it called (shown under that tool's row) and the
+    notes naming a tool it did not call (the 'general' footnotes)."""
+    latest: dict[str, dict] = {}
+    for r in rows:
+        latest.setdefault(r["tool"], r)
+    known = {t["tool"] for t in stats}
+    return {"feedback_by_tool": {k: v for k, v in latest.items() if k in known},
+            "feedback_general": [v for k, v in sorted(latest.items()) if k not in known]}
 
 
 def _general_feedback(feedback: dict[str, dict], rows: list[dict]) -> list[dict]:

@@ -145,6 +145,11 @@ means the prompt has drifted.
 
 Each tool-calling agent's page (`/agents/investigator`, `/agents/security`) shows its
 last 50 tool calls with a per-tool summary of calls, blocked calls and average duration.
+Under each tool's row is that agent's latest suggestion for it (a name matching none of its
+tools shows as `Suggestion, general:`), and a "Tooling feedback" list gives its 20 newest
+suggestions. The Agents page (`/agents`) has a "Tooling feedback" panel with the newest 50
+across all agents (`?feedback=all` for every one), each linked to its agent and
+investigation.
 
 ## The security audit
 

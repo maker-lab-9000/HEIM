@@ -770,6 +770,38 @@ class IncidentStore:
                                  "created_at": str(r["created_at"] or "")}
                 for r in cur.fetchall()}
 
+    def tool_feedback_rows(self, limit: int | None = 50,
+                           agent_names: list[str] | None = None) -> list[dict]:
+        """Feedback rows joined with their investigation's agent, newest first.
+
+        ``agent_names`` narrows to those ``investigations.agent_name`` values
+        (an empty list matches nothing); ``None`` means every agent and
+        ``limit=None`` every row. A row whose investigation was pruned keeps
+        its text with an empty ``agent_name`` (LEFT JOIN) — unless an agent
+        filter is given, which by definition needs the join to match.
+        """
+        if agent_names is not None and not agent_names:
+            return []
+        sql = """SELECT f.id AS id, f.tool AS tool, f.suggestion AS suggestion,
+                        f.investigation_id AS investigation_id, f.created_at AS created_at,
+                        COALESCE(i.agent_name, '') AS agent_name
+                 FROM tool_feedback f
+                 LEFT JOIN investigations i ON i.id = f.investigation_id"""
+        params: list = []
+        if agent_names is not None:
+            sql += f" WHERE i.agent_name IN ({','.join('?' * len(agent_names))})"
+            params += list(agent_names)
+        sql += " ORDER BY f.id DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        return [{"id": int(r["id"]), "tool": str(r["tool"] or ""),
+                 "suggestion": str(r["suggestion"] or ""),
+                 "investigation_id": int(r["investigation_id"] or 0),
+                 "created_at": str(r["created_at"] or ""),
+                 "agent_name": str(r["agent_name"] or "")}
+                for r in self._db.execute(sql, params).fetchall()]
+
     def tool_feedback(self, investigation_id: int) -> list[dict]:
         cur = self._db.execute(
             "SELECT * FROM tool_feedback WHERE investigation_id = ? ORDER BY id",

@@ -18,6 +18,16 @@ AGENT_KEYS = ("alert_poller", "thresholds", "uptime", "investigator", "daily", "
 #: agent's tool calls. The other agents never call tools.
 TOOL_AGENTS = {"investigator": ["investigator"], "security": ["security_auditor"]}
 
+
+
+def agent_key_for(agent_name: str) -> str:
+    """The Agents-page key of an ``investigations.agent_name`` ('' if none)."""
+    for key, names in TOOL_AGENTS.items():
+        if agent_name in names:
+            return key
+    return ""
+
+
 #: calls shown in a tool history, and the width of its args column
 TOOL_HISTORY_LIMIT = 50
 ARGS_WIDTH = 80
@@ -159,6 +169,9 @@ def investigable_hosts(cfg) -> list[str]:
         if h:
             names.add(h)
     return sorted(names)
+
+
+AGENT_LABELS = _NAMES
 
 
 def agent_specs(cfg, latest_detail: dict[str, dict]) -> list[AgentSpec]:
