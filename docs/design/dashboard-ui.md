@@ -1,75 +1,19 @@
 # HEIM dashboard — UI design spec
 
-> **Superseded direction (2026-11-01, the operator's ruling).** The "night watch at the
-> hearth" dark direction, its "morning ash" light mode and the house glyph are retired.
-> The dashboard is now the operator's **Braun-inspired monitoring console**, locked in
-> [`design.md`](../../design.md) at the repo root (tokens, lamps, labels, components,
-> brand, motion) and specified in
-> `docs/superpowers/specs/2026-11-01-dashboard-redesign-design.md`. §1, §2 (the rail)
-> and §10 below describe the console; the other sections still hold for behaviour, and
-> where they name the old visual vocabulary (ember borders, mono-caps buttons, pulse
-> dots, glyph icons) `design.md` wins.
-
-Design direction: **a calibrated instrument**. Every agent is a channel on one front
-panel, read at a glance, and nothing lights up unless it needs a hand. A warm grey
-ground, off-white panels, brown-black ink and one orange signal; red and amber lamps are
-reserved for conditions that matter, and healthy states stay quiet.
-
-Constraints honored throughout: **no webfonts, no JS framework, no chart library** —
-system font stacks, vanilla CSS (one file), htmx (~14 KB) for partial updates, inline
-SVG only where a mark is needed. Light and dark modes from one token set.
+> **Partly superseded.** The visual design (tokens, lamps, labels, components, the rail)
+> is locked in [`design.md`](../../design.md); the current pages and actions are described
+> in [`docs/DASHBOARD.md`](../DASHBOARD.md). This file is kept because code comments cite
+> its section numbers (§3 to §13) for behaviour. Where it names the old visual vocabulary
+> (ember borders, mono-caps buttons, pulse dots, glyph icons, emoji), `design.md` and the
+> code win.
 
 ## 1. Tokens
 
-The token set lives in `static/heim.css` and is documented in [`design.md`](../../design.md):
-surfaces (`--bg`, `--panel`, `--raised`, `--line`, `--flag-bg`), ink (`--ink`, `--ink-2`,
-`--ink-3`), the orange for text and key faces (`--signal-ink`, `--signal-edge`,
-`--on-signal`), and the mode-invariant lamp colours (`--signal`, `--crit`, `--warn`,
-`--ok`, each with a `-hi` highlight). `:root` holds the dark values; the light override
-set and its `prefers-color-scheme` mirror close the file, declared identically. The tool
-palette (`--tool-*`) and the host slots (`--host-*`) are unchanged identity colours.
-`--ember` survives only as an alias of `--signal-ink`.
-
-Type: system sans, 14 px / 1.45 body, three weights (400, 600, 800); the page title 40 px
-/ 800; panel titles 22 px / 800; figures 36 px / 800, tabular. Labels (card titles, table
-heads, rail groups) are mono caps, tracked: the operator's ruling, see `design.md`. Mono
-for hosts, ids, fingerprints, commands, timestamps and the date line.
+See [`design.md`](../../design.md) and `src/heim/dashboard/static/heim.css`.
 
 ## 2. Layout
 
-A fixed, grouped left rail (232 px; on phones under 60rem it becomes a wrapped row of
-lamp-chips above the page), a top bar inside the page column, and a page column of up to
-1440 px.
-
-```
-┌───────────────────┬──────────────────────────────────────────────────────┐
-│ heim              │  Overview                      4 hosts · 21:42 CET   │
-│ HOMELAB MONITOR   │  Sunday, 1 November                                  │
-│ H 01              │  ┌────────────┐┌────────────┐┌────────────┐          │
-│ WORKSPACE         │  │ panels and instrument cards …                     │
-│ (●) Overview      │                                                      │
-│ ( ) Agents      7 │                                                      │
-│ ( ) Investig.   2 │                                                      │
-│ ( ) Incidents   5 │                                                      │
-│ INFRASTRUCTURE    │                                                      │
-│ INSIGHTS          │                                                      │
-│───────────────────│                                                      │
-│ ( ) Connected     │                                                      │
-│ ( ) Appearance    │                                                      │
-└───────────────────┴──────────────────────────────────────────────────────┘
-```
-
-Rail: the brand (lower-case "heim" in geometric arches, the i's dot an orange lamp;
-`class="spark"`, `aria-label="HEIM"`; the favicon `static/logo.svg` is the compact h
-mark), the brand line HOMELAB MONITOR / H 01, then three groups: **Workspace**
-(Overview, Agents, Investigations, Incidents), **Infrastructure** (Hosts, Metrics,
-Security), **Insights** (Findings, Recommendations, Costs). Every item has a lamp, orange
-when current (`aria-current="page"`); Agents, Investigations (running + pending
-approval), Incidents (open) and Hosts carry a count. The footer holds the daemon line
-(`class="daemon"`: **Connected** / **Daemon quiet** / **No heartbeat yet**, with
-"Synced 2m ago", read from the newest poll heartbeat in `agent_runs`, falling back to
-the `runs` table) and the **Appearance** switch. Top bar: the page title, the date in the
-configured timezone, "n hosts · HH:MM TZ" and a slot for a page's segmented switch.
+See [`docs/DASHBOARD.md`](../DASHBOARD.md#layout).
 
 ## 3. Pages
 

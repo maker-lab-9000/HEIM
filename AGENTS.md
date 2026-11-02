@@ -4,8 +4,11 @@ A single document for anyone (human or AI agent) working on **HEIM — Homelab E
 Incident Monitor**: what it is, how it's built, the invariants you must not break, how it
 integrates, how it scales, and the roadmap of planned improvements.
 
-Companion docs: [`README.md`](README.md) (setup & operation),
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (data flow + n8n→module provenance map).
+Companion docs: [`README.md`](README.md) (overview and quick install),
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (data flow + n8n→module provenance map),
+and the operator docs in `docs/`: [`INSTALL.md`](docs/INSTALL.md),
+[`CONFIGURATION.md`](docs/CONFIGURATION.md), [`OPERATIONS.md`](docs/OPERATIONS.md),
+[`AGENTS-AND-TOOLS.md`](docs/AGENTS-AND-TOOLS.md), [`DASHBOARD.md`](docs/DASHBOARD.md).
 
 ---
 
@@ -13,7 +16,7 @@ Companion docs: [`README.md`](README.md) (setup & operation),
 
 HEIM watches a homelab through Prometheus and turns raw metrics into three products:
 
-1. **A twice-daily AI health report** — 49 PromQL range queries over a 3-day window are
+1. **A twice-daily AI health report** — 50 PromQL range queries over a 3-day window are
    aggregated into a compact payload, analyzed for *degradation trends* by an LLM
    (OpenRouter primary → Anthropic fallback), and delivered as a styled HTML dashboard
    email, a Home Assistant sensor, and a Loki event stream.
@@ -27,7 +30,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (1231 tests). Design
+covered by golden tests against the original JavaScript behavior (1305 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -35,14 +38,14 @@ edges** (tools, channels, pipelines).
 
 | Area | Features |
 |---|---|
-| Detection | 49-query trend catalog · per-day averages, change %, warn/crit flags · Prometheus alert rules with `qid` labels (fast path) · anti-flap hysteresis (2 clear polls / 2 missed runs) · Uptime Kuma poll half (`[uptime]` incidents, one Telegram message per host, flap-quiet reopen; report-only for non-investigable hosts) |
+| Detection | 50-query trend catalog · per-day averages, change %, warn/crit flags · Prometheus alert rules with `qid` labels (fast path) · anti-flap hysteresis (2 clear polls / 2 missed runs) · Uptime Kuma poll half (`[uptime]` incidents, one Telegram message per host, flap-quiet reopen; report-only for non-investigable hosts) |
 | Incidents | SQLite store · deterministic fingerprints (`host\|qid\|name`) · open/clearing/resolved lifecycle · warn→crit escalation · per-fingerprint dispatch lock · poller-vs-daily ownership split (`[alert]` prefix) · false-positive verdicts + timed/forever suppression (pipeline-level, analyst hint) |
 | Agent | Anthropic-native tool loop · soft prompt budget + hard in-loop step cap · retries · real token accounting (run total **and** per-turn attribution per step) · per-run cost from a config price table · optional size-capped full transcript · output salvage (`## Summary` contract, leaked-tool-call detection) · offline replay of a stored run against another model/prompt from its recorded tool results (`heim replay`) · agent-written tooling feedback indexed per tool |
 | Tools | Guarded read-only SSH · PromQL instant/range with token-compact encoding · metric discovery · GET-allowlisted HA and Proxmox APIs · per-call Telegram live feed + local `audit.jsonl` |
 | Human loop | Telegram inline-button approvals (long-poll, no inbound ports) raced against a store-written decision (dashboard/CLI, works with no Telegram at all) · decline/timeout → re-proposed next run · outcome confirm (Resolved / Needs human) |
 | Delivery | n8n-faithful HTML dashboard email · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
 | Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · crash-safe investigation job queue (`heim jobs`, restart sweep, re-trigger with `retry_of`) · dead-man's switch pinged after every completed poll · nightly WAL-safe SQLite backup (rotated) + retention prune · Docker/compose deployment (outbound-only, plus the optional dashboard port) · `.env` interpolation for all deployment identity |
-| Security audit | Weekly (Mon 06:00) read-only configuration-hygiene audit: 47 deterministic checks over the Proxmox API (audit-only token), Home Assistant REST, Prometheus and fixed guard-validated SSH lines · stable fingerprints `host\|check_id\|subject` · week-over-week new/persisting/resolved/carried · findings reuse the verdict/suppression machinery · one bounded Opus 5.5 pass (3 API tools, no SSH, cap 6) explains and prioritises, never detects, and ends with `## Audit feedback` (improve the audit / what else to check — proposals only, shown on `/security`) · degradable: a refusal costs only the `## AI assessment` appendix · `heim security-audit [--dry-run] [--no-llm]` |
+| Security audit | Weekly (Mon 06:00) read-only configuration-hygiene audit: 47 deterministic checks over the Proxmox API (audit-only token), Home Assistant REST, Prometheus and fixed guard-validated SSH lines · stable fingerprints `host\|check_id\|subject` · week-over-week new/persisting/resolved/carried · findings reuse the verdict/suppression machinery · one bounded Opus 5.5 pass (4 read-only tools incl. `loki_query`, no SSH, cap 6) explains and prioritises, never detects, and ends with `## Audit feedback` (improve the audit / what else to check — proposals only, shown on `/security`) · degradable: a refusal costs only the `## AI assessment` appendix · `heim security-audit [--dry-run] [--no-llm]` |
 | Dashboard | Web UI (`heim dashboard`, FastAPI + Jinja + vendored htmx), laid out as an operator's console (system locked in `design.md`): a grouped rail with lamps and counts, light/dark · overview of instrument cards (condition, agent coverage, last sync, what requires you), Needs attention, Needs you and the Agents panel, then the health, latest-runs, tool-usage and token blocks · Agents pages (`/agents`, `/agents/<key>`): seven agents with honest state, run strips and monitoring-gap lines, from daemon heartbeats (`agent_runs`) · a Live / 24 h / 7 d window switch over the run strips · investigations list/filters with queued ghost rows and a detail page sorted by kind (observations, interpretation, proposed and completed actions) with burn line, cost and the optional full transcript · incidents, findings (each linked to its evidence), recommendations, security, metrics, costs, host cards · actions (queue an investigation, re-run, approve/decline, finding verdicts, mute/unmute) as real forms enhanced by htmx · optional HTTP basic auth · `/telemetry` Prometheus exposition (auth-exempt, aggregates only) · one SQLite connection (WAL) that writes action rows only |
 
 ---
@@ -51,7 +54,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 1231 tests, must stay green
+.venv/bin/pytest -q                    # 1305 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -305,8 +308,9 @@ investigations table. The dashboard's **entire write surface** is the allow-list
 stays the sole executor and the sole writer of the pipeline tables. Subjects travel as
 form fields, never as path segments (fingerprints carry `|` and `/`). Accepted risk,
 documented in the module: no CSRF token, on the strength of LAN-only + basic auth and
-same-origin forms. Still deferred: the Recommendations page, manual "resolve", "load 50
-more" pagination (lists cap at 200 rows), and the live Telegram-feed stream.
+same-origin forms. Deferred at the time: the Recommendations page, manual "resolve", "load 50
+more" pagination, and the live Telegram-feed stream (the Recommendations page and
+pagination have since shipped, see v3).
 
 **Shipped (v3 — the console redesign, 2026-11-01; spec
 `docs/superpowers/specs/2026-11-01-dashboard-redesign-design.md`, system in
@@ -421,7 +425,7 @@ incident row, and threads `retry_of` through `InvestigationRequest` into the new
   cannot carry the basic-auth password, and the payload is aggregates only — no
   hostnames, fingerprints or report text). ansible-homelab's
   `stacks/ubuntu-server/prometheus/prometheus.yml` carries the scrape job, commented
-  out; the README shows it.
+  out; the README and `docs/INSTALL.md` show it.
 - **Eval / replay harness** — ✅ implemented. `heim replay <id> [--model M]
   [--prompt-file F]` re-runs a stored investigation **offline**: same brief, same system
   prompt (rebuilt through `investigate.build_system_prompt`, or a candidate file put
@@ -450,7 +454,7 @@ incident row, and threads `retry_of` through `InvestigationRequest` into the new
   .extract_tool_feedback` also indexes it into the `tool_feedback` table
   (`store.add_tool_feedback` / `latest_tool_feedback`), written by both pipelines for
   complete **and** incomplete runs. The dashboard's tool-usage card shows the latest
-  suggestion per tool under its row (and unmatched names as a `💡 general:` footnote,
+  suggestion per tool under its row (and unmatched names as a `Suggestion, general:` footnote,
   because a name that matches no tool is the prompt drifting, not noise to drop).
 
 ### 5.8 Durable approvals — ✅ implemented
@@ -522,7 +526,7 @@ Tests: `tests/test_durable_approvals.py`.
   process may write; the loser is cancelled. With no Telegram configured the store poll
   *is* the gate (a dashboard-only deployment keeps its human in the loop instead of
   silently skipping approval); `--dry-run` still auto-approves. The dashboard's
-  approve/decline buttons are the remaining UI half.
+  approve/decline buttons (`/actions/approval`) are the UI half, shipped with §5.3 v2.
 - **Retention** — ✅ implemented. `store.prune(now_iso, retention_days)`
   (`retention_days: 120`, 0 = keep forever) deletes only *finished* history: resolved
   incidents by `lastSeen`, findings and runs by `run_at`, investigations with a
@@ -535,7 +539,7 @@ Tests: `tests/test_durable_approvals.py`.
 - **Multi-model agent loop**: an OpenAI-compatible tool-calling backend in
   `agent/runner.py` so the investigator can run on OpenRouter models too.
 - **More channels**: ntfy/Matrix/Discord via the channel recipe in §3.
-- **MCP server**: expose the five guarded tools over MCP so interactive Claude sessions
+- **MCP server**: expose the six guarded tools over MCP so interactive Claude sessions
   can use the same vetted, read-only toolbox as the investigator.
 - **Backups** — ✅ implemented. A nightly daemon job (03:30, configured timezone)
   snapshots the store via `store.backup_to()` (SQLite's online backup API — WAL-safe,
@@ -592,7 +596,7 @@ rollback design; multi-tenant SaaS-ification; replacing Grafana for time-series 
 ## 6. Notes for AI agents working here
 
 - Read `docs/ARCHITECTURE.md` first; it maps every module to its n8n source node.
-- Run `.venv/bin/pytest -q` before and after your change; 1231 must not regress.
+- Run `.venv/bin/pytest -q` before and after your change; 1305 must not regress.
 - Ported modules (docstring names an n8n node) are behavior-frozen — see §2.
 - Never log, commit, or email secrets; deployment identity comes from `.env` via
   `${VAR}` interpolation and must stay out of the tree.
