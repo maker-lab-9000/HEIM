@@ -1369,6 +1369,13 @@ class IncidentStore:
         )
         self._db.commit()
 
+    def clear_recommendation_state(self, key: str) -> bool:
+        """Reopen ``key``: drop its mark, since "open" is the absence of a row.
+        Returns whether there was a mark to drop."""
+        cur = self._db.execute("DELETE FROM recommendation_states WHERE key = ?", (str(key),))
+        self._db.commit()
+        return cur.rowcount > 0
+
     def recommendation_states(self) -> dict[str, dict]:
         """``key → {"state": …, "created_at": …}`` for every marked item."""
         rows = self._db.execute(

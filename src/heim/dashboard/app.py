@@ -164,6 +164,8 @@ _ACTION_HELPERS = (
     # §9: the one table the dashboard owns outright — the pipeline never reads
     # or writes it, it only records which recommendation the operator ticked.
     "set_recommendation_state",
+    # its reversal on the same table: reopening an item drops its mark
+    "clear_recommendation_state",
 )
 
 
@@ -364,13 +366,16 @@ def _back_to(request: Request, fields: dict) -> str:
 
 
 #: the inline feedback lines (spec §5: mono, --ink-2, no toasts)
-QUEUED = "Queued as job #{job} — the daemon picks it up within a few seconds."
 APPROVED = "Approved — the daemon starts the investigation within a few seconds."
 DECLINED = "Declined — nothing runs; it is re-proposed next run."
 CONFIRMED = "Confirmed — kept in the findings history."
+CLEARED = "Verdict cleared."
+#: appended when switching away from (or clearing) a false positive lifts its mute
+LIFTED = " Unmuted."
 UNMUTED = "Unmuted — the pipelines report this fingerprint again."
 MARKED_DONE = "Marked done."
 DISMISSED = "Dismissed."
+REOPENED = "Reopened."
 
 
 # ------------------------------------------------------------------- app
@@ -660,6 +665,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         needs_you = _needs_you(pending, troubled)
         attention_rows = _attention_rows(open_incidents, troubled, invs,
                                          set(investigable_hosts(cfg)))
+        inflight = _in_flight(reader)
+        for r in attention_rows:
+            if r["kind"] == "investigation":     # its Re-run key, pressed when in flight
+                r["inflight"] = _inflight_for(inflight, r)
         feedback = reader.read(lambda s: s.latest_tool_feedback())
         tool_usage = _tool_usage(reader.read(lambda s: s.tool_usage(limit=12)), feedback)
         # the weekly rhythm (spec §11): 14 zero-filled days, turned into bar
@@ -813,7 +822,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             row["investigations"] = by_fp.get(row["fingerprint"], [])
             row["suppression"] = sups.get(row["fingerprint"])
         return page(request, "incidents.html", page_title="incidents", rows=rows,
-                    next_offset=next_offset)
+                    next_offset=next_offset, inflight=_in_flight(reader))
 
     # the qids the metrics page can anchor to (read once; the catalog is config)
     catalog_qids = {q.qid for q in load_queries(cfg.queries_path)}
@@ -948,7 +957,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "investigation": next((i for i in invs if i.get("host") == host.name), None),
             })
         return page(request, "hosts.html", page_title="hosts", cards=cards,
-                    watched=_report_only_hosts(cfg, open_incidents))
+                    watched=_report_only_hosts(cfg, open_incidents),
+                    inflight=_in_flight(reader))
 
     # ------------------------------------------------------- action routes
     #
@@ -981,12 +991,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         job_id = reader.write(lambda s: enqueue_investigation(
             s, host=host, host_role=host_cfg.role, fingerprint=fingerprint,
             findings=findings, requested_by="dashboard", model=model))
-        flash = {"text": QUEUED.format(job=job_id)}
+        flash = _requested(reader.read(lambda s: s.job(job_id)), tz)
+        inflight = _in_flight(reader)
         if incident:
             return respond(request, fields, "partials/_incident_acts.html", flash,
-                           **_incident_ctx(reader, fingerprint))
+                           inflight=inflight, **_incident_ctx(reader, fingerprint))
         return respond(request, fields, "partials/_host_acts.html", flash,
-                       host=host)
+                       host=host, inflight=inflight)
 
     @app.post("/actions/retrigger")
     async def action_retrigger(request: Request):
@@ -997,9 +1008,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise ActionError(f"No investigation #{inv_id}.",
                               "Nothing to re-run — the list shows everything the "
                               "store has.", 404)
-        return respond(request, fields, "partials/_inv_acts.html",
-                       {"text": QUEUED.format(job=job_id)},
-                       inv=reader.read(lambda s: s.investigation(inv_id)))
+        flash = _requested(reader.read(lambda s: s.job(job_id)), tz)
+        inv = reader.read(lambda s: s.investigation(inv_id))
+        if str(fields.get("cell") or "") == "attention":
+            # the overview's Needs-attention row: its own cell, pressed
+            return respond(request, fields, "partials/_rerun_acts.html", flash,
+                           r={"id": inv_id, "inflight": _inflight_for(
+                               _in_flight(reader), inv or {})})
+        return respond(request, fields, "partials/_inv_acts.html", flash, inv=inv)
 
     @app.post("/actions/approval")
     async def action_approval(request: Request):
@@ -1021,20 +1037,28 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def action_verdict(request: Request):
         fields = await _fields(request)
         finding_id = _int_field(fields, "finding_id")
-        verdict = _choice_field(fields, "verdict", ("confirmed", "false_positive"))
+        # "clear" is the pressed key pressed again: no verdict at all
+        verdict = _choice_field(fields, "verdict", ("confirmed", "false_positive", "clear"))
         days = cfg.settings.suppression_days
+        before = reader.read(lambda s: s.finding(finding_id))
+        if before is None:
+            raise ActionError(f"No finding #{finding_id}.",
+                              "Findings are pruned with their run — the history "
+                              "page shows what is left.", 404)
         if verdict == "false_positive":
             # one call: verdict + suppression + the incident status flip
             row = reader.write(lambda s: mark_false_positive(
                 s, finding_id, days=days, now=datetime.now(tz)))
             flash = {"text": _muted_text((row or {}).get("suppression"))}
         else:
-            row = reader.write(lambda s: s.set_finding_verdict(finding_id, "confirmed"))
-            flash = {"text": CONFIRMED}
-        if row is None:
-            raise ActionError(f"No finding #{finding_id}.",
-                              "Findings are pruned with their run — the history "
-                              "page shows what is left.", 404)
+            new = "confirmed" if verdict == "confirmed" else ""
+            row = reader.write(lambda s: s.set_finding_verdict(finding_id, new))
+            text = CONFIRMED if new else CLEARED
+            # leaving false positive takes back the mute that verdict set
+            fp = str(before.get("fingerprint") or "")
+            if before.get("verdict") == "false_positive" and fp and _lift_mute(reader, fp):
+                text += LIFTED
+            flash = {"text": text}
         return respond(request, fields, "partials/_verdict.html", flash, f=row)
 
     @app.post("/actions/mute")
@@ -1048,24 +1072,20 @@ def create_app(config: Config | None = None) -> FastAPI:
             s, fingerprint, days=days, reason="marked a false positive from the dashboard",
             now=datetime.now(tz)))
         return respond(request, fields, "partials/_incident_acts.html",
-                       {"text": _muted_text(res)},
+                       {"text": _muted_text(res)}, inflight=_in_flight(reader),
                        **_incident_ctx(reader, fingerprint))
 
     @app.post("/actions/unmute")
     async def action_unmute(request: Request):
         fields = await _fields(request)
         fingerprint = _text_field(fields, "fingerprint", "Unmuting")
-        if not reader.write(lambda s: s.unsuppress(fingerprint)):
+        if not _lift_mute(reader, fingerprint):
             raise ActionError(f"{fingerprint} is not muted.",
                               "Nothing to lift — the muted rows are the ones with a "
                               "muted pill.", 404)
-        # same as `heim incidents unmute`: only a suppressed row goes back to open
-        incident = reader.read(lambda s: s.incident(fingerprint))
-        if incident and incident.get("status") == "suppressed":
-            reader.write(lambda s: s.set_incident_status(fingerprint, "open"))
         return respond(
             request, fields, "partials/_incident_acts.html",
-            {"text": UNMUTED},
+            {"text": UNMUTED}, inflight=_in_flight(reader),
             **_incident_ctx(reader, fingerprint))
 
     @app.post("/actions/recommendation")
@@ -1081,12 +1101,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         fields = await _fields(request)
         # state first: a form that posts an impossible state is the error
         # worth reporting, even when the key is malformed too
-        state = _choice_field(fields, "state", ("done", "dismissed"))
+        # "open" is the pressed key pressed again: the item is reopened
+        state = _choice_field(fields, "state", ("done", "dismissed", "open"))
         key = _rec_key_field(fields)
-        reader.write(lambda s: s.set_recommendation_state(key, state))
-        flash = {"text": MARKED_DONE if state == "done" else DISMISSED}
+        if state == "open":
+            reader.write(lambda s: s.clear_recommendation_state(key))
+            flash = {"text": REOPENED}
+        else:
+            reader.write(lambda s: s.set_recommendation_state(key, state))
+            flash = {"text": MARKED_DONE if state == "done" else DISMISSED}
         return respond(request, fields, "partials/_rec_acts.html", flash,
-                       r={"key": key, "state": state})
+                       r={"key": key, "state": "" if state == "open" else state})
 
     return app
 
@@ -1955,6 +1980,7 @@ def _attention_rows(open_incidents: list[dict], attention: list[dict],
     def run(inv: dict) -> dict:
         status = str(inv.get("status") or "")
         return {"kind": "investigation", "id": inv.get("id"), "status": status,
+                "fingerprint": inv.get("fingerprint") or "",
                 "severity": fmt.status_pill(status)["label"],
                 "state": status,
                 "title": _subject(inv) or f"Investigation {inv.get('id')}",
@@ -2317,6 +2343,73 @@ def _incident_ctx(reader: StoreReader, fingerprint: str) -> dict:
     row = reader.read(lambda s: s.incident(fingerprint))
     return {"r": row or {"fingerprint": fingerprint, "host": "", "status": ""},
             "sup": _suppressions(reader).get(fingerprint)}
+
+
+def _lift_mute(reader: StoreReader, fingerprint: str) -> bool:
+    """Unmute ``fingerprint`` the way `heim incidents unmute` does: drop the
+    suppression, and only a ``suppressed`` incident goes back to open.
+    Returns whether there was a mute to lift."""
+    if not reader.write(lambda s: s.unsuppress(fingerprint)):
+        return False
+    incident = reader.read(lambda s: s.incident(fingerprint))
+    if incident and incident.get("status") == "suppressed":
+        reader.write(lambda s: s.set_incident_status(fingerprint, "open"))
+    return True
+
+
+#: what an investigate key reads while its subject is in flight
+_INFLIGHT_LABEL = {"running": "Investigating", "pending_approval": "Awaiting approval"}
+
+
+def _in_flight(reader: StoreReader) -> dict:
+    """What is already under way, per subject: ``{"fp": {...}, "host": {...}}``.
+
+    An entry is ``{"label", "href", "title"}`` for the pressed key that
+    replaces an investigate key. A running investigation outranks one awaiting
+    approval, which outranks a job still in the queue (it has no row of its
+    own yet, so it links to /investigations, where its ghost row is).
+    """
+    out: dict[str, dict] = {"fp": {}, "host": {}}
+
+    def put(fp: str, host: str, entry: dict) -> None:
+        if fp:
+            out["fp"].setdefault(fp, entry)
+        if host:
+            out["host"].setdefault(host, entry)
+
+    for status, label in _INFLIGHT_LABEL.items():
+        for inv in reader.read(lambda s, st=status: s.investigations(limit=50, status=st)):
+            put(str(inv.get("fingerprint") or ""), str(inv.get("host") or ""),
+                {"label": label, "href": f"/investigations/{inv.get('id')}",
+                 "title": f"investigation #{inv.get('id')}: {label.lower()}"})
+    for job in reader.read(lambda s: s.jobs(limit=50, status="queued")):
+        payload = job.get("payload") or {}
+        put(str(payload.get("fingerprint") or ""), str(payload.get("host") or ""),
+            {"label": "Investigating", "href": "/investigations",
+             "title": f"job #{job.get('id')}: queued for the daemon"})
+    return out
+
+
+def _inflight_for(inflight: dict, subject: dict) -> dict | None:
+    """The in-flight entry for one subject: its fingerprint when it has one
+    (an incident's run), else its host (a bare manual run)."""
+    fp = str(subject.get("fingerprint") or "")
+    if fp:
+        return inflight["fp"].get(fp)
+    return inflight["host"].get(str(subject.get("host") or ""))
+
+
+def _requested(job: dict | None, tz) -> dict:
+    """The feedback line after a queueing action: when it was asked for, and
+    where to watch it — the investigation once the daemon made one, else the
+    queue (the ghost row on /investigations). Time in the configured zone."""
+    job = job or {}
+    when = fmt.parse_dt(job.get("created_at")) or datetime.now(timezone.utc)
+    when = when.astimezone(tz)
+    inv = int(job.get("investigation_id") or 0)
+    link = ({"href": f"/investigations/{inv}", "label": f"investigation #{inv}"} if inv
+            else {"href": "/investigations", "label": "queue"})
+    return {"text": f"Requested {when:%H:%M}, {when.day} {when:%b} → ", "link": link}
 
 
 def _muted_text(suppression: dict | None) -> str:

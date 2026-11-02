@@ -253,7 +253,8 @@ def test_card_rerun_form_enqueues_a_retry(seeded_client):
     hx = seeded_client.post("/actions/retrigger",
                             data={"investigation_id": "2", "back": "/"},
                             headers={"hx-request": "true"})
-    assert hx.status_code == 200 and "Queued as job #2" in hx.text
+    assert hx.status_code == 200 and "Requested " in hx.text
+    assert '<a href="/investigations">queue</a>' in hx.text
 
 
 def test_footer_link_appears_past_six(many_client):

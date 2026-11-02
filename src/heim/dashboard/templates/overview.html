@@ -90,9 +90,7 @@
           {%- if wf.href %}{% set lead, run, n = wf.sub.rpartition('investigation ') %}{{ lead }}<a href="{{ wf.href }}">{{ run }}{{ n }}</a>
           {%- else %}{{ wf.sub }}{% endif %}</span>
           {%- if r.kind == 'investigation' %}</div>
-          <span class="acts">{{ m.act('/actions/retrigger', 'Re-run',
-            {'investigation_id': r.id},
-            confirm='Re-run investigation #' ~ r.id ~ '?') }}</span></div>
+          {% include "partials/_rerun_acts.html" %}</div>
           {%- endif %}</td>
         <td class="age num"><time{% if ts != DASH %} datetime="{{ ts }}" title="{{ ts }}"{% endif %}>{{ r.age }}</time></td>
       </tr>

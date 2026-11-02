@@ -94,7 +94,10 @@
 {%- endif %}
 {%- endmacro %}
 
-{% macro act(action, label, fields, confirm='', cls='', model=false) -%}
+{#- `on` makes it a pressed toggle: the state it stands for picks the family,
+    the key stays live (pressing it again undoes it) and says aria-pressed.
+    `body` replaces the plain label with markup (a verdict's lamp and word). -#}
+{% macro act(action, label, fields, confirm='', cls='', model=false, on='', body='') -%}
 <form class="act" method="post" action="{{ action }}" hx-post="{{ action }}"
       hx-target="closest .acts" hx-swap="outerHTML"
       {%- if confirm %} hx-confirm="{{ confirm }}"{% endif %}>
@@ -103,8 +106,18 @@
   {%- endfor %}
   <input type="hidden" name="back" value="{{ back|default('/', true) }}">
   {%- if model %}{{ modelselect() }}{% endif %}
-  <button class="btn{{ ' ember' if cls }}" type="submit">{{ label }}</button>
+  {%- if on %}
+  <button class="btn pressed {{ on|family }}" type="submit" aria-pressed="true" title="{{ label }}: press again to undo">{{ body or label }}</button>
+  {%- else %}
+  <button class="btn{{ ' ember' if cls }}" type="submit">{{ body or label }}</button>
+  {%- endif %}
 </form>
+{%- endmacro %}
+
+{#- an investigate key whose subject is already in flight (app._in_flight):
+    pressed green, saying what is under way, and a link to it. -#}
+{% macro inflight(e) -%}
+<a class="btn pressed {{ 'running'|family }}" href="{{ e.href }}" title="{{ e.title }}">{{ e.label }}</a>
 {%- endmacro %}
 
 {#- a key that has been pressed and now shows the outcome: inset, disabled,

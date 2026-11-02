@@ -1,5 +1,6 @@
 {#- the inline feedback line an action panel re-renders with (spec §5):
-    mono, --ink-2, no toast, no JS state. -#}
+    mono, --ink-2, no toast, no JS state. `link` ends it with where to look. -#}
 {%- if flash %}
-<p class="flash mono{{ ' err' if flash.err }}" role="status">{{ flash.text }}</p>
+<p class="flash mono{{ ' err' if flash.err }}" role="status">{{ flash.text }}
+  {%- if flash.link %}<a href="{{ flash.link.href }}">{{ flash.link.label }}</a>{% endif %}</p>
 {%- endif %}

@@ -1,20 +1,18 @@
-{#- a finding's verdict: the pair of keys, or once judged the chosen key,
-    pressed and disabled in its family (confirmed green, false positive set
-    aside, with its dark lamp). The word stays on the key; the DOM keeps the
-    lower-case verdict and CSS capitalises it. -#}
+{#- a finding's verdict: both keys, always. The chosen one is pressed in its
+    family (confirmed green, false positive set aside, with its dark lamp) and
+    stays live: pressing it again clears the verdict, pressing the other
+    switches it. The DOM keeps the lower-case verdict and CSS capitalises it. -#}
 {% import "partials/_macros.html" as m with context %}
+{%- set v = f.verdict or '' %}
 <div class="acts vacts">
-  {%- if f.verdict %}
-  <button class="btn pressed {{ f.verdict|family }}" type="button" disabled aria-pressed="true"
-          title="verdict: {{ f.verdict|replace('_', ' ') }}">
-    {%- if f.verdict == 'confirmed' %}<span class="verdict st-ok">confirmed</span>
-    {%- else %}{{ m.dot(f.verdict) }}<span class="verdict">{{ f.verdict|replace('_', ' ') }}</span>{% endif -%}
-  </button>
-  {%- else %}
-  {{ m.act('/actions/verdict', 'Confirm', {'finding_id': f.id, 'verdict': 'confirmed'}) }}
+  {{ m.act('/actions/verdict', 'Confirm',
+           {'finding_id': f.id, 'verdict': 'clear' if v == 'confirmed' else 'confirmed'},
+           on='confirmed' if v == 'confirmed' else '',
+           body=('<span class="verdict st-ok">confirmed</span>'|safe) if v == 'confirmed' else '') }}
   {{ m.act('/actions/verdict', 'False positive',
-           {'finding_id': f.id, 'verdict': 'false_positive'},
-           confirm='Mark this a false positive and mute its fingerprint?') }}
-  {%- endif %}
+           {'finding_id': f.id, 'verdict': 'clear' if v == 'false_positive' else 'false_positive'},
+           confirm='' if v == 'false_positive' else 'Mark this a false positive and mute its fingerprint?',
+           on='false_positive' if v == 'false_positive' else '',
+           body=(m.dot('false_positive') ~ ('<span class="verdict">false positive</span>'|safe)) if v == 'false_positive' else '') }}
   {% include "partials/_flash.html" %}
 </div>

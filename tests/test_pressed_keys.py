@@ -24,10 +24,11 @@ def _rec_key(client):
 def test_done_recommendation_shows_a_pressed_green_done_key(seeded_client):
     key = _rec_key(seeded_client)
     r = seeded_client.post("/actions/recommendation", data={"key": key, "state": "done"}, headers=HX)
-    assert 'class="btn pressed go" type="button" disabled aria-pressed="true"' in r.text
+    assert 'class="btn pressed go" type="submit" aria-pressed="true"' in r.text
     assert ">Done</button>" in r.text and "Marked done." in r.text
     assert 'class="pill' not in r.text and 'class="dot"' not in r.text
-    assert ">Dismiss<" not in r.text                      # no live keys on a handled row
+    # the other key stays live, so the choice can be switched
+    assert '<button class="btn" type="submit">Dismiss</button>' in r.text
     page = seeded_client.get("/recommendations").text.split("handled (1)", 1)[1]
     assert 'class="btn pressed go"' in page and ">Done</button>" in page
 
@@ -35,9 +36,9 @@ def test_done_recommendation_shows_a_pressed_green_done_key(seeded_client):
 def test_dismissed_recommendation_shows_a_pressed_red_dismiss_key(seeded_client):
     key = _rec_key(seeded_client)
     r = seeded_client.post("/actions/recommendation", data={"key": key, "state": "dismissed"}, headers=HX)
-    assert 'class="btn pressed crit" type="button" disabled aria-pressed="true"' in r.text
+    assert 'class="btn pressed crit" type="submit" aria-pressed="true"' in r.text
     assert ">Dismiss</button>" in r.text and "Dismissed." in r.text
-    assert ">Done<" not in r.text
+    assert '<button class="btn" type="submit">Done</button>' in r.text
     page = seeded_client.get("/recommendations").text.split("handled (1)", 1)[1]
     assert 'class="btn pressed crit"' in page and ">Dismiss</button>" in page
 

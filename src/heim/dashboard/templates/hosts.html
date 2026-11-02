@@ -24,7 +24,7 @@
       {{ m.sev(c.finding.severity) }} {{ c.finding.summary }} <span class="ink3 mono">{{ c.finding.run_at|rel }}</span>
       {%- else %}<span class="label">last finding</span> <span class="ink3">none recorded</span>{% endif %}</p>
     <p class="hline">{% if c.investigation %}<span class="label">last investigation</span>
-      <a class="mono" href="/investigations/{{ c.investigation.id }}">#{{ c.investigation.id }}</a>
+      <a class="mono invid" href="/investigations/{{ c.investigation.id }}">#{{ c.investigation.id }}</a>
       {{ m.pill(c.investigation.status) }} <span class="ink3 mono">{{ c.investigation.started_at|rel }}</span>
       {%- else %}<span class="label">last investigation</span> <span class="ink3">none yet</span>{% endif %}</p>
     {%- with host = c.name %}

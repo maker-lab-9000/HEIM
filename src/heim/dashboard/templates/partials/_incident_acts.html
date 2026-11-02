@@ -4,10 +4,15 @@
   {{ m.muted(sup) }}
   {{ m.act('/actions/unmute', 'Unmute', {'fingerprint': r.fingerprint}) }}
   {%- else %}
+  {%- set e = (inflight or {}).get('fp', {}).get(r.fingerprint) %}
+  {%- if e %}
+  {{ m.inflight(e) }}
+  {%- else %}
   {{ m.act('/actions/investigate', 'Investigate now',
            {'host': r.host, 'fingerprint': r.fingerprint},
            confirm='Queue an investigation for ' ~ (r.host or 'this host') ~ ' now?',
            model=true) }}
+  {%- endif %}
   {{ m.act('/actions/mute', 'Mark false positive', {'fingerprint': r.fingerprint},
            confirm='Mark this a false positive and mute the fingerprint?') }}
   {%- endif %}

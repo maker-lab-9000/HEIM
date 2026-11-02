@@ -1,0 +1,8 @@
+{#- the overview Needs-attention row's key: Re-run, or once a run for the
+    same subject is under way, the pressed key saying so (app._in_flight). -#}
+{% import "partials/_macros.html" as m with context %}
+<div class="acts">
+  {%- if r.inflight %}{{ m.inflight(r.inflight) }}
+  {%- else %}{{ m.act('/actions/retrigger', 'Re-run', {'investigation_id': r.id, 'cell': 'attention'},
+                      confirm='Re-run investigation #' ~ r.id ~ '?') }}{% endif %}
+  {%- include "partials/_flash.html" %}</div>

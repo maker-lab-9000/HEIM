@@ -214,6 +214,8 @@ b, strong, th { font-weight: 600; }
   opacity: 1; cursor: default; transform: translateY(1px); box-shadow: inset 0 2px 3px var(--shade);
   color: var(--tone); border-color: var(--tone); background: color-mix(in oklab, var(--tone) 14%, var(--panel));
 }
+/* a pressed key that is still live: pressing it again undoes it, or opens what it started */
+a.btn.pressed, .btn.pressed:enabled { cursor: pointer; }
 .btn.primary, .btn.ember { background: var(--signal-ink); border-color: var(--signal-edge); color: var(--on-signal); }
 .btn.primary:hover, .btn.ember:hover { background: var(--signal-edge); }
 .acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
@@ -225,7 +227,7 @@ form.act { display: inline-block; margin: 0; }
   letter-spacing: 0; text-transform: none;
 }
 .mselect { margin-right: 8px; }
-.flash { flex-basis: 100%; margin: 4px 0 0; font-size: var(--text-12); color: var(--ink-2); }
+.flash { flex-basis: 100%; min-width: 0; margin: 4px 0 0; font-size: var(--text-12); color: var(--ink-2); white-space: normal; overflow-wrap: anywhere; }
 .flash.err { color: var(--signal-ink); }
 .filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-bottom: 16px; }
 .filters label { display: flex; flex-direction: column; gap: 8px; }
@@ -427,9 +429,10 @@ details > summary:hover { color: var(--ink); }
 /* findings, security, recommendations, hosts: fixed column widths */
 .ftbl .c-sev { width: 8em; }
 .ftbl .c-host, .ftbl .c-metric, .rtbl .c-host { width: 12em; }
-.ftbl .c-verdict { width: 16em; }
+.ftbl .c-verdict { width: 17.5em; }
 .rtbl .c-acts { width: 15em; }
-.ftbl td .acts { margin: 0; flex-wrap: nowrap; }
+.ftbl td .acts { margin: 0; display: grid; grid-template-columns: auto auto; justify-content: start; }
+.ftbl td .acts .flash { grid-column: 1 / -1; }
 .ftbl .c-metric { overflow-wrap: normal; word-break: normal; }
 .stbl .c-trend { width: 8em; }
 .tbl .trend.is-new { color: var(--signal-ink); font-weight: 600; }
@@ -448,7 +451,7 @@ details > summary:hover { color: var(--ink); }
 .links { margin: 4px 0 0; padding: 0; list-style: none; }
 .links li { display: flex; gap: 8px; align-items: center; padding: 4px 0; font-size: var(--text-13); }
 .hlist { margin: 0; padding: 0; list-style: none; }
-.hhead, .hrow { display: grid; grid-template-columns: 11rem minmax(0, 1.5fr) minmax(0, 1.3fr) minmax(0, 1fr) 9rem; gap: 4px 24px; align-items: start; padding: 12px 0 12px 12px; border-bottom: 1px solid var(--line); font-size: var(--text-13); }
+.hhead, .hrow { display: grid; grid-template-columns: 10rem minmax(0, 1.3fr) minmax(0, 1.3fr) minmax(0, 1.3fr) 11rem; gap: 4px 24px; align-items: start; padding: 12px 0 12px 12px; border-bottom: 1px solid var(--line); font-size: var(--text-13); }
 .hhead { padding-block: 8px; }
 .hhead p, .hrow .hline > .label { margin: 0; }
 .hrow .hline > .label { display: none; }
@@ -460,6 +463,8 @@ details > summary:hover { color: var(--ink); }
 .hrow .hopen .lamp { margin-right: 4px; vertical-align: -3px; }
 .hrow .hline, .hrow .hopen { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; color: var(--ink-2); }
 .hrow .acts { margin: 0; }
+/* ids take one fixed tabular width, so the status lamps beside them line up */
+.hrow .invid { min-width: 5ch; font-variant-numeric: tabular-nums; }
 .own { white-space: nowrap; }
 :is(.incs, .ftbl) th, :is(.incs, .ftbl) td { padding-right: 12px; }
 .inc { overflow-x: auto; }

@@ -119,13 +119,14 @@ def test_a_judged_finding_shows_its_pressed_verdict_key(app_store, verdict, fam)
     client, ids, _store, _cfg = app_store
     fid = ids["finding_temp"]
     r = client.post("/actions/verdict", data={"finding_id": fid, "verdict": verdict}, headers=HX)
-    assert f'class="btn pressed {fam}" type="button" disabled aria-pressed="true"' in r.text
+    assert f'class="btn pressed {fam}" type="submit" aria-pressed="true"' in r.text
     html = client.get("/findings").text
     cells = re.findall(r'<td class="c-verdict">(.*?)</td>', html, re.S)
     judged = [c for c in cells if 'class="btn pressed' in c]
     assert len(judged) == 1
     assert f'class="btn pressed {fam}"' in judged[0]
-    assert "<form" not in judged[0] and f'value="{fid}"' not in judged[0]
+    # both keys stay live: the pressed one clears, the other switches
+    assert judged[0].count("<form") == 2 and 'name="verdict" value="clear"' in judged[0]
     if verdict == "false_positive":   # the dark lamp sits in front of the words
         assert '<span class="dot" aria-hidden="true"></span><span class="verdict">false positive' in judged[0]
 

@@ -140,7 +140,8 @@ def test_detail_and_recommendation_fold_into_the_finding_cell(client):
 
 def test_verdict_cell_offers_the_pair_or_shows_the_pill(client, ids):
     table = _table(client.get("/findings").text)
-    assert table.count(">Confirm<") == 3                 # drive_temp is judged
+    assert table.count('class="btn pressed') == 1       # drive_temp is judged
+    assert table.count(">False positive<") == 4          # every row keeps the other key
     assert 'class="verdict st-ok"' in table and "confirmed" in table
     # the form lives inside the verdict cell, with its finding id and back field
     cells = re.findall(r'<td class="c-verdict">(.*?)</td>', table, re.S)
@@ -157,7 +158,9 @@ def test_verdict_post_still_updates_the_cell(client, ids):
     assert r.status_code == 200
     assert "<html" not in r.text                         # a fragment for the cell
     assert 'class="verdict st-ok"' in r.text
-    assert ">Confirm<" not in r.text
+    # the chosen key pressed (and live: pressing again clears), the other still offered
+    assert 'class="btn pressed go" type="submit" aria-pressed="true"' in r.text
+    assert ">False positive</button>" in r.text and "disabled" not in r.text
     assert "confirmed" in _table(client.get("/findings").text)
 
 
@@ -301,7 +304,7 @@ def test_critical_rows_are_flagged_and_info_is_secondary(client):
 def test_unjudged_verdict_keys_sit_side_by_side_in_one_container(client):
     table = _table(client.get("/findings").text)
     cells = re.findall(r'<td class="c-verdict">(.*?)</td>', table, re.S)
-    open_cells = [c for c in cells if ">Confirm<" in c]
+    open_cells = [c for c in cells if 'class="btn pressed' not in c]
     assert open_cells
     for c in open_cells:
         assert c.count('class="acts vacts"') == 1 and ">False positive<" in c
