@@ -72,7 +72,9 @@ Decline red; False positive grey.
 - **Agents** (`/agents`). The seven agents with state, scope, last success and a run
   strip; a stale or failing one gets a monitoring-gap line. Each has a page
   (`/agents/<key>`) with its coverage, cadence, last error, a run table, a link to its
-  evidence and, for the investigator and the security audit, its last 50 tool calls.
+  evidence and, for the investigator and the security audit, its last 50 tool calls with
+  that agent's tooling feedback. Below the agents table, a Tooling feedback panel lists the
+  newest 50 suggestions from all agents.
 - **Investigations.** A filterable list (status, host, trigger). Running rows refresh
   every 5 seconds; queued jobs appear as ghost rows on top. The detail page shows the
   header (host, status, trigger, agent and model, tokens, cost, duration, fingerprint),

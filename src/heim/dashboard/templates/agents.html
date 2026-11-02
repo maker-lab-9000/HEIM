@@ -1,7 +1,39 @@
 {% extends "base.html" %}
+{% import "partials/_macros.html" as m %}
 {% block switch %}{% include "partials/_window_switch.html" %}{% endblock %}
 {% block content %}
 {#- the whole Agents panel, the same partial the overview embeds; its switch
     and gap lines are plain links, so the page needs no script. -#}
 {% include "partials/_agents_table.html" %}
+<section class="panel" id="feedback" aria-labelledby="h-fb">
+  <div class="panel-head">
+    <h2 id="h-fb">Tooling feedback</h2>
+    <span class="label">{{ feedback_total }} suggestion{{ '' if feedback_total == 1 else 's' }}</span>
+  </div>
+  {%- if feedback %}
+  <div class="inc"><table class="tbl dense">
+    <thead><tr>
+      <th scope="col" class="label">Tool</th><th scope="col" class="label">Suggestion</th>
+      <th scope="col" class="label">Agent</th><th scope="col" class="label">Investigation</th>
+      <th scope="col" class="label">Age</th>
+    </tr></thead>
+    <tbody>
+      {%- for f in feedback %}
+      <tr>
+        <td>{{ m.tool(f.tool) }}</td>
+        <td>{{ f.suggestion }}</td>
+        <td>{% if f.agent_key %}<a href="/agents/{{ f.agent_key }}">{{ f.agent_label }}</a>{% else %}{{ f.agent_label or DASH }}{% endif %}</td>
+        <td><a href="/investigations/{{ f.investigation_id }}">investigation {{ f.investigation_id }}</a></td>
+        <td>{{ m.when(f.created_at) }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table></div>
+  {%- if feedback_capped %}
+  <p><a class="more" href="/agents?{{ qs_with(feedback='all') }}#feedback">All {{ feedback_total }} suggestions<span class="arr" aria-hidden="true">→</span></a></p>
+  {%- endif %}
+  {%- else %}
+  <p class="empty">No tooling feedback yet. Agents add it at the end of a report.</p>
+  {%- endif %}
+</section>
 {% endblock %}
