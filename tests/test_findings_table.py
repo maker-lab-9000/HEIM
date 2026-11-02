@@ -96,7 +96,8 @@ def test_findings_render_as_a_table_with_header_cells(client):
     table = _table(html)
     for col in ("severity", "host", "metric", "finding", "verdict"):
         assert f'<th scope="col"' in table and f">{col}</th>" in table
-    assert table.count("<tr>") - 1 == 4                  # header + one per finding
+    # one finding row each; flagged rows and the detail (xbody) rows are not bare <tr>
+    assert table.count('<tr class="frow') == 4
     # fixed column classes keep the widths stable between runs
     for cls in ("c-sev", "c-host", "c-metric", "c-verdict"):
         assert cls in table
@@ -105,7 +106,9 @@ def test_findings_render_as_a_table_with_header_cells(client):
 
 def test_rows_keep_severity_order_and_show_severity_pills(client):
     table = _table(client.get("/findings").text)
-    assert "st-crit" in table and "st-warn" in table and "st-muted" in table
+    for cls in ("crit", "warn", "other"):             # coloured words, no st-* lamps
+        assert f'<span class="word {cls}">' in table
+    assert "st-crit" not in table and 'class="sev' not in table
     for label in ("critical", "warning", "info"):
         assert f">{label}</span>" in table
     order = [table.index(s) for s in ("Memory climbing on ubuntu-server",
@@ -124,17 +127,21 @@ def test_detail_and_recommendation_fold_into_the_finding_cell(client):
     table = _table(client.get("/findings").text)
     # only the two findings that stored a detail get a disclosure
     assert table.count("detail &amp; recommendation") == 2
-    # the details element is inside the cell that holds the summary
-    cell = table[table.index('<span class="fsum">Memory climbing'):]
-    cell = cell[:cell.index("</td>")]
-    assert "<details>" in cell
-    assert "Working set grew 18% over three days." in cell
-    assert "Cap the PhotoPrism container." in cell
+    # the toggle sits in the finding's own row; its text opens in the next tr.xbody (no JS)
+    row = table[table.rindex("<tr", 0, table.index('<span class="fsum">Memory climbing')):]
+    own = row[:row.index("</tr>")]
+    assert '<details class="xrow">' in own and "Working set grew" not in own
+    nxt = row[row.index("</tr>") + 5:].lstrip()
+    assert nxt.startswith('<tr class="xbody">')
+    nxt = nxt[:nxt.index("</tr>")]
+    assert "Working set grew 18% over three days." in nxt
+    assert "Cap the PhotoPrism container." in nxt
 
 
 def test_verdict_cell_offers_the_pair_or_shows_the_pill(client, ids):
     table = _table(client.get("/findings").text)
-    assert table.count("✓ CONFIRM") == 3                 # drive_temp is judged
+    assert table.count('class="btn pressed') == 1       # drive_temp is judged
+    assert table.count(">False positive<") == 4          # every row keeps the other key
     assert 'class="verdict st-ok"' in table and "confirmed" in table
     # the form lives inside the verdict cell, with its finding id and back field
     cells = re.findall(r'<td class="c-verdict">(.*?)</td>', table, re.S)
@@ -151,7 +158,9 @@ def test_verdict_post_still_updates_the_cell(client, ids):
     assert r.status_code == 200
     assert "<html" not in r.text                         # a fragment for the cell
     assert 'class="verdict st-ok"' in r.text
-    assert "✓ CONFIRM" not in r.text
+    # the chosen key pressed (and live: pressing again clears), the other still offered
+    assert 'class="btn pressed go" type="submit" aria-pressed="true"' in r.text
+    assert ">False positive</button>" in r.text and "disabled" not in r.text
     assert "confirmed" in _table(client.get("/findings").text)
 
 
@@ -280,3 +289,38 @@ def test_overview_empty_run_state_unchanged(tmp_path, monkeypatch):
         html = client.get("/").text
         assert "No daily run recorded yet." in html
         assert "DETAILS" not in html
+
+
+# ------------------------------------------- the incidents design (2026-11-02)
+
+def test_critical_rows_are_flagged_and_info_is_secondary(client):
+    table = _table(client.get("/findings").text)
+    flagged = re.findall(r'<tr class="frow flag">(.*?)</tr>', table, re.S)
+    assert flagged and all('<span class="word crit">' in r for r in flagged)
+    assert table.count('<tr class="frow flag">') == table.count('<span class="word crit">')
+    assert '<tr class="frow">' in table
+
+
+def test_unjudged_verdict_keys_sit_side_by_side_in_one_container(client):
+    table = _table(client.get("/findings").text)
+    cells = re.findall(r'<td class="c-verdict">(.*?)</td>', table, re.S)
+    open_cells = [c for c in cells if 'class="btn pressed' not in c]
+    assert open_cells
+    for c in open_cells:
+        assert c.count('class="acts vacts"') == 1 and ">False positive<" in c
+    css = open("src/heim/dashboard/static/heim.css").read()
+    assert "flex-direction: column" not in css.split(".ftbl td .acts")[1].split("\n")[0]
+
+
+def test_detail_head_and_metric_breaks_only_at_spaces(client):
+    table = _table(client.get("/findings").text)
+    assert '<th scope="col" class="c-more">detail</th>' in table
+    css = open("src/heim/dashboard/static/heim.css").read()
+    assert ".ftbl .c-metric { overflow-wrap: normal; word-break: normal; }" in css
+
+
+def test_incidents_table_fits_the_card_by_wrapping_the_detail_column():
+    css = open("src/heim/dashboard/static/heim.css").read()
+    assert ":is(.incs, .ftbl) .more { white-space: normal; width: 9em; }" in css
+    assert ":is(.incs, .ftbl) .more summary { white-space: normal; }" in css
+    assert ".inc { overflow-x: auto; }" in css

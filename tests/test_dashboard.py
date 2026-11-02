@@ -304,7 +304,7 @@ def test_investigation_detail_transcript(client, ids):
         or "topk(10, container_memory_working_set_bytes" in html
     assert "sudo agent-docker stats --no-stream" in html
     # blocked step treatment
-    assert "⛔ blocked" in html
+    assert ">blocked<" in html
     assert 'class="entry blocked"' in html
     # result previews are native <details>
     assert "<details" in html and "expand" in html
@@ -408,7 +408,7 @@ def test_transcript_partial_is_a_fragment(client, ids):
     assert r.status_code == 200
     assert "<html" not in r.text
     assert r.text.lstrip().startswith('<div id="transcript"')
-    assert "⛔ blocked" in r.text
+    assert ">blocked<" in r.text
 
 
 def test_unknown_investigation_is_404(client):
@@ -436,7 +436,7 @@ def test_incidents_page(client):
     html = client.get("/incidents").text
     assert "critical" in html and "warning" in html
     assert "open" in html and "resolved" in html
-    assert "🔒" in html                                   # dispatch lock
+    assert "Locked" in html                               # dispatch lock
     assert "×7" in html                                   # timesSeen
     assert "Working set grew 18% over three days." in html   # expansion body
     assert "linked investigations" in html
@@ -485,13 +485,15 @@ def test_weight_budget_and_no_cdn():
     fixed-column geometry, the rail tagline, the health card and the
     tool-usage card, landing at ~17 KB. It is still one hand-written file with no build step, and still
     the only stylesheet the pages load.
+    2026-11-01: the console redesign; one raise for all of it (32 KB).
+    2026-11-02: operator follow-ups (pressed keys, aligned cards, Details keys); 36 KB.
     """
     static = Path(__file__).resolve().parent.parent / "src/heim/dashboard/static"
     # §11's token chart adds ~0.4 KB of SVG styling (7 rules), so 17.5 -> 20 KB
     # §9's recommendations table adds 6 column rules, so 20 -> 20.25 KB
     # §5.1's model picker adds one rule (5 declarations), so 20.25 -> 20.5 KB
     # /security (the audit by severity) adds 3 rules, so 20.5 -> 20.75 KB
-    assert (static / "heim.css").stat().st_size <= 21_248
+    assert (static / "heim.css").stat().st_size <= 36_864
     assert (static / "htmx.min.js").stat().st_size > 10_000
     templates = (Path(__file__).resolve().parent.parent
                  / "src/heim/dashboard/templates")
@@ -511,6 +513,25 @@ def test_hosts_cards(client, cfg_hosts=("ubuntu-server", "homelab", "home-assist
     assert "open incident" in html
     assert "last finding" in html and "last investigation" in html
     assert "no open incidents" in html          # home-assistant has none open
+
+
+def test_hosts_page_has_column_heads_and_vm_tags(client):
+    import re
+    html = client.get("/hosts").text
+    head = re.search(r'<div class="hhead".*?</div>', html, re.S).group(0)
+    for col in ("Host", "Open incidents", "Last finding", "Last investigation", "Action"):
+        assert f'<p class="label">{col}</p>' in head
+    assert "VM 100" in html and "VM 101" in html and "VM 103" in html
+    assert re.search(r'class="label role"[^>]*>Hypervisor<', html)
+
+
+def test_host_vmid_is_optional_and_yamls_carry_it(tmp_path, monkeypatch):
+    from heim.config import Host
+    assert Host(name="x", role="guest").vmid is None
+    assert Host(name="x", role="guest", vmid=7).vmid == 7
+    hosts = _config(tmp_path, monkeypatch).hosts
+    assert (hosts["ubuntu-server"].vmid, hosts["home-assistant"].vmid,
+            hosts["heim"].vmid, hosts["homelab"].vmid) == (100, 101, 103, None)
 
 
 # ---------------------------------------------------------------------- auth

@@ -63,7 +63,7 @@ def test_theme_auto_is_default_and_bad_values_ignored(client):
 def test_css_has_light_tokens_and_no_stray_dark_hexes(client):
     css = client.get("/static/heim.css").text
     assert '[data-theme="light"]' in css
-    assert "#B05E1A" in css       # validated light ember
+    assert "#1F1A15" in css       # the console's light ink
     # identity palettes are mode-invariant — must NOT be redefined in the light block
     light = css[css.index('[data-theme="light"]'):]
     assert "--tool-ssh" not in light and "--ok:" not in light
@@ -93,10 +93,10 @@ def test_toggle_form_cycles_auto_light_dark_and_works_without_js(client):
     assert toggle(None)[0] == "light"          # auto → light
     assert toggle("light")[0] == "dark"        # light → dark
     assert toggle("dark")[0] == "auto"         # dark → auto
-    # the icon is the lockup's own vocabulary (§10): ☀ light · ☾ dark · ◐ auto
-    assert ">☀<" in toggle("light")[1]
-    assert ">☾<" in toggle("dark")[1]
-    assert ">◐<" in toggle(None)[1]
+    # the toggle says its state as a word (operator ruling 2026-11-01: no emoji)
+    assert ">Light<" in toggle("light")[1]
+    assert ">Dark<" in toggle("dark")[1]
+    assert ">Auto<" in toggle(None)[1]
     # the glyph is not an accessible name and `title` is not reliably
     # announced, so the button says what it does out loud
     assert 'aria-label="theme: light — switch to dark"' in toggle("light")[1]

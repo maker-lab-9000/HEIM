@@ -52,6 +52,10 @@ _SPEND_TABLES = (("investigations", "started_at"), ("runs", "run_at"))
 #: the shorter of the retention window and this many days.
 JOB_RETENTION_MAX_DAYS = 30
 
+#: Heartbeat rows (``agent_runs``) are written every 5 minutes per poll agent;
+#: two weeks is ample for the dashboard's strip and keeps the table small.
+AGENT_RUNS_RETENTION_DAYS = 14
+
 #: Reclaiming space costs a full file rewrite, so only do it when a prune
 #: actually freed something worth rewriting for.
 VACUUM_AFTER_DELETIONS = 500
@@ -195,10 +199,41 @@ CREATE TABLE IF NOT EXISTS threshold_streaks (
     last_seen   TEXT NOT NULL DEFAULT ''
 );
 
+-- Heartbeats: one row per scheduled run of a daemon agent (poll halves, daily,
+-- security audit, backup). Written by the daemon only, read by the dashboard to
+-- show whether each agent is actually functioning.
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent       TEXT NOT NULL,
+    started_at  TEXT NOT NULL,
+    finished_at TEXT NOT NULL DEFAULT '',
+    ok          INTEGER NOT NULL DEFAULT 1,
+    error       TEXT NOT NULL DEFAULT '',
+    detail_json TEXT NOT NULL DEFAULT '{}'
+);
+
+-- Uptime Kuma source: per-monitor hysteresis/flap state, and the count of
+-- consecutive failed polls of Kuma itself. Persisted so a daemon restart
+-- cannot reset a recovery streak, a flap window or the unreachable counter.
+CREATE TABLE IF NOT EXISTS uptime_monitors (
+    fingerprint       TEXT PRIMARY KEY,
+    up_polls          INTEGER NOT NULL DEFAULT 0,
+    absent_polls      INTEGER NOT NULL DEFAULT 0,
+    last_recovered_at TEXT NOT NULL DEFAULT '',
+    flap_outages      INTEGER NOT NULL DEFAULT 0,
+    flap_msg_at       TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS uptime_source (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    fail_polls  INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_steps_investigation ON investigation_steps (investigation_id, seq);
 CREATE INDEX IF NOT EXISTS idx_tool_feedback_tool ON tool_feedback (tool, id);
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings (run_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status, id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent ON agent_runs (agent, started_at);
 """
 
 #: Columns added to tables that already exist in deployed databases. Applied
@@ -644,6 +679,54 @@ class IncidentStore:
                  "tokens": int(r["tokens"] or 0)}
                 for r in cur.fetchall()]
 
+    def tool_calls(self, agent_names: list[str], limit: int = 50,
+                   since: str | None = None) -> list[dict]:
+        """The newest tool calls of the investigations run by ``agent_names``.
+
+        Steps carry no clock of their own, so a call is dated by its
+        investigation's ``started_at`` (``since`` filters on it). Newest
+        first; ties break on the step id so the order is stable.
+        """
+        if not agent_names:
+            return []
+        marks = ",".join("?" * len(agent_names))
+        sql = f"""SELECT s.id AS id, s.investigation_id AS investigation_id, s.seq AS seq,
+                         s.tool AS tool, s.args_json AS args_json,
+                         s.blocked AS blocked, s.duration_ms AS duration_ms,
+                         i.started_at AS at, i.agent_name AS agent_name
+                  FROM investigation_steps s
+                  JOIN investigations i ON i.id = s.investigation_id
+                  WHERE i.agent_name IN ({marks})"""
+        params: list = list(agent_names)
+        if since:
+            sql += " AND i.started_at >= ?"
+            params.append(since)
+        sql += " ORDER BY i.started_at DESC, s.id DESC LIMIT ?"
+        params.append(int(limit))
+        return [{"id": int(r["id"]), "investigation_id": int(r["investigation_id"] or 0),
+                 "seq": int(r["seq"] or 0), "tool": str(r["tool"] or ""),
+                 "args_json": str(r["args_json"] or ""), "blocked": bool(r["blocked"]),
+                 "duration_ms": int(r["duration_ms"] or 0), "at": str(r["at"] or ""),
+                 "agent_name": str(r["agent_name"] or "")}
+                for r in self._db.execute(sql, params).fetchall()]
+
+    def tool_call_counts(self, agent_names: list[str], since: str | None = None) -> dict:
+        """``{"calls": n, "blocked": n}`` over the same rows ``tool_calls``
+        reads (blocked calls are calls)."""
+        if not agent_names:
+            return {"calls": 0, "blocked": 0}
+        marks = ",".join("?" * len(agent_names))
+        sql = f"""SELECT COUNT(*) AS calls, COALESCE(SUM(s.blocked), 0) AS blocked
+                  FROM investigation_steps s
+                  JOIN investigations i ON i.id = s.investigation_id
+                  WHERE i.agent_name IN ({marks})"""
+        params: list = list(agent_names)
+        if since:
+            sql += " AND i.started_at >= ?"
+            params.append(since)
+        r = self._db.execute(sql, params).fetchone()
+        return {"calls": int(r["calls"] or 0), "blocked": int(r["blocked"] or 0)}
+
     # ------------------------------------------------------- tool feedback
 
     def add_tool_feedback(self, investigation_id: int, tool: str, suggestion: str,
@@ -994,6 +1077,56 @@ class IncidentStore:
         )
         return {str(r["fingerprint"]) for r in cur.fetchall()}
 
+    # ------------------------------------------------------- heartbeats
+
+    def record_agent_run(self, agent: str, started_at: str, finished_at: str, ok: bool,
+                         error: str = "", detail: dict | None = None) -> int:
+        cur = self._db.execute(
+            "INSERT INTO agent_runs (agent, started_at, finished_at, ok, error, detail_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (str(agent), str(started_at), str(finished_at), 1 if ok else 0, str(error or ""),
+             json.dumps(detail or {}, ensure_ascii=False, default=str)),
+        )
+        self._db.commit()
+        return int(cur.lastrowid or 0)
+
+    @staticmethod
+    def _agent_run_row(r) -> dict:
+        try:
+            detail = json.loads(r["detail_json"] or "{}")
+        except (TypeError, ValueError):
+            detail = {}
+        return {"agent": str(r["agent"]), "started_at": str(r["started_at"] or ""),
+                "finished_at": str(r["finished_at"] or ""), "ok": bool(r["ok"]),
+                "error": str(r["error"] or ""),
+                "detail": detail if isinstance(detail, dict) else {}}
+
+    def agent_runs(self, agent: str, limit: int = 24, since: str | None = None) -> list[dict]:
+        """Newest first. ``since`` is an inclusive lower bound on ``started_at``."""
+        sql = "SELECT * FROM agent_runs WHERE agent = ?"
+        params: list = [str(agent)]
+        if since:
+            sql += " AND started_at >= ?"
+            params.append(str(since))
+        sql += " ORDER BY started_at DESC, id DESC LIMIT ?"
+        params.append(int(limit))
+        return [self._agent_run_row(r) for r in self._db.execute(sql, params).fetchall()]
+
+    def agent_runs_by_agent(self, limit_per_agent: int = 24,
+                            since: str | None = None) -> dict[str, list[dict]]:
+        agents = [r["agent"] for r in self._db.execute(
+            "SELECT DISTINCT agent FROM agent_runs").fetchall()]
+        return {a: self.agent_runs(a, limit_per_agent, since) for a in agents}
+
+    def agent_first_seen(self) -> dict[str, str]:
+        """``agent -> started_at`` of its oldest stored heartbeat. Bounded by
+        the 14-day ``agent_runs`` retention, so it means "first seen in what
+        the store still holds". The window strips use it so slots before an
+        agent's first run never read as missed. (Lexical MIN, like the
+        ``since`` bound: the daemon writes one timezone's ISO strings.)"""
+        return {str(r["agent"]): str(r["first"] or "") for r in self._db.execute(
+            "SELECT agent, MIN(started_at) AS first FROM agent_runs GROUP BY agent").fetchall()}
+
     # ----------------------------------------------- threshold hysteresis
 
     def threshold_streaks(self) -> dict[str, dict]:
@@ -1038,6 +1171,72 @@ class IncidentStore:
         self._db.commit()
         return int(n)
 
+    # ------------------------------------------------ Uptime Kuma state
+
+    def uptime_states(self) -> dict[str, dict]:
+        """``fingerprint -> {fingerprint, up_polls, absent_polls,
+        last_recovered_at, flap_outages, flap_msg_at}`` for every tracked monitor."""
+        cur = self._db.execute(
+            "SELECT fingerprint, up_polls, absent_polls, last_recovered_at,"
+            " flap_outages, flap_msg_at FROM uptime_monitors"
+        )
+        return {str(r["fingerprint"]): {
+                    "fingerprint": str(r["fingerprint"]),
+                    "up_polls": int(r["up_polls"] or 0),
+                    "absent_polls": int(r["absent_polls"] or 0),
+                    "last_recovered_at": str(r["last_recovered_at"] or ""),
+                    "flap_outages": int(r["flap_outages"] or 0),
+                    "flap_msg_at": str(r["flap_msg_at"] or "")}
+                for r in cur.fetchall()}
+
+    def save_uptime_states(self, rows: list[dict]) -> None:
+        """Upsert monitor-state rows (the keys of :meth:`uptime_states`)."""
+        for row in rows or []:
+            self._db.execute(
+                """INSERT INTO uptime_monitors (fingerprint, up_polls, absent_polls,
+                       last_recovered_at, flap_outages, flap_msg_at)
+                   VALUES (:fingerprint, :up_polls, :absent_polls,
+                       :last_recovered_at, :flap_outages, :flap_msg_at)
+                   ON CONFLICT(fingerprint) DO UPDATE SET
+                     up_polls = excluded.up_polls,
+                     absent_polls = excluded.absent_polls,
+                     last_recovered_at = excluded.last_recovered_at,
+                     flap_outages = excluded.flap_outages,
+                     flap_msg_at = excluded.flap_msg_at""",
+                {"fingerprint": str(row.get("fingerprint") or ""),
+                 "up_polls": int(row.get("up_polls") or 0),
+                 "absent_polls": int(row.get("absent_polls") or 0),
+                 "last_recovered_at": str(row.get("last_recovered_at") or ""),
+                 "flap_outages": int(row.get("flap_outages") or 0),
+                 "flap_msg_at": str(row.get("flap_msg_at") or "")},
+            )
+        self._db.commit()
+
+    def clear_uptime_states(self, fingerprints) -> int:
+        """Forget monitors that no longer need tracking; returns rows deleted."""
+        n = 0
+        for fp in fingerprints or []:
+            n += self._db.execute(
+                "DELETE FROM uptime_monitors WHERE fingerprint = ?", (str(fp),)
+            ).rowcount
+        self._db.commit()
+        return int(n)
+
+    def uptime_fail_polls(self) -> int:
+        """Consecutive failed polls of Uptime Kuma itself (0 when unset)."""
+        r = self._db.execute(
+            "SELECT fail_polls FROM uptime_source WHERE id = 1"
+        ).fetchone()
+        return int(r["fail_polls"] or 0) if r else 0
+
+    def set_uptime_fail_polls(self, n: int) -> None:
+        self._db.execute(
+            """INSERT INTO uptime_source (id, fail_polls) VALUES (1, ?)
+               ON CONFLICT(id) DO UPDATE SET fail_polls = excluded.fail_polls""",
+            (int(n),),
+        )
+        self._db.commit()
+
     # -------------------------------------------- backup & retention (§5.7)
 
     def backup_to(self, dest_path: str | Path) -> Path:
@@ -1073,10 +1272,13 @@ class IncidentStore:
         - ``jobs`` in a terminal state (done/failed/interrupted), on the
           shorter of the retention window and ``JOB_RETENTION_MAX_DAYS`` —
           a closed job is a receipt, not history worth months of disk
+        - ``agent_runs`` (heartbeats) older than ``AGENT_RUNS_RETENTION_DAYS``,
+          on their own fixed window, whatever ``retention_days`` says
 
         Never touched: suppressions, open/clearing/suppressed incidents,
         unfinished investigations, queued/running jobs. ``retention_days <= 0``
-        means "keep forever" and is a no-op. Only non-zero counts are returned,
+        means "keep forever": every table above is kept, except that the
+        heartbeat window still applies. Only non-zero counts are returned,
         so an idle night logs nothing.
 
         Timestamps are compared lexically (the store's convention, cf.
@@ -1084,18 +1286,24 @@ class IncidentStore:
         offset as ``now_iso``, so mixed-offset rows can be off by the offset
         difference — hours at the edge of a 120-day window, which is fine.
         """
-        days = int(retention_days or 0)
-        if days <= 0:
-            return {}
-        cutoff = _shift_iso(now_iso, days)
-        job_cutoff = _shift_iso(now_iso, min(days, JOB_RETENTION_MAX_DAYS))
-
         counts: dict[str, int] = {}
 
         def _delete(table: str, where: str, params: tuple) -> None:
             n = self._db.execute(f"DELETE FROM {table} WHERE {where}", params).rowcount
             if n > 0:
                 counts[table] = counts.get(table, 0) + int(n)
+
+        # Heartbeats have their own fixed window, independent of
+        # ``retention_days`` (even "keep forever" must not grow this table).
+        _delete("agent_runs", "started_at != '' AND started_at < ?",
+                (_shift_iso(now_iso, AGENT_RUNS_RETENTION_DAYS),))
+
+        days = int(retention_days or 0)
+        if days <= 0:
+            self._db.commit()
+            return counts
+        cutoff = _shift_iso(now_iso, days)
+        job_cutoff = _shift_iso(now_iso, min(days, JOB_RETENTION_MAX_DAYS))
 
         # children first, while their parents are still selectable
         _delete("investigation_steps",
@@ -1160,6 +1368,13 @@ class IncidentStore:
             (str(key), state, self._now()),
         )
         self._db.commit()
+
+    def clear_recommendation_state(self, key: str) -> bool:
+        """Reopen ``key``: drop its mark, since "open" is the absence of a row.
+        Returns whether there was a mark to drop."""
+        cur = self._db.execute("DELETE FROM recommendation_states WHERE key = ?", (str(key),))
+        self._db.commit()
+        return cur.rowcount > 0
 
     def recommendation_states(self) -> dict[str, dict]:
         """``key → {"state": …, "created_at": …}`` for every marked item."""

@@ -8,7 +8,7 @@
     <select name="status">
       <option value="">any</option>
       {%- for s in filters.statuses %}
-      <option value="{{ s }}"{{ ' selected' if s == filters.status }}>{{ s|replace('_', ' ') }}</option>
+      <option value="{{ s }}"{{ ' selected' if s == filters.status }}>{{ 'needs you' if s == 'needs_human' else s|replace('_', ' ') }}</option>
       {%- endfor %}
     </select>
   </label>
@@ -33,7 +33,7 @@
 </form>
 
 <section class="card">
-  <table class="tbl dense">
+  <table class="tbl dense flg">
     <thead><tr>
       <th scope="col" class="c-id">id</th>
       <th scope="col">status</th>

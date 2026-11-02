@@ -2,13 +2,15 @@
 {% import "partials/_macros.html" as m with context %}
 {% block content %}
 
-<section class="card">
+<section class="panel inc">
+  <div class="panel-head"><h2>Incidents</h2><p class="label">newest first</p></div>
   {%- if rows %}
   <div class="rows-and-more">
-  <table class="tbl dense">
+  <table class="tbl dense flg incs">
     <thead><tr>
       <th scope="col">severity</th>
       <th scope="col">status</th>
+      <th scope="col">ownership</th>
       <th scope="col">host</th>
       <th scope="col">metric</th>
       <th scope="col">fingerprint</th>
@@ -16,26 +18,31 @@
       <th scope="col" class="num">missed</th>
       <th scope="col">first seen</th>
       <th scope="col">last seen</th>
+      <th scope="col">detail</th>
     </tr></thead>
     <tbody>
       {%- for r in rows %}
-      <tr>
-        <td>{{ m.sev(r.severity) }}</td>
-        <td>{{ m.pill(r.status) }}{% if r.investigated %} <span class="lock"
-            title="investigated — the dispatch lock is held">🔒</span>{% endif %}
-          {%- if r.suppression %} {{ m.muted(r.suppression) }}{% endif %}</td>
+      <tr{% if r.status == 'open' and r.severity == 'critical' %} class="flag"{% endif %}>
+        <td>{{ m.word(r.severity) }}</td>
+        <td>{{ m.word(r.status) }}{% if r.investigated %} <span class="lock"
+            title="investigated — the dispatch lock is held">Locked</span>{% endif %}
+          {%- if r.suppression %} <span class="word other">muted · until
+            {{ r.suppression.until|day if r.suppression.until else 'further notice' }}</span>{% endif %}</td>
+        <td class="own">{{ r.description|ownership }}</td>
         <td>{{ m.hostbadge(r.host) }}</td>
         <td class="mono ink2">{{ r.metric or DASH }}</td>
-        <td class="mono ink2" title="{{ r.fingerprint }}">{{ r.fingerprint|fp }}</td>
+        <td class="mono ink2" title="{{ r.fingerprint }}">{{ r.fingerprint|fp|e|replace('|', '|<wbr>'|safe) }}</td>
         <td class="num mono">×{{ r.timesSeen }}</td>
         <td class="num mono">{{ r.missedRuns }}</td>
         <td>{{ m.when(r.firstSeen) }}</td>
         <td>{{ m.when(r.lastSeen) }}</td>
+        <td class="more">
+          <details class="xrow">
+            <summary class="btn" title="what this incident says">Details</summary>
+          </details>
+        </td>
       </tr>
-      <tr class="xrow">
-        <td colspan="9">
-          <details>
-            <summary>what this incident says</summary>
+      <tr class="xbody"><td colspan="11">
             <p class="prose">{{ r.description or 'No description stored for this incident.' }}</p>
             {%- if r.investigations %}
             <p class="eyebrow">linked investigations</p>
@@ -52,9 +59,7 @@
             {%- with sup = r.suppression %}
             {% include "partials/_incident_acts.html" %}
             {%- endwith %}
-          </details>
-        </td>
-      </tr>
+      </td></tr>
       {%- endfor %}
     </tbody>
   </table>
@@ -63,7 +68,7 @@
   <p class="loadmore">
     <a class="btn" href="/incidents?{{ qs_with(offset=next_offset) }}"
        hx-get="/incidents?{{ qs_with(offset=next_offset) }}" hx-select=".rows-and-more"
-       hx-target="closest .rows-and-more" hx-swap="outerHTML">LOAD 50 MORE</a>
+       hx-target="closest .rows-and-more" hx-swap="outerHTML">Load 50 more</a>
   </p>
   {%- endif %}
   </div>

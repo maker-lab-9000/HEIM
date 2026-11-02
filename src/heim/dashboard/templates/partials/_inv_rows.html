@@ -4,7 +4,7 @@
   {%- for g in ghosts %}
   <tr class="ghost">
     <td class="c-id mono ink3" title="job #{{ g.id }}">job #{{ g.id }}</td>
-    <td class="mono ink3"><span aria-hidden="true">◌</span> queued · waiting for daemon</td>
+    <td class="mono ink3">{{ m.lamp('queued'|lamp) }} queued · waiting for daemon</td>
     <td class="eyebrow ink3">{{ g.requested_by or DASH }}</td>
     <td class="ink3">{{ g.host or DASH }}</td>
     <td class="mono ink3" title="{{ g.fingerprint }}">{{ g.fingerprint|fp }}</td>
@@ -16,8 +16,9 @@
       {% else %}{{ m.when(g.created_at) }}{% endif %}</td>
   </tr>
   {%- endfor %}
+  {#- a run waiting on the operator carries the signal bar (design.md: tr.flag) -#}
   {%- for r in rows %}
-  <tr>
+  <tr{% if r.status in ('pending_approval', 'needs_human') %} class="flag"{% endif %}>
     <td class="c-id mono"><a href="/investigations/{{ r.id }}">#{{ r.id }}</a></td>
     <td>{{ m.pill(r.status) }}</td>
     <td class="eyebrow">{{ r.trigger or DASH }}</td>
@@ -39,7 +40,7 @@
   <tr class="loadmore"><td colspan="10">
     <a class="btn" href="/investigations{{ more_query }}"
        hx-get="/investigations/rows{{ more_query }}"
-       hx-target="closest tbody" hx-swap="outerHTML">LOAD 50 MORE</a>
+       hx-target="closest tbody" hx-swap="outerHTML">Load 50 more</a>
   </td></tr>
   {%- endif %}
 </tbody>

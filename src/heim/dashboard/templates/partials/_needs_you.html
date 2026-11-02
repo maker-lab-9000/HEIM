@@ -1,0 +1,27 @@
+{#- Needs you (the right column of the console): one task per approval waiting on
+    the operator and per run that ended needing a person. The task type is a
+    .label above its heading (an operator ruling); the key opens the
+    investigation, where Approve / Decline and Re-run live. Renders from
+    `needs_you` (app._needs_you). -#}
+{% import "partials/_macros.html" as m %}
+<section class="panel you" aria-labelledby="h-you">
+  <div class="panel-head"><h2 id="h-you">Needs you</h2></div>
+  {%- for t in needs_you %}
+  <article class="task">
+    {{ m.lamp(('pending_approval' if t.kind == 'approval' else 'needs_human')|lamp) }}
+    <div>
+      <p class="label">{{ t.label }}</p>
+      <h3>{{ t.title }}</h3>
+      <span class="mono">{{ t.mono }}</span>
+      {%- if t.text %}
+      <p>{{ t.text }}</p>
+      {%- endif %}
+      <a class="btn{{ ' primary' if t.primary }}" href="{{ t.href }}">
+        {{- 'Review investigation' if t.kind == 'approval' else 'View evidence' -}}
+        <span class="arr" aria-hidden="true">→</span></a>
+    </div>
+  </article>
+  {%- else %}
+  <p class="empty">Nothing needs you. The agents are handling it.</p>
+  {%- endfor %}
+</section>

@@ -275,9 +275,9 @@ def test_overview_renders_the_feedback_line_and_the_general_footnote(tmp_path, m
 
     with TestClient(create_app(cfg)) as client:
         html = client.get("/").text
-    assert "💡 allow du --max-depth=2" in html
+    assert "Suggestion: allow du --max-depth=2" in html
     assert f'href="/investigations/{iid}"' in html
-    assert "💡 general: logs: a Loki search tool would save four steps" in html
+    assert "Suggestion, general: logs: a Loki search tool would save four steps" in html
 
 
 def test_overview_without_feedback_says_nothing(tmp_path, monkeypatch):
@@ -291,4 +291,4 @@ def test_overview_without_feedback_says_nothing(tmp_path, monkeypatch):
     store.close()
     with TestClient(create_app(cfg)) as client:
         html = client.get("/").text
-    assert "💡" not in html
+    assert "Suggestion" not in html

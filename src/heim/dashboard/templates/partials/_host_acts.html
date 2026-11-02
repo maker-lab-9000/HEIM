@@ -1,5 +1,10 @@
 {% import "partials/_macros.html" as m with context %}
+{%- set e = (inflight or {}).get('host', {}).get(host) %}
 <div class="acts">
-  {{ m.act('/actions/investigate', 'INVESTIGATE', {'host': host}, model=true) }}
+  {%- if e %}
+  {{ m.inflight(e) }}
+  {%- else %}
+  {{ m.act('/actions/investigate', 'Investigate', {'host': host}, model=true) }}
+  {%- endif %}
   {% include "partials/_flash.html" %}
 </div>

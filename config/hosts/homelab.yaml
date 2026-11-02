@@ -2,7 +2,7 @@ name: homelab
 role: hypervisor
 # Hypervisor findings are investigated from the guest side + the Proxmox API,
 # but only in these categories (matches the n8n reconcile gating).
-investigable: [cpu, memory, temperature, disk, diskHealth]
+investigable: [cpu, memory, temperature, disk, diskHealth, availability]
 
 api:
   url: https://${HEIM_PROXMOX_IP}:8006   # Proxmox VE API; token via env PROXMOX_TOKEN

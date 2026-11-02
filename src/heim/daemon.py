@@ -24,6 +24,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from heim.agents import BACKUP_TIME
 from heim.channels import deadman
 from heim.pipelines.daily import run_daily
 from heim.pipelines.investigate import rearm_pending_approvals, run_investigation
@@ -31,6 +32,7 @@ from heim.pipelines.poller import run_poll
 from heim.pipelines.queue import request_from_payload
 from heim.pipelines.security_audit import run_security_audit
 from heim.config import parse_weekly
+from heim.metrics.queries import load_queries
 from heim.security.catalogue import load_catalogue
 from heim.runtime import Runtime, build_runtime
 
@@ -41,8 +43,7 @@ QUEUE_POLL_SECONDS = 4.0
 
 #: When the nightly backup + retention job runs (configured timezone). Deep in
 #: the quiet hours, far from both daily report slots.
-BACKUP_HOUR = 3
-BACKUP_MINUTE = 30
+BACKUP_HOUR, BACKUP_MINUTE = BACKUP_TIME
 
 #: Grace for the weekly audit: a restart within the hour still runs it; later
 #: than that the week is skipped (the next Monday is soon enough for hygiene).
@@ -60,21 +61,87 @@ def weekly_trigger(spec: str, tz: str) -> CronTrigger:
 BACKUP_STEM = "heim-%Y%m%d"
 
 
+def _record_agent_run(rt: Runtime, agent: str, started_at: str, ok: bool,
+                      error: str = "", detail: dict | None = None) -> None:
+    """Heartbeat for the dashboard. A side channel: never breaks a job."""
+    try:
+        rt.store.record_agent_run(agent, started_at, rt.now_iso(), ok, error, detail)
+    except Exception:
+        log.exception("recording the %s heartbeat failed", agent)
+
+
+def _exc_text(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}"[:200]
+
+
+def _query_count(rt: Runtime) -> int | None:
+    try:
+        return len(load_queries(rt.config.queries_path))
+    except Exception:
+        return None
+
+
 async def _daily_job(rt: Runtime) -> None:
+    started = rt.now_iso()
     try:
         result = await run_daily(rt, dispatch_concurrently=True)
         log.info("daily run complete: %s", result)
+        _record_agent_run(rt, "daily", started, True, detail={
+            "queries": _query_count(rt), "hosts": len(rt.config.hosts)})
     except Exception as exc:
         log.exception("daily run failed")
+        _record_agent_run(rt, "daily", started, False, _exc_text(exc))
         await rt.notify(f"🔴 HEIM daily run FAILED: {type(exc).__name__}: {exc}")
 
 
+def _record_poll_agents(rt: Runtime, started: str, summary: dict) -> None:
+    """One heartbeat per poll half; a half that is switched off gets none."""
+    cfg = rt.config
+    aborted = summary.get("aborted")
+    # poller_logic aborts with "prometheus unreachable"; anything else (the
+    # poller's own "alert half failed") is recorded as the reason it gave
+    if not aborted:
+        reason = ""
+    elif str(aborted).strip().lower() == "prometheus unreachable":
+        reason = "Prometheus unreachable"
+    else:
+        reason = str(aborted)
+    _record_agent_run(rt, "alert_poller", started, not aborted, reason,
+                      {"hosts": len(cfg.hosts), **({"aborted": str(aborted)} if aborted else {})})
+    if cfg.settings.threshold_detection:
+        if summary.get("threshold_failed"):
+            err = "threshold half raised"
+        elif summary.get("threshold_samples") == 0:
+            err = "no usable samples"
+        else:
+            err = ""
+        _record_agent_run(rt, "thresholds", started, not err, err,
+                          {"queries": _query_count(rt),
+                           "samples": summary.get("threshold_samples")})
+    if cfg.settings.uptime_kuma.url:
+        if summary.get("uptime_failed"):
+            err = "uptime half raised"
+        elif summary.get("uptime_unreachable"):
+            err = "Uptime Kuma unreachable"
+        else:
+            err = ""
+        _record_agent_run(rt, "uptime", started, not err, err,
+                          {"monitors": summary.get("uptime_monitors"),
+                           "report_only": summary.get("uptime_report_only")})
+
+
 async def _poll_job(rt: Runtime) -> None:
+    started = rt.now_iso()
     try:
-        await run_poll(rt, dispatch_concurrently=True)
-    except Exception:
+        summary = await run_poll(rt, dispatch_concurrently=True)
+    except Exception as exc:
         log.exception("alert poll failed")  # next poll retries in a few minutes
+        _record_agent_run(rt, "alert_poller", started, False, _exc_text(exc))
         return
+    try:
+        _record_poll_agents(rt, started, summary or {})
+    except Exception:  # a heartbeat must never cost the dead-man ping
+        log.exception("recording the poll heartbeats failed")
     # Every *completed* cycle pings, including the no-op ones: the switch
     # asserts "the scheduler is alive", not "an incident happened". A poll
     # that raised deliberately stays silent — that is the outage to report.
@@ -85,11 +152,15 @@ async def _security_audit_job(rt: Runtime) -> None:
     """Weekly read-only security audit. Same contract as _daily_job: never
     raise into the scheduler; a failure is one Telegram line. Success is
     silent here because the pipeline delivers its own digest."""
+    started = rt.now_iso()
     try:
         result = await run_security_audit(rt)
         log.info("security audit complete: %s", result)
+        _record_agent_run(rt, "security", started, True, detail={
+            "checks": (result or {}).get("checks")})
     except Exception as exc:
         log.exception("security audit failed")
+        _record_agent_run(rt, "security", started, False, _exc_text(exc))
         await rt.notify(f"🔴 HEIM weekly security audit FAILED: {type(exc).__name__}: {exc}")
 
 
@@ -157,19 +228,28 @@ async def _backup_job(rt: Runtime) -> None:
     still contains everything retention is about to delete. If the backup
     fails the prune is skipped entirely: deleting history we just failed to
     copy is the one way this job could do real damage.
+
+    One heartbeat, written last: a failed prune makes the run not ok (the
+    store keeps growing), while ``backup_file`` still names the file written.
     """
+    started = rt.now_iso()
     try:
-        run_backup(rt)
-    except Exception:
+        dest = run_backup(rt)
+    except Exception as exc:
         log.exception("nightly backup failed — skipping the retention prune")
+        _record_agent_run(rt, "backup", started, False, _exc_text(exc))
         return
 
+    error = ""
     try:
         counts = rt.store.prune(rt.now_iso(), int(rt.config.settings.retention_days))
         if counts:
             log.info("retention prune deleted %s", counts)
-    except Exception:
+    except Exception as exc:
         log.exception("retention prune failed")
+        error = f"prune failed: {_exc_text(exc)}"[:200]
+    _record_agent_run(rt, "backup", started, not error, error,
+                      detail={"backup_file": dest.name})
 
 
 async def run_job(rt: Runtime, job: dict) -> None:

@@ -1,14 +1,18 @@
+{#- a finding's verdict: both keys, always. The chosen one is pressed in its
+    family (confirmed green, false positive set aside, with its dark lamp) and
+    stays live: pressing it again clears the verdict, pressing the other
+    switches it. The DOM keeps the lower-case verdict and CSS capitalises it. -#}
 {% import "partials/_macros.html" as m with context %}
+{%- set v = f.verdict or '' %}
 <div class="acts vacts">
-  {%- if f.verdict == 'confirmed' %}
-  <span class="verdict st-ok"><span class="dot" aria-hidden="true">✓</span>confirmed</span>
-  {%- elif f.verdict %}
-  <span class="verdict">{{ f.verdict|replace('_', ' ') }}</span>
-  {%- else %}
-  {{ m.act('/actions/verdict', '✓ CONFIRM', {'finding_id': f.id, 'verdict': 'confirmed'}) }}
-  {{ m.act('/actions/verdict', '✗ FALSE POSITIVE',
-           {'finding_id': f.id, 'verdict': 'false_positive'},
-           confirm='Mark this a false positive and mute its fingerprint?') }}
-  {%- endif %}
+  {{ m.act('/actions/verdict', 'Confirm',
+           {'finding_id': f.id, 'verdict': 'clear' if v == 'confirmed' else 'confirmed'},
+           on='confirmed' if v == 'confirmed' else '',
+           body=('<span class="verdict st-ok">confirmed</span>'|safe) if v == 'confirmed' else '') }}
+  {{ m.act('/actions/verdict', 'False positive',
+           {'finding_id': f.id, 'verdict': 'clear' if v == 'false_positive' else 'false_positive'},
+           confirm='' if v == 'false_positive' else 'Mark this a false positive and mute its fingerprint?',
+           on='false_positive' if v == 'false_positive' else '',
+           body=(m.dot('false_positive') ~ ('<span class="verdict">false positive</span>'|safe)) if v == 'false_positive' else '') }}
   {% include "partials/_flash.html" %}
 </div>

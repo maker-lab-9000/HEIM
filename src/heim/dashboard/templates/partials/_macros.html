@@ -1,8 +1,41 @@
-{#- shared building blocks: status pill, tool badge, meta dot separator -#}
+{#- shared building blocks: lamps, status pills, the segmented switch, tool
+    and host badges. A status is a lamp plus its word, never a glyph: the
+    `.dot` inside a pill is an empty lamp. Every colour comes from the state's
+    family (format.FAMILIES, the one colour code): `state|lamp` is the lamp's
+    colour class, `state|family` the class of a coloured word or pressed key. -#}
+
+{% macro lamp(colour='') -%}
+<span class="lamp{{ ' ' ~ colour if colour }}" aria-hidden="true"></span>
+{%- endmacro %}
+
+{#- a segmented switch: plain links, so it works with no JS. Each item is
+    {"href", "label", "n" (optional), "on"}; the engaged one is lifted, lit
+    and says so to a screen reader. -#}
+{% macro seg(items, label='') -%}
+<div class="seg" role="group"{% if label %} aria-label="{{ label }}"{% endif %}>
+  {%- for i in items %}
+  <a href="{{ i.href }}"{% if i.on %} class="on" aria-current="true"{% endif %}>
+    {%- if i.on %}<span class="lamp sm orange" aria-hidden="true"></span>{% endif %}{{ i.label }}
+    {%- if i.n is defined and i.n is not none %}<span class="n">{{ i.n }}</span>{% endif %}</a>
+  {%- endfor %}
+</div>
+{%- endmacro %}
+
+{#- the empty lamp inside a pill, a severity or a verdict, lit by its state -#}
+{% macro dot(state) -%}
+{%- set c = state|lamp -%}
+<span class="dot{{ ' ' ~ c if c }}" aria-hidden="true"></span>
+{%- endmacro %}
 
 {% macro pill(value) -%}
 {%- set p = value|pill -%}
-<span class="pill {{ p.cls }}"><span class="dot" aria-hidden="true">{{ p.icon }}</span>{{ p.label }}</span>
+<span class="pill {{ p.cls }}">{{ dot(value) }}{{ p.label }}</span>
+{%- endmacro %}
+
+{#- the colour key (format.LEGEND): one lamp and its words per family -#}
+{% macro legend() -%}
+<p class="key legend"><span class="visually-hidden">Lamp colours: </span>
+  {%- for c, words in colour_legend %}<span>{{ lamp(('sm ' ~ c)|trim) }}{{ words }}</span>{% endfor %}</p>
 {%- endmacro %}
 
 {% macro tool(name) -%}
@@ -21,7 +54,13 @@
 
 {% macro sev(value) -%}
 {%- set p = value|pill -%}
-<span class="sev {{ p.cls }}"><span class="dot" aria-hidden="true">{{ p.icon }}</span>{{ p.label }}</span>
+<span class="sev {{ p.cls }}">{{ dot(value) }}{{ p.label }}</span>
+{%- endmacro %}
+
+{#- a state as a coloured word, no lamp (incidents, findings). The class is
+    the state's family; each family's text token holds 4.5:1 on the panel. -#}
+{% macro word(value) -%}
+<span class="word {{ value|family }}">{{ value or DASH }}</span>
 {%- endmacro %}
 
 {#- a timestamp. When the value is missing or unparseable `iso` gives the dash,
@@ -55,7 +94,10 @@
 {%- endif %}
 {%- endmacro %}
 
-{% macro act(action, label, fields, confirm='', cls='', model=false) -%}
+{#- `on` makes it a pressed toggle: the state it stands for picks the family,
+    the key stays live (pressing it again undoes it) and says aria-pressed.
+    `body` replaces the plain label with markup (a verdict's lamp and word). -#}
+{% macro act(action, label, fields, confirm='', cls='', model=false, on='', body='') -%}
 <form class="act" method="post" action="{{ action }}" hx-post="{{ action }}"
       hx-target="closest .acts" hx-swap="outerHTML"
       {%- if confirm %} hx-confirm="{{ confirm }}"{% endif %}>
@@ -64,8 +106,26 @@
   {%- endfor %}
   <input type="hidden" name="back" value="{{ back|default('/', true) }}">
   {%- if model %}{{ modelselect() }}{% endif %}
-  <button class="btn{{ ' ember' if cls }}" type="submit">{{ label }}</button>
+  {%- if on %}
+  <button class="btn pressed {{ on|family }}" type="submit" aria-pressed="true" title="{{ label }}: press again to undo">{{ body or label }}</button>
+  {%- else %}
+  <button class="btn{{ ' ember' if cls }}" type="submit">{{ body or label }}</button>
+  {%- endif %}
 </form>
+{%- endmacro %}
+
+{#- an investigate key whose subject is already in flight (app._in_flight):
+    pressed green, saying what is under way, and a link to it. -#}
+{% macro inflight(e) -%}
+<a class="btn pressed {{ 'running'|family }}" href="{{ e.href }}" title="{{ e.title }}">{{ e.label }}</a>
+{%- endmacro %}
+
+{#- a key that has been pressed and now shows the outcome: inset, disabled,
+    in the colour of the result, and still carrying its word. `state` is what
+    the press did (done, dismissed, approve, decline) and picks the family;
+    `title` is the tooltip naming it. -#}
+{% macro pressed(label, state, title) -%}
+<button class="btn pressed {{ state|family }}" type="button" disabled aria-pressed="true" title="{{ title }}">{{ label }}</button>
 {%- endmacro %}
 
 {#- a daily bar chart (spec §11), server-rendered: `c` is fmt.bar_chart()'s
@@ -74,6 +134,14 @@
     day — share it, which is why `id` is a parameter: the clip path is
     document-scoped. Bars are drawn CHART_RADIUS too tall and clipped at the
     baseline, so the corner radius rounds the top only. -#}
+{#- the one caption every chart wears: the question it answers, then its unit,
+    window and the observations behind it (and how many of them were gaps) -#}
+{% macro chart_caption(question, unit, window, n, gaps=0) -%}
+<p class="ccap"><span class="cq">{{ question }}</span>
+  <span class="mono ink3">{{ unit }} · {{ window }} · {{ n }} observation{{ '' if n == 1 else 's' }}
+  {%- if gaps %} · {{ gaps }} no data{% endif %}</span></p>
+{%- endmacro %}
+
 {% macro daychart(c, aria, id='tchart') -%}
 <svg class="tchart" width="{{ c.width }}" height="{{ c.height }}"
      viewBox="0 0 {{ c.width }} {{ c.height }}" role="img" aria-label="{{ aria }}">
@@ -81,8 +149,14 @@
     width="{{ c.width }}" height="{{ c.baseline }}"/></clipPath></defs>
   <g clip-path="url(#{{ id }}-clip)">
     {%- for b in c.bars %}
-    <rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.rh }}"
+    {%- if b.gap %}
+    <rect class="gap" x="{{ b.x }}" y="{{ c.baseline - c.span }}" width="{{ b.w }}"
+          height="{{ c.span }}"><title>{{ b.title }}</title></rect>
+    {%- else %}
+    {#- fill stays the legacy token on the attribute; .tchart .bar paints it --ink -#}
+    <rect class="bar" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.rh }}"
           rx="{{ c.radius }}" fill="var(--ember)"><title>{{ b.title }}</title></rect>
+    {%- endif %}
     {%- endfor %}
   </g>
   <line class="base" x1="0" y1="{{ c.baseline + 0.5 }}"
@@ -96,7 +170,28 @@
 </svg>
 {%- endmacro %}
 
+{#- one kind of an investigation's output (spec: "AI output is labelled by
+    kind"): a panel titled with the kind, a .label caption saying where it
+    came from, and the body the caller renders. Observations, Interpretation,
+    Proposed actions and Completed actions all go through here, so their heads
+    cannot drift apart. -#}
+{% macro kind(key, title, caption) -%}
+<section class="panel kind" aria-labelledby="h-{{ key }}">
+  <div class="panel-head"><h2 id="h-{{ key }}">{{ title }}</h2><p class="label">{{ caption }}</p></div>
+  {{- caller() }}
+</section>
+{%- endmacro %}
+
+{#- a kind's report sections, (heading, html) pairs, or its empty line -#}
+{% macro parts(items, otherwise) -%}
+{%- for heading, html in items %}
+<div class="prose">{% if heading %}<h3>{{ heading }}</h3>{% endif %}{{ html|safe }}</div>
+{%- else %}
+{{ empty(otherwise) }}
+{%- endfor %}
+{%- endmacro %}
+
 {% macro muted(sup) -%}
-<span class="pill st-muted"><span class="dot" aria-hidden="true">◌</span>muted · until
+<span class="pill st-muted">{{ dot('muted') }}muted · until
   {{ sup.until|day if sup.until else 'further notice' }}</span>
 {%- endmacro %}

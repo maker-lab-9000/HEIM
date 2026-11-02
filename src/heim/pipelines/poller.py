@@ -1,6 +1,6 @@
 """The fast-path poll cycle (port of n8n PAM 11, plus threshold detection).
 
-Two independent halves ride the same 5-minute cadence:
+Three independent halves ride the same 5-minute cadence:
 
 1. the **alert** half — polls Prometheus ``/api/v1/alerts``, diffs firing
    alerts against open incidents (pure logic in ``heim.incidents.poller_logic``)
@@ -9,13 +9,16 @@ Two independent halves ride the same 5-minute cadence:
 2. the **threshold** half — evaluates the metric catalog's own ``warn``/``crit``
    bounds (pure logic in ``heim.pipelines.thresholds``) so a metric sitting at
    crit can open an incident on its own, which until now only an
-   ``alerts.yml`` rule or the daily LLM could do.
+   ``alerts.yml`` rule or the daily LLM could do;
+3. the **uptime** half — reads Uptime Kuma's ``/metrics`` (``heim.pipelines.uptime``,
+   pure logic in ``heim.incidents.uptime_logic``): a down monitor opens an
+   ``[uptime] `` incident, one Telegram message per host.
 
 They share everything downstream — the store, ``rt.notify``, Loki, the
 suppression filters and ``dispatch_all`` — so the approval gate, the
 concurrency cap and the false-positive mutes apply to both unchanged. They are
 deliberately *independent*: a failure in one half never aborts the other, and
-the summary carries both sets of counters.
+the summary carries every half's counters.
 """
 from __future__ import annotations
 
@@ -28,7 +31,7 @@ import httpx
 from heim.incidents.poller_logic import diff_and_decide
 from heim.incidents.state import compute_state
 from heim.metrics.queries import load_queries
-from heim.pipelines import thresholds
+from heim.pipelines import thresholds, uptime
 from heim.pipelines.investigate import dispatch_all
 from heim.pipelines.suppression import filter_decision, filter_threshold
 from heim.runtime import Runtime
@@ -198,7 +201,9 @@ async def _run_thresholds(rt: Runtime, run_at: str, *,
 #: decide whether the poll is worth a row in ``runs``.
 _RECORDABLE = ("upserts", "dispatches", "notifications", "state_changed",
                "threshold_upserts", "threshold_dispatches",
-               "threshold_notifications", "threshold_state_changed")
+               "threshold_notifications", "threshold_state_changed",
+               "uptime_upserts", "uptime_dispatches", "uptime_messages",
+               "uptime_state_changed")
 
 
 async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
@@ -221,12 +226,27 @@ async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
                 rt, run_at, dispatch_concurrently=dispatch_concurrently))
         except Exception:
             log.exception("the threshold half of the poll failed")
+            summary["threshold_failed"] = True
 
-    if any(v for v in summary.values()):
+    if cfg.settings.uptime_kuma.url:
+        try:
+            summary.update(await uptime.run_uptime(
+                rt, run_at, dispatch_concurrently=dispatch_concurrently))
+        except Exception:
+            log.exception("the uptime half of the poll failed")
+            summary["uptime_failed"] = True
+
+    recordable = any(summary.get(k) for k in _RECORDABLE)
+    # INFO only when the cycle did something: size counters such as
+    # uptime_monitors / threshold_samples are non-zero on every quiet poll and
+    # would put a line in the log every 5 minutes.
+    if recordable or summary.get("aborted"):
         log.info("poll result: %s", summary)
+    else:
+        log.debug("poll result: %s", summary)
     # Record the poll only when it actually changed something — a poll runs
     # every 5 minutes and silent no-ops would drown the runs table.
-    if any(summary.get(k) for k in _RECORDABLE):
+    if recordable:
         try:
             rt.store.insert_run(
                 kind="poll", run_at=run_at, overall="", model_used="",

@@ -14,6 +14,7 @@ the *original* investigation's subject even if its incident has since changed.
 """
 from __future__ import annotations
 
+import json
 import logging
 
 from heim.incidents.store import IncidentStore
@@ -80,13 +81,23 @@ def enqueue_retry(store: IncidentStore, investigation_id: int, requested_by: str
     ``request_from_dispatch`` would have produced); if the incident is gone,
     a single generic finding keeps the brief honest about what is being asked.
     Returns the new job id, or None when there is no such investigation.
+
+    A grouped investigation (Uptime Kuma: one per host, one finding per down
+    monitor, each carrying its ``fingerprint``) is re-run with its stored
+    findings instead — the incident row covers only the first monitor, so
+    the others would silently drop out of the re-run's brief (and out of the
+    incidents its decline/needs-human unlocks). Their detail text is the
+    original's; the agent gathers fresh evidence either way.
     """
     original = store.investigation(investigation_id)
     if original is None:
         return None
     fingerprint = str(original.get("fingerprint") or "")
-    incident = store.incident(fingerprint) if fingerprint else None
-    if incident:
+    grouped = _fingerprinted_findings(original)
+    incident = store.incident(fingerprint) if fingerprint and not grouped else None
+    if grouped:
+        findings = grouped
+    elif incident:
         findings = [{
             "severity": incident.get("severity", ""),
             "host": incident.get("host", ""),
@@ -113,6 +124,18 @@ def enqueue_retry(store: IncidentStore, investigation_id: int, requested_by: str
         requested_by=requested_by,
         retry_of=int(investigation_id),
     )
+
+
+def _fingerprinted_findings(investigation: dict) -> list[dict]:
+    """The stored findings when they carry fingerprints (a grouped run), else []."""
+    try:
+        findings = json.loads(investigation.get("findings_json") or "[]")
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(findings, list):
+        return []
+    findings = [f for f in findings if isinstance(f, dict)]
+    return findings if any(f.get("fingerprint") for f in findings) else []
 
 
 def request_from_payload(payload: dict, rt, retry_of: int = 0) -> InvestigationRequest:

@@ -71,6 +71,22 @@ def _coarse(secs: float) -> str:
     return f"{int(secs // (86400 * 30))}mo"
 
 
+def age_text(value: str | None, *, now: datetime | None = None) -> str:
+    """"26 min" / "5 h" / "2 d": how long something has stood, for an Age
+    column or a card figure, where "ago" would be one word too many."""
+    secs = age_seconds(value, now=now)
+    if secs is None:
+        return DASH
+    secs = max(0.0, secs)
+    if secs < 60:
+        return "<1 min"
+    if secs < 3600:
+        return f"{int(secs // 60)} min"
+    if secs < 86400:
+        return f"{int(secs // 3600)} h"
+    return f"{int(secs // 86400)} d"
+
+
 def iso(value: str | None) -> str:
     """Full timestamp for `title=` tooltips."""
     dt = parse_dt(value)
@@ -454,17 +470,21 @@ def bar_chart(points: list[dict], *, value_key: str = "tokens",
     fmt_exact = fmt_exact or _exact
     points = list(points or [])
     span = CHART_BASELINE - CHART_TOP
+    # a null observation is a gap, never a zero: it keeps its slot, draws no
+    # bar, and says "no data"; a real 0 is still the stub mark
+    gaps = [p.get(value_key) is None for p in points]
     values = [max(float(p.get(value_key) or 0), 0.0) for p in points]
     top = max(values) if values else 0.0
     peak = values.index(top) if values and top > 0 else -1
     bars = []
-    for i, (point, value) in enumerate(zip(points, values)):
+    for i, (point, value, gap) in enumerate(zip(points, values, gaps)):
         h = max(round(span * value / top), CHART_STUB) if top > 0 else CHART_STUB
-        amount = fmt_exact(value)
+        amount = "no data" if gap else fmt_exact(value)
         bars.append({
             "date": str(point.get("date") or ""),
             "weekday": str(point.get("weekday") or ""),
             "value": value,
+            "gap": gap,
             "x": i * CHART_SLOT + CHART_GAP // 2,
             "w": CHART_SLOT - CHART_GAP,
             "y": CHART_BASELINE - h,
@@ -473,7 +493,8 @@ def bar_chart(points: list[dict], *, value_key: str = "tokens",
             "mid": i * CHART_SLOT + CHART_SLOT // 2,
             "is_max": i == peak,
             "label": fmt_label(value) if i == peak else "",
-            "title": f"{point.get('date') or ''} · {amount} {unit}".rstrip(),
+            "title": f"{point.get('date') or ''} · {amount}"
+                     f"{'' if gap else ' ' + unit}".rstrip(),
         })
     return {
         "bars": bars,
@@ -486,45 +507,381 @@ def bar_chart(points: list[dict], *, value_key: str = "tokens",
         "max": int(top) if float(top).is_integer() else top,
         "total": int(sum(values)) if all(float(v).is_integer() for v in values) else sum(values),
         "busiest": bars[peak] if peak >= 0 else None,
+        "n": len(bars) - sum(gaps),      # observations behind the chart
+        "gaps": sum(gaps),
     }
+
+
+# ------------------------------------------------- metrics row: 3-day trend
+
+#: the label's own question, keyed on the catalog label (lower-cased). Anything
+#: not listed gets the honest default rather than a guess.
+_QUESTIONS = {
+    "filesystem used": "Is the disk filling?",
+    "inodes used": "Are inodes running out?",
+    "memory used": "Is memory running out?",
+    "swap used": "Is swap growing?",
+    "cpu busy": "Is the CPU saturated?",
+    "drive temp": "Is the drive running hot?",
+    "max sensor temp": "Is anything running hot?",
+    "nvme wear": "How worn is the drive?",
+    "disk i/o util": "Is the disk saturated?",
+    "pool used": "Is the pool filling?",
+}
+
+
+def chart_question(label: str | None) -> str:
+    """The one-line question a metric row's trend answers."""
+    text = str(label or "").strip()
+    return _QUESTIONS.get(text.lower()) or f"How is {text or 'this metric'} trending?"
+
+
+TREND_SLOT = 24
+TREND_GAP = 4
+TREND_TOP = 4
+TREND_BASELINE = 40
+TREND_HEIGHT = 44
+TREND_LABEL_H = 12       # least vertical room between two threshold labels
+
+
+def trend_chart(day3d: list | None, unit: object = None, *, direction: str = "",
+                warn: float | None = None, crit: float | None = None,
+                label: str | None = None, window: str = "3 days") -> dict:
+    """Geometry for a metrics row's small trend: one bar per day average.
+
+    Pure. A ``None`` day is a gap (no bar, ``gap`` True), a real 0 keeps the
+    ``CHART_STUB`` mark. The catalog's ``warn``/``crit`` become labelled
+    hairlines only when ``direction`` is ``high`` or ``low`` (the other
+    directions have no numeric line to draw), and the axis stretches to hold
+    them so a line is never clipped off the chart.
+    """
+    days = list(day3d or [])
+    obs = [None if v is None else float(v) for v in days]
+    present = [v for v in obs if v is not None]
+    lines = []
+    if direction in ("high", "low"):
+        lines = [{"kind": k, "value": float(v)}
+                 for k, v in (("warn", warn), ("crit", crit)) if v is not None]
+    axis = max([abs(v) for v in present] + [abs(ln["value"]) for ln in lines] + [0.0])
+    span = TREND_BASELINE - TREND_TOP
+    bars = []
+    for i, v in enumerate(obs):
+        gap = v is None
+        h = TREND_BASELINE - TREND_TOP if gap else (
+            max(round(span * max(v, 0.0) / axis), CHART_STUB) if axis > 0 else CHART_STUB)
+        bars.append({
+            "gap": gap, "x": i * TREND_SLOT, "w": TREND_SLOT - TREND_GAP,
+            "y": TREND_BASELINE - h, "h": h,
+            "title": f"day {i + 1} of {len(obs)} · "
+                     + ("no data" if gap else value(v, unit)),
+        })
+    for ln in lines:
+        ln["y"] = TREND_BASELINE - round(span * max(ln["value"], 0.0) / axis) if axis > 0 \
+            else TREND_BASELINE
+        ln["title"] = f"{ln['kind']} at {value(ln['value'], unit)}"
+    # text sits beside the hairline; two labels that would collide are pushed apart
+    last = None
+    for ln in sorted(lines, key=lambda x: x["y"]):
+        ty = ln["y"] + 4
+        if last is not None and ty - last < TREND_LABEL_H:
+            ty = last + TREND_LABEL_H
+        ln["ty"] = last = min(ty, TREND_HEIGHT - 2)
+    width = len(bars) * TREND_SLOT
+    return {
+        "bars": bars, "lines": lines, "n": len(present), "gaps": len(obs) - len(present),
+        "width": width, "full_width": width + 32 if lines else width,
+        "height": TREND_HEIGHT, "baseline": TREND_BASELINE,
+        "question": chart_question(label), "unit": str(unit or "") or "value",
+        "window": window,
+    }
+
+
+# ---------------------------------------------------- what HEIM is doing
+
+def workflow_for(incident: dict, investigations: list[dict], investigable: set[str]) -> dict:
+    """What HEIM is doing about an open incident: ``{"title", "sub", "href"}``.
+
+    ``investigations`` are the rows on the incident's fingerprint, newest
+    first. A run in flight or waiting speaks first; then the newest run, if it
+    ended asking for a human (its title is empty: the row's own left column
+    already says "Needs you"). Otherwise the incident is Open, and the sub-line
+    says who is watching it: nobody has looked yet on a host an agent can
+    reach (Needs attention); an Uptime Kuma check no agent can reach
+    (Report-only target); a threshold (``[metric]``) or an alert rule
+    (``[alert]``) for the rest; the daily analysis when it carries no prefix.
+    """
+    def ran(title: str, sub: str, inv: dict) -> dict:
+        return {"title": title, "sub": sub, "href": f"/investigations/{inv.get('id')}"}
+
+    by_status = {}
+    for inv in investigations:
+        by_status.setdefault(str(inv.get("status") or ""), inv)
+    if "running" in by_status:
+        inv = by_status["running"]
+        return ran("Investigating", f"Agent is checking · investigation {inv.get('id')}", inv)
+    if "pending_approval" in by_status:
+        inv = by_status["pending_approval"]
+        return ran("Awaiting approval", f"investigation {inv.get('id')}", inv)
+    if investigations and investigations[0].get("status") == "needs_human":
+        inv = investigations[0]
+        return ran("", f"investigation {inv.get('id')}", inv)
+
+    host = str(incident.get("host") or "")
+    text = str(incident.get("description") or "")
+    reachable = host in investigable
+    if reachable and not investigations:
+        sub = "Needs attention"
+    elif text.startswith("[uptime] ") and not reachable:
+        sub = "Report-only target"
+    elif text.startswith("[metric] "):
+        sub = "Monitoring threshold"
+    elif text.startswith("[alert] "):
+        sub = "Alert rule"
+    elif reachable or text.startswith("[uptime] "):
+        sub = "Needs attention"
+    else:
+        sub = "Daily analysis"
+    return {"title": "Open", "sub": sub, "href": ""}
+
+
+#: words in a report's remediation that only a person at the hardware can do
+_PHYSICAL = re.compile(r"\b(?:fans?|cables?|power|reseat\w*|replac\w*|unplug\w*|"
+                       r"enclosures?|hardware|physically)\b", re.I)
+
+
+def _remediation(report_md: str | None) -> list[str]:
+    """The lines of the report's ``## Remediation`` section, list markers off."""
+    lines: list[str] = []
+    inside = False
+    for line in str(report_md or "").splitlines():
+        if line.startswith("## "):
+            inside = line[3:].strip().lower().startswith("remediation")
+            continue
+        text = re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", line).strip()
+        if inside and text:
+            lines.append(text)
+    return lines
+
+
+def physical_step(report_md: str | None) -> str:
+    """The first remediation step that needs someone at the hardware, or ""."""
+    return next((s for s in _remediation(report_md) if _PHYSICAL.search(s)), "")
+
+
+def needs_you_label(inv: dict) -> str:
+    """The task type over a Needs-you item: an approval, a physical check the
+    agent cannot make remotely, or a judgement only a person can make."""
+    status = str(inv.get("status") or "")
+    if status == "pending_approval":
+        return "Approval"
+    if status == "needs_human":
+        return "Physical check" if physical_step(inv.get("report_md")) else "Manual check"
+    return ""
+
+
+# ------------------------------------------------ an investigation's report
+
+#: The buckets an investigation report is sorted into (spec: "AI output is
+#: labelled by kind"). The transcript is the observations and the operator's
+#: record the completed actions, so neither comes from the report.
+REPORT_KINDS = ("interpretation", "proposed", "other")
+
+#: ``##`` heading -> its kind, matched case-insensitively against the START of
+#: the heading, first hit wins: "Root cause (confidence: high)" and
+#: "Recommended remediation" land where they mean to. Anything unlisted is
+#: ``other``; Evidence and Tooling feedback are named only to say so.
+_SECTION_KIND: tuple[tuple[str, str], ...] = (
+    ("summary", "interpretation"),
+    ("root cause", "interpretation"),
+    ("confidence", "interpretation"),
+    ("remediation", "proposed"),
+    ("recommend", "proposed"),
+    ("next step", "proposed"),
+    ("evidence", "other"),
+    ("tooling feedback", "other"),
+)
+
+#: a level-2 ATX heading; ``###`` and deeper stay inside their section
+_H2 = re.compile(r"^##[ \t]+(\S.*?)(?:[ \t]+#+)?[ \t]*$")
+#: a fenced code block's opening or closing line
+_FENCE = re.compile(r"^ {0,3}(```|~~~)")
+
+
+def _section_kind(heading: str) -> str:
+    key = heading.strip("*_` ").lower()
+    return next((kind for prefix, kind in _SECTION_KIND if key.startswith(prefix)), "other")
+
+
+def report_sections(report_md: str | None) -> dict:
+    """An investigation report sorted by kind:
+    ``{"interpretation": [(heading, markdown), …], "proposed": […], "other": […],
+    "raw": report_md}``.
+
+    Nothing is dropped: every ``##`` section lands in exactly one bucket in
+    document order, text before the first heading is ``other`` under the
+    heading ``""``, and ``raw`` is the whole text for the folded full report.
+    A ``##`` line inside a code fence is body text: the salvage fences an
+    untrusted raw output, and splitting it would promote that text to a
+    section of its own.
+    """
+    text = str(report_md or "")
+    chunks: list[tuple[str | None, list[str]]] = [(None, [])]
+    fence = ""
+    for line in text.splitlines():
+        heading = None if fence else _H2.match(line)
+        if heading:
+            chunks.append((heading.group(1), []))
+            continue
+        mark = _FENCE.match(line)
+        if mark and not fence:
+            fence = mark.group(1)
+        elif mark and mark.group(1) == fence:
+            fence = ""
+        chunks[-1][1].append(line)
+    out: dict = {kind: [] for kind in REPORT_KINDS}
+    for heading, lines in chunks:
+        body = "\n".join(lines).strip("\n")
+        if heading is None:
+            if body.strip():
+                out["other"].append(("", body))
+        else:
+            out[_section_kind(heading)].append((heading, body))
+    out["raw"] = text
+    return out
 
 
 # ------------------------------------------------------------------ statuses
 
-#: status -> (icon, css class, label) — meaning is never carried by color alone
+#: The one colour code (the operator's decision, 2026-11-02): every state
+#: belongs to a family, and the family is grouped by who acts. Each family is
+#: (lamp colour class, st-* class); its key is also the class a coloured word
+#: (`.word.<family>`) and a pressed key (`.btn.pressed.<family>`) wear. The lamp
+#: colours and the st-* names predate the code and are kept, so older hooks and
+#: pins hold; nothing outside this table decides a state's colour.
+FAMILIES = {
+    "you": ("orange", "st-you"),    # waiting on you
+    "go": ("green", "st-go"),       # in progress, or done well
+    "crit": ("red", "st-crit"),     # broken
+    "warn": ("amber", "st-warn"),   # getting worse
+    "ok": ("blue", "st-ok"),        # settled
+    "other": ("", "st-muted"),      # set aside
+}
+
+#: the colour key, as the legends print it: (lamp colour class, words)
+LEGEND = tuple((FAMILIES[f][0], words) for f, words in (
+    ("you", "Waiting on you"), ("go", "In progress, done"), ("crit", "Broken"),
+    ("warn", "Getting worse"), ("ok", "Settled"), ("other", "Set aside")))
+
+#: state -> (icon, label, family) — meaning is never carried by color alone
 _STATUS = {
-    "running": ("●", "st-running", "running"),
-    "pending_approval": ("◷", "st-warn", "pending approval"),
-    "complete": ("✓", "st-ok", "complete"),
-    "resolved": ("✓", "st-ok", "resolved"),
-    "incomplete": ("⚠", "st-serious", "incomplete"),
-    "needs_human": ("⚠", "st-serious", "needs human"),
-    "failed": ("✕", "st-crit", "failed"),
-    "declined": ("○", "st-muted", "declined"),
-    "open": ("●", "st-crit", "open"),
-    "clearing": ("◐", "st-warn", "clearing"),
-    "suppressed": ("◌", "st-muted", "suppressed"),
-    "queued": ("◌", "st-muted", "queued"),
-    "critical": ("✕", "st-crit", "critical"),
-    "warning": ("⚠", "st-warn", "warning"),
-    "warn": ("⚠", "st-warn", "warning"),
-    "info": ("·", "st-muted", "info"),
-    "ok": ("✓", "st-ok", "ok"),
-    "healthy": ("✓", "st-ok", "healthy"),
+    # investigations (and the queued job ghost row: an investigation always
+    # asks first, so a queued one is already waiting for the operator)
+    "pending_approval": ("◷", "pending approval", "you"),
+    "needs_human": ("⚠", "needs you", "you"),
+    "queued": ("◌", "queued", "you"),
+    "running": ("●", "running", "go"),
+    "complete": ("✓", "complete", "ok"),
+    "resolved": ("✓", "resolved", "ok"),
+    "incomplete": ("⚠", "incomplete", "warn"),
+    "failed": ("✕", "failed", "crit"),
+    "declined": ("○", "declined", "other"),
+    "timeout": ("◌", "timed out", "other"),
+    # jobs: `done` reads like a ticked recommendation, a cut-off one as broken
+    "done": ("✓", "done", "go"),
+    "interrupted": ("✕", "interrupted", "crit"),
+    # incidents: `clearing` is the anti-flap count running down to resolved
+    "open": ("●", "open", "you"),
+    "clearing": ("◐", "clearing", "go"),
+    "suppressed": ("◌", "suppressed", "other"),
+    # severities and overall health
+    "critical": ("✕", "critical", "crit"),
+    "warning": ("⚠", "warning", "warn"),
+    "warn": ("⚠", "warning", "warn"),
+    "info": ("·", "info", "other"),
+    "ok": ("✓", "ok", "ok"),
+    "healthy": ("✓", "healthy", "ok"),
+    "normal": ("✓", "normal", "ok"),
+    "degraded": ("⚠", "degraded", "warn"),
+    "unknown": ("·", "unknown", "other"),
     # metric flags (spec §6): `crit` is the aggregate's own word for a breached
     # threshold — a reading, not a failed run, hence ✳ rather than ✕.
-    "crit": ("✳", "st-crit", "crit"),
-    "na": ("·", "st-muted", "n/a"),
-    "timeout": ("◌", "st-muted", "timed out"),
-    # recommendation states (spec §9): done reads as ok, dismissed as muted —
-    # the operator ticked it off either way, the difference is whether it was
-    # worth doing.
-    "done": ("✓", "st-ok", "done"),
-    "dismissed": ("○", "st-muted", "dismissed"),
+    "crit": ("✳", "crit", "crit"),
+    "na": ("·", "n/a", "other"),
+    # verdicts and mutes
+    "confirmed": ("✓", "confirmed", "go"),
+    "false_positive": ("○", "false positive", "other"),
+    "muted": ("○", "muted", "other"),
+    # recommendation states (spec §9): done is work done well, dismissed a
+    # refusal — the pressed keys wear the same two
+    "dismissed": ("○", "dismissed", "crit"),
+    # an approval decision, as its pressed key shows it: Approve green, Decline
+    # red. The investigation it leaves behind is `declined`, which is set aside.
+    "approve": ("✓", "approved", "go"),
+    "decline": ("✕", "declined", "crit"),
+    # agents (heim.agents) and their runs, and the daemon's heartbeat
+    "idle": ("✓", "idle", "ok"),
+    "paused": ("○", "paused", "other"),
+    "stale": ("⚠", "overdue", "warn"),
+    "overdue": ("⚠", "overdue", "warn"),
+    "missed": ("⚠", "missed", "warn"),
+    "error": ("✕", "error", "crit"),
+    "connected": ("●", "connected", "go"),
 }
+
+
+def family(value: str | None) -> str:
+    """The colour family of a state (``FAMILIES`` key); unknown states are set aside."""
+    entry = _STATUS.get(str(value or "").strip().lower())
+    return entry[2] if entry else "other"
+
+
+def lamp(value: str | None) -> str:
+    """The lamp colour class for a state: ``m.lamp(state|lamp)``."""
+    return FAMILIES[family(value)][0]
+
+
+#: who owns an incident, from its description prefix (invariant 3)
+_OWNERS = (("[alert]", "Alert"), ("[metric]", "Metric"), ("[uptime]", "Uptime"))
+
+
+def ownership_word(description: str | None) -> str:
+    """The word for who opened and who may resolve an incident."""
+    text = str(description or "").lstrip().lower()
+    for prefix, word in _OWNERS:
+        if text.startswith(prefix):
+            return word
+    return "Daily analysis"
 
 
 def status_pill(value: str | None) -> dict:
     key = str(value or "").strip().lower()
-    icon, cls, label = _STATUS.get(key, ("·", "st-muted", key or "unknown"))
-    return {"icon": icon, "cls": cls, "label": label, "key": key}
+    icon, label, fam = _STATUS.get(key, ("·", key or "unknown", "other"))
+    return {"icon": icon, "cls": FAMILIES[fam][1], "label": label, "key": key}
+
+
+def evidence_links(finding: dict, investigation: dict | None,
+                   catalog_qids, *, incident_exists: bool = True) -> list[dict]:
+    """Where to look for the proof of one finding: ``[{"label", "href"}]``.
+
+    A link is only drawn for something that exists. A daily finding's qid is
+    the second part of its ``host|qid|name`` fingerprint (invariant 1); it
+    links to the metrics row only when the catalog knows that qid. An audit
+    finding links to its check on /security instead. The incidents page does
+    not filter by fingerprint, so the incident link opens the list.
+    """
+    fp = str(finding.get("fingerprint") or "")
+    parts = fp.split("|")
+    qid = parts[1] if len(parts) >= 3 else ""
+    links: list[dict] = []
+    if str(finding.get("source") or "") == "security_audit":
+        if qid:
+            links.append({"label": "check", "href": f"/security#check-{qid}"})
+    else:
+        if qid and qid in catalog_qids:
+            links.append({"label": "metric", "href": f"/metrics#q-{qid}"})
+        if fp and incident_exists:
+            links.append({"label": "incident", "href": "/incidents"})
+    if investigation and investigation.get("id") is not None:
+        n = investigation["id"]
+        links.append({"label": f"investigation {n}", "href": f"/investigations/{n}"})
+    return links

@@ -6,10 +6,9 @@
     JS and every window is a bookmarkable URL. The current one is the ember
     button and says so to a screen reader rather than by color alone. -#}
 <nav class="acts" aria-label="Spend window">
-  {%- for key in windows %}
-  <a class="btn{{ ' ember' if key == window }}" href="/costs?window={{ key }}"
-     {% if key == window %}aria-current="page"{% endif %}>{{ key }}</a>
-  {%- endfor %}
+  {%- set items = [] %}
+  {%- for key in windows %}{% set _ = items.append({"href": "/costs?window=" ~ key, "label": key, "on": key == window}) %}{% endfor %}
+  {{ m.seg(items, "Spend window") }}
 </nav>
 
 <section class="kpis" aria-label="Window totals">
@@ -83,6 +82,8 @@
 <section class="card">
   <h2 class="eyebrow">spend by day</h2>
   {%- if cost_chart.total %}
+  {{ m.chart_caption("What did the agents cost?", cost_chart.unit, "14 days",
+                     cost_chart.n, cost_chart.gaps) }}
   {{ m.daychart(cost_chart, "Money spent per day over the last 14 days, most "
                             "expensive day " ~ cost_chart.busiest.date, "cchart") }}
   <p class="tsum mono">14d: {{ cost_chart.total|money }} · busiest

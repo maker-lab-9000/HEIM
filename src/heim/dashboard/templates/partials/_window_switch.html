@@ -1,0 +1,8 @@
+{#- the top bar's window switch: plain links that keep the rest of the query
+    string. `window` is live, 24h or 7d (app._window). -#}
+{% import "partials/_macros.html" as m %}
+{{ m.seg([
+  {'href': '?' ~ qs_with(window='live'), 'label': 'Live', 'on': window == 'live'},
+  {'href': '?' ~ qs_with(window='24h'), 'label': '24 h', 'on': window == '24h'},
+  {'href': '?' ~ qs_with(window='7d'), 'label': '7 d', 'on': window == '7d'},
+], 'Window') }}

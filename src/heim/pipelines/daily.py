@@ -17,6 +17,7 @@ import httpx
 from heim.incidents.loki_events import finding_and_category_events, incident_events
 from heim.incidents.reconcile import fingerprint_for, reconcile
 from heim.incidents.state import compute_state
+from heim.incidents.uptime_logic import is_uptime_row
 from heim.config import expand_env
 from heim.costing import cost_of
 from heim.llm import analyst_complete, parse_analysis
@@ -134,7 +135,10 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     log.info("analysis by %s: %s — %s", model_used, analysis.get("overallHealth"), analysis.get("headline"))
 
     # 3. reconcile incidents
-    open_rows = rt.store.open_rows()
+    # [uptime] incidents belong to the Uptime Kuma poll half: the LLM never sees
+    # them, so reconcile would miss-count and resolve a live outage. Filtered
+    # here (golden reconcile untouched); compute_state below still sees them all.
+    open_rows = [r for r in rt.store.open_rows() if not is_uptime_row(r)]
     payload_rows = _flatten_rows(payload)
     rec = reconcile(analysis, payload_rows, open_rows, run_at, cfg.routing())
     # Suppressed fingerprints never reach the store or the investigator — the

@@ -175,28 +175,48 @@ Notes:
 
 ### The built-in dashboard (web UI)
 
-A self-contained web UI — **HEIM: Homelab Event & Incident Monitor**, full name on
-the rail — focused on tracking the agent's investigations: every investigation shows
-what triggered it (findings + the exact brief sent to the agent), its trigger source,
-agent + model, real token usage and cost, and a terminal-style transcript of each tool
-call ($ command, result preview, duration, blocked markers) with a "burn line" showing
-where the token budget went.
+A self-contained web UI laid out as an operator's console (a Braun-style instrument
+panel, light and dark): a grouped rail with a lamp per section, and every agent shown as
+one channel with its own run strip, so a watcher that stopped reporting is as visible
+as a failing disk. Nothing is lit unless it needs a hand. It still centres on the
+agent's investigations: each one shows what triggered it (findings + the exact brief
+sent to the agent), its trigger source, agent + model, real token usage and cost, and
+a terminal-style transcript of each tool call ($ command, result preview, duration,
+blocked markers) with a "burn line" showing where the token budget went.
 
 <img src="docs/screenshots/dashboard-overview.png" alt="HEIM dashboard overview: KPI tiles (open incidents, running investigations, pending approval, 24h tokens, queue), the latest analysis with a per-host health strip, the needs-attention card, latest runs, and tool usage with the agent's own tooling suggestions" width="900">
 
+The screenshot predates the console redesign (2026-11-01) and is due a refresh;
+working captures of the new design stay out of the repo.
+
 The pages:
 
-- **Overview** — KPI tiles (incidents, running/pending/queued, tokens + cost 24h), a
-  **health card** (the latest analysis in words + a live per-host strip), the last 10
-  daily runs with severity counts, a **tool usage** card (which tool, by which agent
-  and model: calls, blocked, avg time, tokens — plus the agent's own latest note on
-  what would make that tool more useful, written in its report's optional
-  `## Tooling feedback` section), recent investigations and findings.
+- **Overview** — four instrument cards (infrastructure condition, agent coverage,
+  time since the last sync, what requires you), **Needs attention** (open incidents by
+  severity, with what HEIM is doing about each, plus investigations that need a
+  re-run), **Needs you** (approvals and physical checks), and the **Agents** panel;
+  below them the health card (the latest analysis + a per-host strip), the last daily
+  runs, a **tool usage** card (which tool, by which agent and model: calls, blocked,
+  avg time, tokens — plus the agent's own latest note on what would make that tool
+  more useful, from its report's optional `## Tooling feedback` section), token usage,
+  recent investigations and findings. A top-bar **window switch** (Live / 24 h / 7 d)
+  scopes the run strips; what is open stays what is open now.
+- **Agents** — the seven agents (alert poller, threshold watch, uptime monitor,
+  daily analysis, security audit, backup verifier, investigator) with their state
+  (Healthy, Degraded, Failed, Overdue, Paused, No data yet), last success and last
+  runs; a stale or failing one gets a "monitoring gap" line. Each has a detail page
+  (`/agents/<key>`) with its coverage, cadence, last error, a run table and a link to
+  its evidence. The heartbeats come from the daemon only (`agent_runs`); a CLI
+  one-off never counts as the agent being alive.
 - **Investigations** — filterable list with live-polling running rows and queued ghost
-  rows; the detail page is the transcript.
+  rows; the detail page sorts the report into observations (the transcript),
+  interpretation, proposed and completed actions, with the raw report kept.
 - **Incidents** — the store with lifecycle, dispatch locks, and mute state.
-- **Findings** — full history as a per-run table: severity pills, color-coded host
-  badges, in-row detail expanders, verdict actions.
+- **Findings** — full history as a per-run table: severity lamps, color-coded host
+  badges, in-row detail expanders, verdict actions; every finding links to its
+  evidence (the metric row, the incident, its investigation).
+- **Recommendations** — the open remediation steps from incidents and investigations,
+  each linked to its source, marked done or dismissed.
 - **Security** — the weekly security audit by severity: critical and warning tiles,
   one section per severity (new before persisting before carried, with how many weeks
   each has been reported), what was resolved since the previous audit (marked when it
@@ -207,11 +227,15 @@ The pages:
   adding. Proposals only; nothing is added or changed automatically.
 - **Metrics** — everything the daily email shows, live: per-host, per-category tables
   with current/avg, 3-day trend and Δ, from the same aggregation the analyst sees
-  (10-minute cache, REFRESH button).
+  (10-minute cache, a refresh button); each chart states its question, unit, window
+  and thresholds, and draws gaps where observations are missing.
+- **Costs** — token and cost history per day over 7 d / 30 d / all.
 - **Hosts** — per-host cards with one-click investigate.
 
-Dark, dense, resource-light: system fonts, ~17 KB of CSS, vendored htmx, no build
-step, no chart library. `/telemetry` exposes HEIM's own counters in Prometheus text
+Dense and resource-light: system fonts, one ~31 KB stylesheet, vendored htmx, no build
+step, no chart library, and it works on a phone (the rail becomes a row of chips; the
+page never scrolls sideways; wide tables scroll inside their card). The design system — tokens, lamps, labels, components —
+is locked in [`design.md`](design.md); change it there, on purpose. `/telemetry` exposes HEIM's own counters in Prometheus text
 format so your existing Prometheus/Grafana can watch the watcher. Scrape it with a job
 like this (this homelab's copy sits commented out in the ansible-homelab repo's
 `stacks/ubuntu-server/prometheus/prometheus.yml`):
@@ -335,6 +359,8 @@ email recipients — therefore lives in `.env` next to the secrets:
 | `HEIM_SSH_USER` | the read-only SSH user (default `monitoring-agent`) |
 | `HEIM_TELEGRAM_CHAT_ID` | approval/report chat |
 | `HEIM_EMAIL_TO` / `HEIM_EMAIL_FROM` | report delivery |
+| `HEIM_UPTIME_KUMA_URL` | Uptime Kuma base URL (`uptime_kuma.url`); empty = the source is off |
+| `UPTIME_KUMA` | Uptime Kuma API key (Settings → API Keys); HEIM reads `/metrics` with HTTP basic auth, empty username |
 
 `config/settings.yaml` can be copied from the example **unchanged**; a reference
 without a default that is unset fails at startup naming the variable and file. In
@@ -437,6 +463,26 @@ holds the only copy:
 
   Changing a rule therefore means an ansible-homelab change (`make alerts`, `make guards`,
   then `make apply`), not a HEIM one.
+
+### Uptime Kuma (service outages)
+
+When `HEIM_UPTIME_KUMA_URL` and `UPTIME_KUMA` are set in `.env`, the 5-minute poll also
+reads Uptime Kuma's `/metrics`. No `settings.yaml` change is needed: `uptime_kuma.url`
+defaults to `HEIM_UPTIME_KUMA_URL`, and an explicit `uptime_kuma.url` in your
+`settings.yaml` overrides it (`url: ""` turns the source off). Every unpaused monitor is expected up; a down monitor opens an
+`[uptime] ` incident and sends **one Telegram message per host**. Hosts HEIM can
+investigate (ubuntu-server via SSH, home-assistant, and homelab for the `availability`
+category) get an approval-gated investigation; **heim and any address that is not a HEIM
+host (e.g. the k8s nodes) are report-only**. A recovery message follows after 2 up polls.
+A monitor that goes down again within an hour of recovering reopens quietly, with at most
+one line an hour ("keeps flapping (N outages since HH:MM)") and a "stable again" line after
+an hour up. After 2 failed polls HEIM says "Can't reach Uptime Kuma" instead of guessing.
+`heim check` reports the monitor count and any monitor that maps to no HEIM host.
+
+To silence a flapping or irrelevant monitor, use the dashboard's **mute** on its incident
+(a suppression, like any false positive). The daily email does **not** list `[uptime] `
+incidents (the daily run ignores them, so it cannot close an outage Uptime Kuma couldn't
+report on); Telegram and the dashboard are where they show.
 
 ### Where each piece runs (this deployment)
 

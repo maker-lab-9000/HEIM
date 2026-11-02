@@ -671,7 +671,8 @@ async def test_each_half_survives_the_other_failing(rt, monkeypatch, caplog):
     with caplog.at_level(logging.ERROR, logger="heim.pipelines.poller"):
         summary = await poller.run_poll(rt, dispatch_concurrently=False)
     assert summary == {"upserts": 0, "dispatches": 0, "notifications": 0,
-                       "loki_events": 0, "state_changed": False}
+                       "loki_events": 0, "state_changed": False,
+                       "threshold_failed": True}
     assert "threshold half of the poll failed" in caplog.text
 
 

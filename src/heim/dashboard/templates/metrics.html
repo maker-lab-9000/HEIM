@@ -79,6 +79,7 @@
 </form>
 {%- endif %}
 
+{%- set seen = namespace(qids=[]) %}
 {%- for h in metrics.hosts %}
 <section class="card">
   <h2 class="mhost mono">{{ h.name }} {{ m.pill(h.flag) }}</h2>
@@ -98,12 +99,36 @@
     </tr></thead>
     <tbody>
       {%- for r in c.rows %}
-      <tr>
+      {#- one anchor per query: the findings page links to /metrics#q-<qid> -#}
+      {%- set first = r.qid and r.qid not in seen.qids %}
+      {%- if first %}{% set _ = seen.qids.append(r.qid) %}{% endif %}
+      <tr{% if first %} id="q-{{ r.qid }}"{% endif %}>
         <td class="c-flag">{{ m.pill(r.flag) }}</td>
         <td class="c-mname">{{ r.label }}{% if r.name %} <span class="mono ink2">{{ r.name }}</span>{% endif %}</td>
         <td class="num mono c-cur">{{ r.current|mval(r.unit) }}</td>
         <td class="num mono ink2 c-avg" title="min {{ r.min|mval(r.unit) }} · max {{ r.max|mval(r.unit) }}">{{ r.avg|mval(r.unit) }}</td>
-        <td class="mono trend c-trend">{{ r.day3d|mtrend(r.unit) }}</td>
+        <td class="mono trend c-trend">{{ r.day3d|mtrend(r.unit) }}
+          {%- if r.chart.n or r.chart.gaps %}
+          <figure class="rchart">
+            <svg class="tchart sm" width="{{ r.chart.full_width }}" height="{{ r.chart.height }}"
+                 viewBox="0 0 {{ r.chart.full_width }} {{ r.chart.height }}" role="img"
+                 aria-label="{{ r.chart.question }} {{ r.chart.unit }}, {{ r.chart.window }}">
+              {%- for b in r.chart.bars %}
+              {%- if b.gap %}
+              <rect class="gap" x="{{ b.x }}" y="{{ r.chart.baseline - 36 }}" width="{{ b.w }}" height="36"><title>{{ b.title }}</title></rect>
+              {%- else %}
+              <rect class="bar" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"><title>{{ b.title }}</title></rect>
+              {%- endif %}
+              {%- endfor %}
+              {%- for ln in r.chart.lines %}
+              <line class="thr {{ ln.kind }}" x1="0" x2="{{ r.chart.width }}" y1="{{ ln.y + 0.5 }}" y2="{{ ln.y + 0.5 }}"><title>{{ ln.title }}</title></line>
+              <text class="thr {{ ln.kind }}" x="{{ r.chart.width + 3 }}" y="{{ ln.ty }}">{{ ln.kind }}</text>
+              {%- endfor %}
+              <line class="base" x1="0" x2="{{ r.chart.width }}" y1="{{ r.chart.baseline + 0.5 }}" y2="{{ r.chart.baseline + 0.5 }}"/>
+            </svg>
+            <figcaption>{{ m.chart_caption(r.chart.question, r.chart.unit, r.chart.window, r.chart.n, r.chart.gaps) }}</figcaption>
+          </figure>
+          {%- endif %}</td>
         {#- status colors never decorate a healthy row (spec §6) -#}
         <td class="num mono c-delta{% if r.flag in ('warn', 'crit') %} st-{{ r.flag }}{% endif %}">{{ r.changePct|mdelta }}</td>
       </tr>

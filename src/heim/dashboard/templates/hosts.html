@@ -3,30 +3,58 @@
 {% block content %}
 
 {%- if cards %}
-<section class="cards">
+<section class="panel hosts" aria-labelledby="h-hosts">
+  <div class="panel-head"><h2 id="h-hosts">Hosts</h2><p class="label">{{ cards|length }} configured</p></div>
+  <div class="hhead" aria-hidden="true"><p class="label">Host</p><p class="label">Open incidents</p><p class="label">Last finding</p><p class="label">Last investigation</p><p class="label">Action</p></div>
+  <ul class="hlist">
   {%- for c in cards %}
-  <article class="card host">
-    <h2 class="hname mono">{{ c.name }}</h2>
-    <p class="chip role">{{ c.role }}</p>
-    <p class="hopen">{% if c.open %}<a href="/incidents">{{ m.sev('critical' if c.open|selectattr('severity', 'equalto', 'critical')|list else 'warning') }}
+  {%- set crit = c.open|selectattr('severity', 'equalto', 'critical')|list %}
+  <li class="hrow{{ ' flag' if crit }}">
+    <div class="hid">
+      <h3 class="hname mono">{{ c.name }}</h3>
+      <p class="label role" title="role: {{ c.role }}">{{ c.tag }}</p>
+    </div>
+    <p class="hopen">{% if c.open %}<a href="/incidents">
+      {%- if crit %}{{ m.lamp('critical'|lamp) }}<span class="mono">{{ crit|length }}</span> critical, {% endif %}
+      {%- set warn = c.open|length - crit|length %}
+      {%- if warn %}{{ m.lamp('warning'|lamp) }}<span class="mono">{{ warn }}</span> warning, {% endif %}
       <span class="mono">{{ c.open|length }}</span> open incident{{ '' if c.open|length == 1 else 's' }}</a>
-      {%- else %}<span class="ink3">no open incidents</span>{% endif %}</p>
-    <p class="hline">{% if c.finding %}<span class="eyebrow">last finding</span>
+      {%- else %}{{ m.lamp('ok'|lamp) }}<span class="ink3">no open incidents</span>{% endif %}</p>
+    <p class="hline">{% if c.finding %}<span class="label">last finding</span>
       {{ m.sev(c.finding.severity) }} {{ c.finding.summary }} <span class="ink3 mono">{{ c.finding.run_at|rel }}</span>
-      {%- else %}<span class="eyebrow">last finding</span> <span class="ink3">none recorded</span>{% endif %}</p>
-    <p class="hline">{% if c.investigation %}<span class="eyebrow">last investigation</span>
-      <a class="mono" href="/investigations/{{ c.investigation.id }}">#{{ c.investigation.id }}</a>
+      {%- else %}<span class="label">last finding</span> <span class="ink3">none recorded</span>{% endif %}</p>
+    <p class="hline">{% if c.investigation %}<span class="label">last investigation</span>
+      <a class="mono invid" href="/investigations/{{ c.investigation.id }}">#{{ c.investigation.id }}</a>
       {{ m.pill(c.investigation.status) }} <span class="ink3 mono">{{ c.investigation.started_at|rel }}</span>
-      {%- else %}<span class="eyebrow">last investigation</span> <span class="ink3">none yet</span>{% endif %}</p>
+      {%- else %}<span class="label">last investigation</span> <span class="ink3">none yet</span>{% endif %}</p>
     {%- with host = c.name %}
     {% include "partials/_host_acts.html" %}
     {%- endwith %}
-  </article>
+  </li>
   {%- endfor %}
+  </ul>
 </section>
 {%- else %}
-<section class="card">
+<section class="panel">
   <p class="empty">No hosts configured. Add a file under config/hosts/ and restart the daemon.</p>
+</section>
+{%- endif %}
+
+{%- if watched %}
+<section class="panel hosts" aria-labelledby="h-watched">
+  <div class="panel-head"><h2 id="h-watched">Watched, not investigated</h2>
+    <p class="label">reported by uptime, no host profile</p></div>
+  <div class="hhead" aria-hidden="true"><p class="label">Host</p><p class="label">Open incidents</p><p class="label">Last seen</p></div>
+  <ul class="hlist">
+  {%- for w in watched %}
+  <li class="hrow{{ ' flag' if w.severity == 'critical' }}">
+    <div class="hid"><h3 class="hname mono">{{ w.name }}</h3><p class="label role">address</p></div>
+    <p class="hopen"><a href="/incidents">{{ m.lamp(w.severity|lamp) }}
+      <span class="mono">{{ w.open }}</span> open uptime incident{{ '' if w.open == 1 else 's' }}</a></p>
+    <p class="hline"><span class="label">last seen</span> {{ m.when(w.last_seen) }}</p>
+  </li>
+  {%- endfor %}
+  </ul>
 </section>
 {%- endif %}
 {% endblock %}

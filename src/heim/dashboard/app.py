@@ -34,6 +34,8 @@ import sqlite3
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit
@@ -49,6 +51,22 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from heim.agents import (
+    AGENT_KEYS,
+    BACKUP_TIME,
+    TOOL_AGENTS,
+    TOOL_HISTORY_LIMIT,
+    Tick,
+    bucket_runs,
+    agent_specs,
+    investigable_hosts,
+    investigator_status,
+    overall_condition,
+    short_args,
+    tool_summary,
+    run_strip,
+    status_of,
+)
 from heim.config import Config, load_config
 from heim.costing import cost_of
 from heim.dashboard import format as fmt
@@ -60,6 +78,7 @@ from heim.metrics.queries import build_window, load_queries
 # through the exact code path the email did, or the numbers would drift
 from heim.pipelines.daily import _fetch_query_ranges
 from heim.pipelines.queue import enqueue_investigation, enqueue_retry
+from heim.pipelines.security_audit import AGENT_NAME as AUDIT_AGENT
 from heim.pipelines.security_audit import AUDIT_HOST, AUDIT_KIND
 from heim.pipelines.suppression import mark_false_positive, suppress_fingerprint
 from heim.reports.render import _md_to_html
@@ -88,13 +107,40 @@ AUTH_EXEMPT = frozenset({"/healthz", "/telemetry"})
 THEME_COOKIE = "heim_theme"
 THEMES = frozenset({"auto", "light", "dark"})
 THEME_NEXT = {"auto": "light", "light": "dark", "dark": "auto"}
-THEME_ICON = {"auto": "◐", "light": "☀", "dark": "☾"}
+#: the toggle says its state as a word (operator ruling 2026-11-01: no emoji)
+THEME_WORD = {"auto": "Auto", "light": "Light", "dark": "Dark"}
 
 #: a daemon that has not recorded a run in this long is "quiet"
 DAEMON_FRESH_S = 20 * 60
+#: the daemon's every-5-minutes agents: their heartbeats say it is alive
+POLL_AGENTS = ("alert_poller", "thresholds", "uptime")
+
+#: the Agents panel's switch (``?agents=``): the states each segment keeps
+AGENT_FILTERS: dict[str, frozenset[str] | None] = {
+    "all": None,
+    "running": frozenset({"running"}),
+    "attention": frozenset({"failed", "degraded", "stale", "unknown"}),
+}
+#: a flagged row: the agent stopped reporting or its last run errored
+FLAGGED_STATES = frozenset({"stale", "failed"})
+#: the coverage card's hollow discs: no fresh word from the agent (a paused
+#: agent is not expected to report, so it leaves the count instead)
+SILENT_STATES = frozenset({"stale", "unknown"})
+#: how many pending approvals and troubled runs the overview reads at once
+NEEDS_YOU_LIMIT = 50
+#: the legacy ``attention`` context key: the newest runs, as spec §12 had them
+ATTENTION_RUNS = 6
+#: the Needs attention table stops here, so the first screen reaches the
+#: Agents panel; a critical row is never the one cut (``_attention_view``)
+ATTENTION_CAP = 6
+
+try:
+    VERSION = package_version("heim")
+except PackageNotFoundError:  # pragma: no cover - a source checkout without metadata
+    VERSION = "dev"
 
 #: rows per window on the three list pages. ``?offset=N`` moves the window;
-#: the LOAD 50 MORE control is a plain link to the next one, so the no-JS path
+#: the "Load 50 more" control is a plain link to the next one, so the no-JS path
 #: is a normal page load and htmx only saves the round trip through the shell.
 PAGE = 50
 
@@ -118,6 +164,8 @@ _ACTION_HELPERS = (
     # §9: the one table the dashboard owns outright — the pipeline never reads
     # or writes it, it only records which recommendation the operator ticked.
     "set_recommendation_state",
+    # its reversal on the same table: reopening an item drops its mark
+    "clear_recommendation_state",
 )
 
 
@@ -318,13 +366,16 @@ def _back_to(request: Request, fields: dict) -> str:
 
 
 #: the inline feedback lines (spec §5: mono, --ink-2, no toasts)
-QUEUED = "Queued as job #{job} — the daemon picks it up within a few seconds."
 APPROVED = "Approved — the daemon starts the investigation within a few seconds."
 DECLINED = "Declined — nothing runs; it is re-proposed next run."
 CONFIRMED = "Confirmed — kept in the findings history."
+CLEARED = "Verdict cleared."
+#: appended when switching away from (or clearing) a false positive lifts its mute
+LIFTED = " Unmuted."
 UNMUTED = "Unmuted — the pipelines report this fingerprint again."
 MARKED_DONE = "Marked done."
 DISMISSED = "Dismissed."
+REOPENED = "Reopened."
 
 
 # ------------------------------------------------------------------- app
@@ -356,8 +407,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         rel=fmt.rel_time, iso=fmt.iso, clock=fmt.clock, day=fmt.day,
         dur_s=fmt.dur_s, dur_ms=fmt.dur_ms, tokens=fmt.tokens, size=fmt.size,
         fp=fmt.fingerprint, pill=fmt.status_pill, tool_key=fmt.tool_key,
-        command=fmt.command_of,
+        command=fmt.command_of, ownership=fmt.ownership_word,
+        family=fmt.family, lamp=fmt.lamp,
     )
+    templates.env.filters["ucfirst"] = lambda v: str(v)[:1].upper() + str(v)[1:]
     templates.env.filters.update(mval=fmt.value, mtrend=fmt.trend,
                                  mdelta=fmt.delta)
     # host badge colors are handed out by position, so the filter is bound to
@@ -374,7 +427,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     investigator_models = list(cfg.settings.investigator_models)
     templates.env.globals.update(duration=fmt.duration, elapsed=fmt.elapsed,
                                  DASH=fmt.DASH, models=investigator_models,
-                                 default_model=_default_model(cfg))
+                                 default_model=_default_model(cfg),
+                                 colour_legend=fmt.LEGEND)
     app.state.templates = templates
 
     # ------------------------------------------------------- metrics cache
@@ -430,7 +484,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             current if current in THEMES else "auto")
         request.state.theme = resolved
         request.state.next_theme = THEME_NEXT[resolved]
-        request.state.theme_icon = THEME_ICON[resolved]
+        request.state.theme_icon = THEME_WORD[resolved]
         if chosen in THEMES:
             back = request.url.remove_query_params("theme")
             target = back.path + (f"?{back.query}" if back.query else "")
@@ -462,10 +516,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         query = request.url.query
         base = {
             "now": now,
-            "clock": now.strftime("%H:%M"),
-            "env_chip": _env_chip(cfg, now),
+            "clock": f"{now:%H:%M} {now.tzname() or cfg.settings.timezone}",
+            "date_line": f"{now:%A}, {now.day} {now:%B}",
+            "env_chip": _env_chip(cfg),
             "daemon": _daemon_chip(reader),
             "nav": NAV,
+            "nav_groups": NAV_GROUPS,
+            "rail_counts": _rail_counts(reader, cfg),
             # resolved by the theme middleware; here too so child templates
             # (not just base.html) can read it (spec §10)
             "theme": getattr(request.state, "theme", "auto"),
@@ -498,8 +555,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         return templates.TemplateResponse(
             request, "error.html",
             {"message": STORE_ERROR.format(path=reader.path), "detail": str(exc),
-             "nav": NAV, "clock": "", "env_chip": _env_chip(cfg, datetime.now(tz)),
-             "daemon": {"ok": False, "label": "daemon unreachable", "when": ""},
+             "nav": NAV, "nav_groups": NAV_GROUPS, "clock": "",
+             "env_chip": _env_chip(cfg),
+             "daemon": {"ok": False, "label": "Daemon quiet",
+                        "when": "the store is unreadable", "state": "stale"},
              "page_title": "error"},
             status_code=500,
         )
@@ -573,7 +632,7 @@ def create_app(config: Config | None = None) -> FastAPI:
              "meta": "agents working now", "href": "/investigations?status=running",
              "running": counts.get("running", 0) > 0},
             {"label": "pending approval", "value": str(counts.get("pending_approval", 0)),
-             "meta": "waiting on a 👍 in Telegram",
+             "meta": "waiting for your approval",
              "href": "/investigations?status=pending_approval"},
             {"label": "tokens 24h", "value": fmt.tokens(tok_in + tok_out),
              "meta": f"{fmt.tokens(tok_in)} in → {fmt.tokens(tok_out)} out{spend_text}"},
@@ -585,9 +644,31 @@ def create_app(config: Config | None = None) -> FastAPI:
         # with the total behind them so the card knows whether it is truncating.
         # The reason line is the detail page's own sentence (_outcome_line) —
         # `outcome` stores keywords ("needs_human", "timeout"), never prose.
-        attention = [{**r, "reason": (_outcome_line(r) or {}).get("text", "")}
-                     for r in reader.read(lambda s: s.needs_attention())]
+        # One wide read feeds both the card (its newest rows) and Needs you.
+        troubled = [{**r, "reason": (_outcome_line(r) or {}).get("text", "")}
+                    for r in reader.read(lambda s: s.needs_attention(limit=NEEDS_YOU_LIMIT))]
+        attention = troubled[:ATTENTION_RUNS]
         attention_count = reader.read(lambda s: s.needs_attention_count())
+        # the console (redesign 2026-11-01): heartbeats, the agent rows and the
+        # four cards, each figure counted from the same rows the page lists
+        now_iso = datetime.now(timezone.utc).isoformat()
+        by_agent = reader.read(lambda s: s.agent_runs_by_agent())
+        running = reader.read(lambda s: s.investigations(limit=5, status="running"))
+        pending = reader.read(lambda s: s.investigations(limit=NEEDS_YOU_LIMIT,
+                                                         status="pending_approval"))
+        window, window_s = _window(request)
+        window_runs = _window_runs(reader, window_s, now_iso)
+        first_seen = _first_seen(reader, window_s)
+        agent_rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s, window_runs,
+                                 first_seen)
+        _add_tool_counts(reader, agent_rows, window_s, now_iso)
+        needs_you = _needs_you(pending, troubled)
+        attention_rows = _attention_rows(open_incidents, troubled, invs,
+                                         set(investigable_hosts(cfg)))
+        inflight = _in_flight(reader)
+        for r in attention_rows:
+            if r["kind"] == "investigation":     # its Re-run key, pressed when in flight
+                r["inflight"] = _inflight_for(inflight, r)
         feedback = reader.read(lambda s: s.latest_tool_feedback())
         tool_usage = _tool_usage(reader.read(lambda s: s.tool_usage(limit=12)), feedback)
         # the weekly rhythm (spec §11): 14 zero-filled days, turned into bar
@@ -608,9 +689,69 @@ def create_app(config: Config | None = None) -> FastAPI:
             tool_feedback_general=_general_feedback(feedback, tool_usage),
             investigations=invs[:8], findings=findings[:6],
             # a recorded run is activity too — the page used to claim "no
-            # activity yet" while the latest-runs card had something to say
-            empty=not (invs or findings or open_incidents or queued or daily),
+            # activity yet" while the latest-runs card had something to say;
+            # so is a heartbeat: the daemon has polled, even if nothing fired
+            empty=not (invs or findings or open_incidents or queued or daily
+                       or any(by_agent.values())),
+            condition=overall_condition(open_incidents,
+                                        [r["status"] for r in agent_rows]),
+            coverage=_coverage(agent_rows),
+            observations=_observations(agent_rows, by_agent, now_iso, window_s, window_runs,
+                                       first_seen),
+            requires_you=_requires_you(needs_you),
+            attention_rows=attention_rows,
+            # runs past the wide read are still findings: they count, and the
+            # one "all (n)" line is what reaches them
+            **_attention_view(attention_rows,
+                              max(0, attention_count - len(troubled))),
+            needs_you=needs_you,
+            **_agents_panel(agent_rows, request.query_params.get("agents", "")),
+            base_href="/",
+            window=window,
+            version=VERSION,
         )
+
+    def _agent_inputs() -> tuple[dict, list[dict], list[dict], str]:
+        by_agent = reader.read(lambda s: s.agent_runs_by_agent())
+        invs = reader.read(lambda s: s.investigations(limit=60))
+        running = reader.read(lambda s: s.investigations(limit=5, status="running"))
+        return by_agent, invs, running, datetime.now(timezone.utc).isoformat()
+
+    @app.get("/agents", response_class=HTMLResponse)
+    async def agents_page(request: Request):
+        by_agent, invs, running, now_iso = _agent_inputs()
+        window, window_s = _window(request)
+        rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s,
+                           _window_runs(reader, window_s, now_iso),
+                           _first_seen(reader, window_s))
+        _add_tool_counts(reader, rows, window_s, now_iso)
+        return page(request, "agents.html", page_title="agents", window=window,
+                    **_agents_panel(rows, request.query_params.get("agents", "")),
+                    base_href="/agents")
+
+    @app.get("/agents/{key}", response_class=HTMLResponse)
+    async def agent_detail(request: Request, key: str):
+        if key not in AGENT_KEYS:
+            return page(request, "error.html", status=404, page_title="not found",
+                        message=f"No agent called {key!r}.",
+                        detail="The seven agents are listed on the Agents page.")
+        by_agent, invs, running, now_iso = _agent_inputs()
+        row = next(r for r in _agent_rows(cfg, by_agent, invs, running, now_iso)
+                   if r["key"] == key)
+        calls = (reader.read(lambda s: s.tool_calls(TOOL_AGENTS[key], TOOL_HISTORY_LIMIT))
+                 if key in TOOL_AGENTS else None)
+        history = None if calls is None else [
+            {**c, "short": (a := short_args(c["tool"], c["args_json"]))[0], "full": a[1]}
+            for c in calls]
+        return page(request, "agent.html", page_title=f"agents / {row['name']}",
+                    tool_history=history, tool_stats=tool_summary(calls or []),
+                    agent=row, cadence=_cadence_text(cfg, key),
+                    evidence=_AGENT_EVIDENCE.get(key),
+                    backup_file=_last_backup_file(by_agent.get("backup", []))
+                    if key == "backup" else "",
+                    runs=(_investigator_runs(_own_runs(invs)) if key == "investigator"
+                          else _agent_run_table(by_agent.get(key, []), row["cadence_s"], now_iso)),
+                    has_invs=key == "investigator")
 
     @app.get("/investigations", response_class=HTMLResponse)
     async def investigations(request: Request, status: str = "", host: str = "",
@@ -642,10 +783,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                                "the list shows everything the store has.")
         steps = row.get("steps") or []
         transcript, truncated = _stored_transcript(row)
+        fingerprint = str(row.get("fingerprint") or "")
+        suppression = _suppressions(reader).get(fingerprint) if fingerprint else None
         return page(
             request, "investigation.html", page_title=f"investigations / #{inv_id}",
             inv=row, steps=steps, burn=fmt.burn_segments(steps),
             report_html=_md_to_html(row.get("report_md") or "", allow_raw_html=False) if row.get("report_md") else "",
+            sections=_sections_view(row.get("report_md") or ""),
+            completed_actions=_completed_actions(row, suppression),
             findings=_trigger_findings(row),
             brief_html=_md_to_html(row.get("brief_md") or "", allow_raw_html=False) if row.get("brief_md") else "",
             outcome=_outcome_line(row),
@@ -677,7 +822,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             row["investigations"] = by_fp.get(row["fingerprint"], [])
             row["suppression"] = sups.get(row["fingerprint"])
         return page(request, "incidents.html", page_title="incidents", rows=rows,
-                    next_offset=next_offset)
+                    next_offset=next_offset, inflight=_in_flight(reader))
+
+    # the qids the metrics page can anchor to (read once; the catalog is config)
+    catalog_qids = {q.qid for q in load_queries(cfg.queries_path)}
 
     @app.get("/findings", response_class=HTMLResponse)
     async def findings_page(request: Request):
@@ -706,6 +854,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         for group in groups:  # worst first inside a run, like the daily email
             group["findings"].sort(key=lambda f: _SEV_RANK.get(
                 str(f.get("severity") or "").lower(), 3))
+            for f in group["findings"]:
+                f["evidence"] = _evidence(reader, f, catalog_qids)
         # `total` is this window's size — the header says which findings these
         # are ("showing findings 51–94"), never a grand total it cannot know
         return page(request, "findings.html", page_title="findings", groups=groups,
@@ -786,6 +936,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         chart = fmt.bar_chart(
             reader.read(lambda s: s.cost_by_day(14, now.isoformat())),
             value_key="cost", unit="", fmt_label=money, fmt_exact=money)
+        chart["unit"] = f"{currency} per day"
         return page(request, "costs.html", page_title="costs", window=key,
                     windows=list(COST_WINDOWS), cost_chart=chart, **view)
 
@@ -799,11 +950,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             cards.append({
                 "name": host.name,
                 "role": host.role,
+                # a Proxmox guest reads as its VM number, anything else as its role
+                "tag": f"VM {host.vmid}" if host.vmid is not None else host.role.capitalize(),
                 "open": [i for i in open_incidents if i["host"] == host.name],
                 "finding": next((f for f in findings if f.get("host") == host.name), None),
                 "investigation": next((i for i in invs if i.get("host") == host.name), None),
             })
-        return page(request, "hosts.html", page_title="hosts", cards=cards)
+        return page(request, "hosts.html", page_title="hosts", cards=cards,
+                    watched=_report_only_hosts(cfg, open_incidents),
+                    inflight=_in_flight(reader))
 
     # ------------------------------------------------------- action routes
     #
@@ -836,12 +991,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         job_id = reader.write(lambda s: enqueue_investigation(
             s, host=host, host_role=host_cfg.role, fingerprint=fingerprint,
             findings=findings, requested_by="dashboard", model=model))
-        flash = {"text": QUEUED.format(job=job_id)}
+        flash = _requested(reader.read(lambda s: s.job(job_id)), tz)
+        inflight = _in_flight(reader)
         if incident:
             return respond(request, fields, "partials/_incident_acts.html", flash,
-                           **_incident_ctx(reader, fingerprint))
+                           inflight=inflight, **_incident_ctx(reader, fingerprint))
         return respond(request, fields, "partials/_host_acts.html", flash,
-                       host=host)
+                       host=host, inflight=inflight)
 
     @app.post("/actions/retrigger")
     async def action_retrigger(request: Request):
@@ -852,9 +1008,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise ActionError(f"No investigation #{inv_id}.",
                               "Nothing to re-run — the list shows everything the "
                               "store has.", 404)
-        return respond(request, fields, "partials/_inv_acts.html",
-                       {"text": QUEUED.format(job=job_id)},
-                       inv=reader.read(lambda s: s.investigation(inv_id)))
+        flash = _requested(reader.read(lambda s: s.job(job_id)), tz)
+        inv = reader.read(lambda s: s.investigation(inv_id))
+        if str(fields.get("cell") or "") == "attention":
+            # the overview's Needs-attention row: its own cell, pressed
+            return respond(request, fields, "partials/_rerun_acts.html", flash,
+                           r={"id": inv_id, "inflight": _inflight_for(
+                               _in_flight(reader), inv or {})})
+        return respond(request, fields, "partials/_inv_acts.html", flash, inv=inv)
 
     @app.post("/actions/approval")
     async def action_approval(request: Request):
@@ -876,20 +1037,28 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def action_verdict(request: Request):
         fields = await _fields(request)
         finding_id = _int_field(fields, "finding_id")
-        verdict = _choice_field(fields, "verdict", ("confirmed", "false_positive"))
+        # "clear" is the pressed key pressed again: no verdict at all
+        verdict = _choice_field(fields, "verdict", ("confirmed", "false_positive", "clear"))
         days = cfg.settings.suppression_days
+        before = reader.read(lambda s: s.finding(finding_id))
+        if before is None:
+            raise ActionError(f"No finding #{finding_id}.",
+                              "Findings are pruned with their run — the history "
+                              "page shows what is left.", 404)
         if verdict == "false_positive":
             # one call: verdict + suppression + the incident status flip
             row = reader.write(lambda s: mark_false_positive(
                 s, finding_id, days=days, now=datetime.now(tz)))
             flash = {"text": _muted_text((row or {}).get("suppression"))}
         else:
-            row = reader.write(lambda s: s.set_finding_verdict(finding_id, "confirmed"))
-            flash = {"text": CONFIRMED}
-        if row is None:
-            raise ActionError(f"No finding #{finding_id}.",
-                              "Findings are pruned with their run — the history "
-                              "page shows what is left.", 404)
+            new = "confirmed" if verdict == "confirmed" else ""
+            row = reader.write(lambda s: s.set_finding_verdict(finding_id, new))
+            text = CONFIRMED if new else CLEARED
+            # leaving false positive takes back the mute that verdict set
+            fp = str(before.get("fingerprint") or "")
+            if before.get("verdict") == "false_positive" and fp and _lift_mute(reader, fp):
+                text += LIFTED
+            flash = {"text": text}
         return respond(request, fields, "partials/_verdict.html", flash, f=row)
 
     @app.post("/actions/mute")
@@ -903,24 +1072,20 @@ def create_app(config: Config | None = None) -> FastAPI:
             s, fingerprint, days=days, reason="marked a false positive from the dashboard",
             now=datetime.now(tz)))
         return respond(request, fields, "partials/_incident_acts.html",
-                       {"text": _muted_text(res)},
+                       {"text": _muted_text(res)}, inflight=_in_flight(reader),
                        **_incident_ctx(reader, fingerprint))
 
     @app.post("/actions/unmute")
     async def action_unmute(request: Request):
         fields = await _fields(request)
         fingerprint = _text_field(fields, "fingerprint", "Unmuting")
-        if not reader.write(lambda s: s.unsuppress(fingerprint)):
+        if not _lift_mute(reader, fingerprint):
             raise ActionError(f"{fingerprint} is not muted.",
                               "Nothing to lift — the muted rows are the ones with a "
                               "muted pill.", 404)
-        # same as `heim incidents unmute`: only a suppressed row goes back to open
-        incident = reader.read(lambda s: s.incident(fingerprint))
-        if incident and incident.get("status") == "suppressed":
-            reader.write(lambda s: s.set_incident_status(fingerprint, "open"))
         return respond(
             request, fields, "partials/_incident_acts.html",
-            {"text": UNMUTED},
+            {"text": UNMUTED}, inflight=_in_flight(reader),
             **_incident_ctx(reader, fingerprint))
 
     @app.post("/actions/recommendation")
@@ -936,12 +1101,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         fields = await _fields(request)
         # state first: a form that posts an impossible state is the error
         # worth reporting, even when the key is malformed too
-        state = _choice_field(fields, "state", ("done", "dismissed"))
+        # "open" is the pressed key pressed again: the item is reopened
+        state = _choice_field(fields, "state", ("done", "dismissed", "open"))
         key = _rec_key_field(fields)
-        reader.write(lambda s: s.set_recommendation_state(key, state))
-        flash = {"text": MARKED_DONE if state == "done" else DISMISSED}
+        if state == "open":
+            reader.write(lambda s: s.clear_recommendation_state(key))
+            flash = {"text": REOPENED}
+        else:
+            reader.write(lambda s: s.set_recommendation_state(key, state))
+            flash = {"text": MARKED_DONE if state == "done" else DISMISSED}
         return respond(request, fields, "partials/_rec_acts.html", flash,
-                       r={"key": key, "state": state})
+                       r={"key": key, "state": "" if state == "open" else state})
 
     return app
 
@@ -1020,19 +1190,29 @@ def exposition(stats: dict) -> str:
 
 # ---------------------------------------------------------------- helpers
 
-NAV = [
-    {"href": "/", "label": "overview", "icon": "◆"},
-    {"href": "/investigations", "label": "investigations", "icon": "▣"},
-    {"href": "/incidents", "label": "incidents", "icon": "▲"},
-    {"href": "/findings", "label": "findings", "icon": "▤"},
-    {"href": "/security", "label": "security", "icon": "⛨"},
-    {"href": "/recommendations", "label": "recommendations", "icon": "✓"},
-    {"href": "/metrics", "label": "metrics", "icon": "▥"},
-    {"href": "/costs", "label": "costs", "icon": "◍"},
-    {"href": "/hosts", "label": "hosts", "icon": "▢"},
+#: the rail, grouped as the console concept has it (redesign 2026-11-01);
+#: every item gets a lamp, lit orange when current. ``NAV`` is the flat list.
+NAV_GROUPS = [
+    ("Workspace", [
+        {"href": "/", "label": "Overview"},
+        {"href": "/agents", "label": "Agents"},
+        {"href": "/investigations", "label": "Investigations"},
+        {"href": "/incidents", "label": "Incidents"},
+    ]),
+    ("Infrastructure", [
+        {"href": "/hosts", "label": "Hosts"},
+        {"href": "/metrics", "label": "Metrics"},
+        {"href": "/security", "label": "Security"},
+    ]),
+    ("Insights", [
+        {"href": "/findings", "label": "Findings"},
+        {"href": "/recommendations", "label": "Recommendations"},
+        {"href": "/costs", "label": "Costs"},
+    ]),
 ]
+NAV = [item for _group, items in NAV_GROUPS for item in items]
 
-_TRIGGERS = ["daily", "poller", "manual", "security_audit"]
+_TRIGGERS = ["daily", "poller", "manual", "security_audit", "uptime"]
 
 
 def _query(**params) -> str:
@@ -1054,6 +1234,34 @@ def _offset(request: Request) -> int:
         return 0
 
 
+#: ``?window=`` -> seconds the run strips cover (``None`` = live, the last runs)
+WINDOWS: dict[str, int | None] = {"live": None, "24h": 86_400, "7d": 604_800}
+
+
+def _window(request: Request) -> tuple[str, int | None]:
+    """The switch's engaged window; anything unknown is ``live``."""
+    key = request.query_params.get("window", "")
+    key = key if key in WINDOWS else "live"
+    return key, WINDOWS[key]
+
+
+def _window_runs(reader, window_s: int | None, now_iso: str) -> dict[str, list[dict]] | None:
+    """Every heartbeat inside the window, or ``None`` for live. No row cap:
+    ``agent_runs`` retention (14 days) already bounds a 7 d read."""
+    if window_s is None:
+        return None
+    since = (datetime.fromisoformat(now_iso) - timedelta(seconds=window_s)).isoformat()
+    return reader.read(lambda s: s.agent_runs_by_agent(limit_per_agent=-1, since=since))
+
+
+def _first_seen(reader, window_s: int | None) -> dict[str, str]:
+    """Each agent's oldest stored heartbeat, for the window strips (a slot
+    before an agent first ran is not a miss); live strips do not need it."""
+    if window_s is None:
+        return {}
+    return reader.read(lambda s: s.agent_first_seen())
+
+
 def _qs_with(request: Request) -> Callable[..., str]:
     """``qs_with(offset=50)``: this page's query string with overrides applied.
 
@@ -1071,6 +1279,17 @@ def _qs_with(request: Request) -> Callable[..., str]:
         return urlencode(pairs)
 
     return qs_with
+
+
+def _evidence(reader: StoreReader, finding: dict, catalog_qids: set[str]) -> list[dict]:
+    """The links from one finding row to the rows that back it."""
+    fp = str(finding.get("fingerprint") or "")
+    if not fp:
+        return []
+    inv = reader.read(lambda s: s.investigation_by_fingerprint(fp))
+    audit = str(finding.get("source") or "") == "security_audit"
+    has_incident = False if audit else reader.read(lambda s: s.incident(fp)) is not None
+    return fmt.evidence_links(finding, inv, catalog_qids, incident_exists=has_incident)
 
 
 def _finding_window(rows: list[dict], offset: int) -> tuple[list[dict], int | None]:
@@ -1191,25 +1410,56 @@ def _next_offset(rows: list[dict], offset: int) -> tuple[list[dict], int | None]
     return rows, None
 
 
-def _env_chip(cfg: Config, now: datetime) -> str:
+def _env_chip(cfg: Config) -> str:
     n = len(cfg.hosts)
-    return f"{n} host{'s' if n != 1 else ''} · {now.tzname() or cfg.settings.timezone}"
+    return f"{n} host{'s' if n != 1 else ''}"
+
+
+def _rail_counts(reader: StoreReader, cfg: Config) -> dict[str, int]:
+    """The rail's counts, keyed by href. Each is a plain store read, so it
+    agrees with the list it summarises; one that fails is simply omitted."""
+    counts = {"/agents": len(AGENT_KEYS), "/hosts": len(cfg.hosts)}
+    try:
+        by_status = reader.read(lambda s: s.counts_by_status())
+        counts["/investigations"] = (by_status.get("running", 0)
+                                     + by_status.get("pending_approval", 0))
+    except sqlite3.Error:
+        pass
+    try:
+        # open_rows() is status='open' only: suppressed and clearing excluded
+        counts["/incidents"] = len(reader.read(lambda s: s.open_rows()))
+    except sqlite3.Error:
+        pass
+    return counts
 
 
 def _daemon_chip(reader: StoreReader) -> dict:
-    """Liveness derived from the freshest `runs` row (the daemon writes one per
-    cycle that did something) — the dashboard never probes the daemon itself."""
+    """Liveness from the newest poll heartbeat (`agent_runs`, written by the
+    daemon every cycle), falling back to the freshest `runs` row for a store
+    that predates heartbeats — the dashboard never probes the daemon itself."""
+    def newest(s: IncidentStore) -> str:
+        beats = [r.get("finished_at") or r.get("started_at")
+                 for a in POLL_AGENTS for r in s.agent_runs(a, limit=1)]
+        beats = [b for b in beats if fmt.parse_dt(b)]
+        if beats:
+            return max(beats, key=fmt.parse_dt)
+        runs = s.runs(limit=1)
+        return str(runs[0].get("run_at") or "") if runs else ""
+
     try:
-        rows = reader.read(lambda s: s.runs(limit=1))
+        at = reader.read(newest)
     except sqlite3.Error:  # pragma: no cover - surfaced by the error page
-        return {"ok": False, "label": "daemon unreachable", "when": ""}
-    if not rows:
-        return {"ok": False, "label": "daemon quiet", "when": "no runs yet"}
-    age = fmt.age_seconds(rows[0].get("run_at"))
-    when = fmt.rel_time(rows[0].get("run_at"))
+        return {"ok": False, "label": "Daemon quiet", "when": "the store is unreadable",
+                "state": "stale"}
+    if not at:
+        return {"ok": False, "label": "No heartbeat yet", "when": "nothing recorded",
+                "state": "unknown"}
+    age = fmt.age_seconds(at)
+    when = fmt.rel_time(at)
     if age is not None and age < DAEMON_FRESH_S:
-        return {"ok": True, "label": "daemon", "when": f"last run {when}"}
-    return {"ok": False, "label": "daemon quiet", "when": when}
+        return {"ok": True, "label": "Connected", "when": f"Synced {when}", "state": "connected"}
+    return {"ok": False, "label": "Daemon quiet", "when": f"Last sync {when}",
+            "state": "stale"}
 
 
 def _incident_meta(rows: list[dict]) -> str:
@@ -1372,6 +1622,28 @@ def _host_health(cfg: Config, open_incidents: list[dict]) -> list[dict]:
     return chips
 
 
+def _report_only_hosts(cfg: Config, open_incidents: list[dict]) -> list[dict]:
+    """Addresses Uptime Kuma reports on that HEIM has no profile for.
+
+    An open ``[uptime] `` incident on a host outside ``cfg.hosts`` can only be
+    reported — there is nothing to investigate it with — so the hosts page
+    lists it apart from the configured hosts. Worst severity first, then name.
+    """
+    seen: dict[str, list[dict]] = {}
+    for inc in open_incidents:
+        host = str(inc.get("host") or "")
+        if (host and host not in cfg.hosts
+                and fmt.ownership_word(inc.get("description")) == "Uptime"):
+            seen.setdefault(host, []).append(inc)
+    out = []
+    for host, mine in seen.items():
+        crit = any(str(i.get("severity") or "").lower().startswith("crit") for i in mine)
+        out.append({"name": host, "open": len(mine),
+                    "severity": "critical" if crit else "warning",
+                    "last_seen": max(str(i.get("lastSeen") or "") for i in mine)})
+    return sorted(out, key=lambda w: (w["severity"] != "critical", w["name"]))
+
+
 def _health_card(latest: dict | None, sev_counts: dict, cfg: Config,
                  open_incidents: list[dict]) -> dict | None:
     """The overview's health card: where the house stands, in words.
@@ -1395,6 +1667,357 @@ def _health_card(latest: dict | None, sev_counts: dict, cfg: Config,
         "line": _counts_line(sev_counts.get((latest or {}).get("id"), {})),
         "hosts": hosts,
     }
+
+
+# ----------------------------------------------------------- the console
+#
+# The overview's first screen (redesign 2026-11-01): what needs attention, are
+# the agents working, how fresh is their word. Pure: every helper takes rows
+# the route already read, so a figure and the list it summarises are always
+# counted from the same rows.
+
+
+def _own_runs(invs: list[dict]) -> list[dict]:
+    """The investigator's own runs: the security auditor writes investigation
+    rows too, and an offline replay says nothing about the live agent."""
+    return [i for i in invs
+            if i.get("agent_name") != AUDIT_AGENT and i.get("trigger") != "replay"]
+
+
+def _strip_label(strip: list[Tick]) -> str:
+    """The run strip in words, for its ``role="img"``."""
+    if not strip:
+        return "no runs yet"
+    runs = sum(t.state in ("ok", "fail") for t in strip)
+    failed = sum(t.state == "fail" for t in strip)
+    missed = sum(t.state == "miss" for t in strip)
+    parts = [f"{runs} run{'' if runs == 1 else 's'}"]
+    parts += [f"{failed} failed"] if failed else []
+    parts += [f"{missed} missed"] if missed else []
+    parts += ["the latest not received"] if strip[-1].state == "open" else []
+    return ", ".join(parts if len(parts) > 1 else parts + ["all succeeded"])
+
+
+def _add_tool_counts(reader, rows: list[dict], window_s: int | None, now_iso: str) -> None:
+    """Give each agent row its ``tools`` figure: ``None`` for an agent that
+    never calls tools, else ``{"calls", "blocked"}`` in the window (live
+    counts the last 24 h). A step is dated by its investigation's start."""
+    since = (datetime.fromisoformat(now_iso)
+             - timedelta(seconds=window_s or WINDOWS["24h"])).isoformat()
+    for r in rows:
+        names = TOOL_AGENTS.get(r["key"])
+        r["tools"] = (reader.read(lambda s, n=names: s.tool_call_counts(n, since))
+                      if names else None)
+
+
+def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
+                running: list[dict], now_iso: str, window_s: int | None = None,
+                window_runs: dict[str, list[dict]] | None = None,
+                first_seen: dict[str, str] | None = None) -> list[dict]:
+    """One row per agent, in ``AGENT_KEYS`` order: spec, status and run strip.
+
+    The investigator records no heartbeats; its runs are its investigations
+    (``invs``, newest first), and ``running`` names the one in flight for
+    its scope line. A paused agent's strip shows what it did, never a miss.
+    With ``window_s`` the strip is that window's slots (``bucket_runs``) from
+    ``window_runs``, and slots before the agent's ``first_seen`` heartbeat
+    are blank rather than missed; status always comes from the newest runs.
+    """
+    detail = {key: rows[0].get("detail") or {} for key, rows in by_agent.items() if rows}
+    live = next(iter(_own_runs(running)), None)
+    if live:
+        detail["investigator"] = {"running_host": live.get("host"),
+                                  "running_id": live.get("id")}
+    own = _own_runs(invs)
+    rows = []
+    for spec in agent_specs(cfg, detail):
+        if spec.key == "investigator":
+            status = investigator_status(own, now_iso)
+            finished = [{"started_at": i.get("started_at"),
+                         "ok": i.get("status") not in ("failed", "incomplete")}
+                        for i in own
+                        if i.get("status") not in ("pending_approval", "declined", "running")]
+            strip = (bucket_runs(finished, None, window_s, now_iso) if window_s
+                     else run_strip(finished, None, now_iso))
+        else:
+            runs = by_agent.get(spec.key, [])
+            status = status_of(spec, runs, now_iso)
+            cadence = None if spec.paused else spec.cadence_s
+            strip = (bucket_runs((window_runs or {}).get(spec.key, []), cadence, window_s,
+                                 now_iso, first_seen_iso=(first_seen or {}).get(spec.key))
+                     if window_s
+                     else run_strip(runs, cadence, now_iso))
+        rows.append({"key": spec.key, "name": spec.name, "scope": spec.scope,
+                     "status": status, "last_ok": status.last_ok_at, "strip": strip,
+                     "strip_label": _strip_label(strip),
+                     "flag": status.state in FLAGGED_STATES,
+                     "cadence_s": None if spec.paused else spec.cadence_s,
+                     "href": f"/agents/{spec.key}"})
+    return rows
+
+
+#: where each agent's detail page points for what the agent produced; the
+#: backup verifier has no page, it shows the file name instead.
+_AGENT_EVIDENCE = {
+    "alert_poller": ("/incidents", "Incidents"), "thresholds": ("/incidents", "Incidents"),
+    "uptime": ("/incidents", "Incidents"), "daily": ("/findings", "Findings"),
+    "investigator": ("/investigations", "Investigations"),
+    "security": ("/security", "Security audit"),
+}
+
+
+def _last_backup_file(runs: list[dict]) -> str:
+    """The file the newest backup run that wrote one names (runs newest
+    first). A run whose prune failed is not ok but still wrote its file."""
+    return next((str(f) for r in runs
+                 if (f := (r.get("detail") or {}).get("backup_file"))), "")
+
+
+def _cadence_text(cfg: Config, key: str) -> str:
+    """How often the agent should run, in words (the spec's agent table)."""
+    if key in ("alert_poller", "thresholds", "uptime"):
+        return f"every {cfg.settings.schedules.poll_minutes} min"
+    if key == "daily":
+        n = len(cfg.settings.schedules.daily)
+        return {1: "daily", 2: "twice daily"}.get(n, f"{n} times daily")
+    if key == "security":
+        return "weekly"
+    if key == "backup":
+        return "daily at {:02d}:{:02d}".format(*BACKUP_TIME)
+    return "on demand"
+
+
+def _what_happened(run: dict) -> str:
+    """The error text, else the run's counters (``4 hosts · 50 queries``)."""
+    if run.get("error"):
+        return str(run["error"])
+    parts = [f"{v} {k.replace('_', ' ')}" for k, v in (run.get("detail") or {}).items()
+             if v is not None and not isinstance(v, (dict, list))]
+    return " · ".join(parts)
+
+
+def _agent_run_table(runs: list[dict], cadence_s: int | None, now_iso: str) -> list[dict]:
+    """A heartbeat agent's last runs, newest first. A stretch over twice the
+    cadence between two runs, or a newest run older than one cadence, is a
+    ``Missed`` row, the same rule as the run strip."""
+    def at_s(iso: str, other: str) -> float | None:
+        a, b = fmt.parse_dt(iso), fmt.parse_dt(other)
+        return (b - a).total_seconds() if a and b else None
+
+    out: list[dict] = []
+    if cadence_s and runs:
+        age = at_s(str(runs[0].get("started_at")), now_iso)
+        if age is not None and age > cadence_s:
+            out.append({"at": now_iso, "word": "Missed", "state": "missed", "duration": "",
+                        "what": "Latest run not received."})
+    for i, r in enumerate(runs):
+        out.append({"at": r.get("started_at"), "word": "OK" if r.get("ok") else "Error",
+                    "state": "ok" if r.get("ok") else "error",
+                    "duration": fmt.duration(r.get("started_at"), r.get("finished_at")),
+                    "what": _what_happened(r)})
+        if cadence_s and i + 1 < len(runs):
+            gap = at_s(str(runs[i + 1].get("started_at")), str(r.get("started_at")))
+            if gap is not None and gap > 2 * cadence_s:
+                out.append({"at": runs[i + 1].get("started_at"), "word": "Missed",
+                            "state": "missed", "duration": "",
+                            "what": f"No run for {fmt.dur_s(gap)}."})
+    return out[:24]
+
+
+def _investigator_runs(own: list[dict]) -> list[dict]:
+    """The investigator's runs are its investigations, newest first."""
+    return [{"id": i["id"], "at": i.get("started_at"), "status": i.get("status"),
+             "host": i.get("host"), "steps": i.get("n_steps") or 0,
+             "tokens": int(i.get("input_tokens") or 0) + int(i.get("output_tokens") or 0)}
+            for i in own[:24]]
+
+
+def _gap(row: dict) -> dict:
+    """The monitoring-gap line under the Agents table for one flagged row."""
+    name, status = row["name"].lower(), row["status"]
+    if status.state == "stale":
+        text = f"Monitoring gap: latest {name} result not received."
+    else:
+        error = status.last_error.rstrip(". ") or "no reason recorded"
+        text = f"Monitoring gap: {name} failed: {error}."
+    return {"text": text, "href": row["href"], "label": f"Review {name} runs"}
+
+
+def _agents_panel(rows: list[dict], wanted: str) -> dict:
+    """The Agents panel's context: the rows the switch keeps, the switch's
+    counts (from the same rows), and one gap line per flagged agent whatever
+    the filter, because a monitoring gap is news on every view."""
+    key = wanted if wanted in AGENT_FILTERS else "all"
+
+    def keeps(states: frozenset[str] | None, row: dict) -> bool:
+        return states is None or row["status"].state in states
+
+    return {
+        "agents": [r for r in rows if keeps(AGENT_FILTERS[key], r)],
+        "agents_filter": key,
+        "agents_counts": {k: sum(keeps(states, r) for r in rows)
+                          for k, states in AGENT_FILTERS.items()},
+        "gaps": [_gap(r) for r in rows if r["flag"]],
+    }
+
+
+def _coverage(rows: list[dict]) -> dict:
+    """The Agent coverage card: one disc per expected agent, hollow when it
+    is silent. A paused agent is switched off, not silent: it leaves the
+    count and is named on its own foot line."""
+    expected = [r for r in rows if r["status"].state != "paused"]
+    discs = [r["status"].state not in SILENT_STATES for r in expected]
+    return {"reporting": sum(discs), "total": len(expected), "discs": discs,
+            "missing": [r["name"] for r, on in zip(expected, discs) if not on],
+            "paused": [r["name"] for r in rows if r["status"].state == "paused"]}
+
+
+def _observations(rows: list[dict], by_agent: dict[str, list[dict]], now_iso: str,
+                  window_s: int | None = None,
+                  window_runs: dict[str, list[dict]] | None = None,
+                  first_seen: dict[str, str] | None = None) -> dict:
+    """The Observations card: how old the newest poll is, and the last polls
+    as a ruler. A poll cycle records each running half under one start time,
+    so the halves merge into one tick that fails when any half failed. In a
+    window the ruler is that window's slots, red where any poll failed or
+    was missed."""
+    polling = [r["key"] for r in rows
+               if r["key"] in POLL_AGENTS and r["status"].state != "paused"]
+    cycles: dict[str, bool] = {}
+    for key in polling:
+        for run in (window_runs if window_s else by_agent).get(key, []):
+            at = run["started_at"]
+            cycles[at] = cycles.get(at, True) and run["ok"]
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    merged = sorted(({"started_at": at, "ok": ok} for at, ok in cycles.items()),
+                    key=lambda r: fmt.parse_dt(r["started_at"]) or epoch, reverse=True)
+    # the poll cadence is the alert poller's spec (it is never paused)
+    cadence = next((r["cadence_s"] for r in rows if r["key"] == "alert_poller"), None)
+    firsts = [f for k in polling if (f := (first_seen or {}).get(k)) and fmt.parse_dt(f)]
+    first = min(firsts, key=fmt.parse_dt) if firsts else None
+    ticks = (bucket_runs(merged, cadence, window_s, now_iso, first_seen_iso=first) if window_s
+             else run_strip(merged, cadence, now_iso))
+    beats = [r.get("finished_at") or r.get("started_at")
+             for key in POLL_AGENTS for r in by_agent.get(key, [])[:1]]
+    beats = [b for b in beats if fmt.parse_dt(b)]
+    newest = max(beats, key=fmt.parse_dt) if beats else ""
+    polls = sum(t.state in ("ok", "fail") for t in ticks)
+    failed = sum(t.state == "fail" for t in ticks)
+    missed = sum(t.state == "miss" for t in ticks)
+    return {
+        "since_s": fmt.age_seconds(newest) if newest else None,
+        "since_text": fmt.age_text(newest) if newest else fmt.DASH,
+        "sources": "Prometheus · Uptime Kuma" if "uptime" in polling else "Prometheus",
+        "ticks": ticks,
+        "label": f"{polls} polls, {failed} failed, {missed} missed",
+    }
+
+
+def _subject(inv: dict) -> str:
+    """What an investigation is about, in a few words: its first triggering
+    finding, else the name in its fingerprint (``host|qid|name``)."""
+    first = next((f["metric"] for f in _trigger_findings(inv) if f["metric"]), "")
+    parts = str(inv.get("fingerprint") or "").split("|")
+    name = (parts[2] or parts[1]) if len(parts) == 3 else ""
+    return first or name
+
+
+def _needs_you(pending: list[dict], troubled: list[dict]) -> list[dict]:
+    """The operator's tasks, oldest first within each kind: approvals, then
+    physical checks, then the runs that need a person's judgement. Each opens
+    the investigation, where the approve/decline and re-run forms live."""
+    def task(inv: dict, kind: str, title: str, text: str) -> dict:
+        return {"kind": kind, "label": fmt.needs_you_label(inv), "title": title,
+                "mono": f"{inv.get('host') or fmt.DASH} · investigation {inv.get('id')}",
+                "text": text, "href": f"/investigations/{inv.get('id')}",
+                "primary": kind == "approval"}
+
+    approvals = [task(i, "approval", f"Investigate {_subject(i) or i.get('host')}",
+                      "Review the proposed diagnostic scope.") for i in reversed(pending)]
+    checks, humans = [], []
+    for inv in reversed(troubled):
+        if inv.get("status") != "needs_human":
+            continue
+        step = fmt.physical_step(inv.get("report_md"))
+        title = _subject(inv) or f"Investigation {inv.get('id')}"
+        if step:
+            checks.append(task(inv, "check", title, step))
+        else:
+            humans.append(task(inv, "human", title, inv.get("reason", "")))
+    return approvals + checks + humans
+
+
+def _requires_you(tasks: list[dict]) -> dict:
+    return {"n": len(tasks),
+            "approvals": sum(t["kind"] == "approval" for t in tasks),
+            "checks": sum(t["kind"] == "check" for t in tasks)}
+
+
+_PREFIXES = ("[uptime] ", "[metric] ", "[alert] ")
+
+
+def _attention_rows(open_incidents: list[dict], attention: list[dict],
+                    invs: list[dict], investigable: set[str]) -> list[dict]:
+    """Needs attention: critical incidents, then the runs that ended badly
+    (with their re-run form), then warnings; oldest first within each group.
+    ``open_rows()`` is status ``open`` only, so suppressed rows never get here."""
+    by_fp: dict[str, list[dict]] = {}
+    for inv in invs:                                   # newest first
+        by_fp.setdefault(str(inv.get("fingerprint") or ""), []).append(inv)
+
+    def incident(i: dict, severity: str) -> dict:
+        text = str(i.get("description") or "")
+        sub = next((text[len(p):] for p in _PREFIXES if text.startswith(p)), text)
+        name = str(i.get("fingerprint") or "").split("|")[-1]
+        return {"kind": "incident", "severity": severity, "state": severity,
+                "title": i.get("metric") or name or fmt.DASH,
+                "sub": sub, "host": i.get("host") or "",
+                "workflow": fmt.workflow_for(i, by_fp.get(i.get("fingerprint") or "", []),
+                                             investigable),
+                "age": fmt.age_text(i.get("firstSeen")), "at": i.get("firstSeen") or "",
+                "href": "/incidents"}
+
+    def run(inv: dict) -> dict:
+        status = str(inv.get("status") or "")
+        return {"kind": "investigation", "id": inv.get("id"), "status": status,
+                "fingerprint": inv.get("fingerprint") or "",
+                "severity": fmt.status_pill(status)["label"],
+                "state": status,
+                "title": _subject(inv) or f"Investigation {inv.get('id')}",
+                "sub": inv.get("reason", ""), "host": inv.get("host") or "",
+                "workflow": {"title": "" if status == "needs_human" else "Stopped",   # the left column says "Needs you"
+                             "sub": f"investigation {inv.get('id')}",
+                             "href": f"/investigations/{inv.get('id')}"},
+                "age": fmt.age_text(inv.get("started_at")), "at": inv.get("started_at") or "",
+                "href": f"/investigations/{inv.get('id')}"}
+
+    def rank(i: dict) -> int:
+        return _SEV_RANK.get(str(i.get("severity") or "").lower(), 3)
+
+    crit = [incident(i, "critical") for i in open_incidents if rank(i) == 0]
+    warn = [incident(i, "warning") for i in open_incidents if rank(i) == 1]
+    return crit + [run(i) for i in reversed(attention)] + warn
+
+
+def _attention_view(rows: list[dict], unread_runs: int = 0) -> dict:
+    """What the Needs attention table prints, and the one line past it.
+
+    At most ``ATTENTION_CAP`` rows, unless more than that are critical:
+    criticals lead the order, so cutting the tail only ever drops runs and
+    warnings. The header counts every finding, ``unread_runs`` (troubled runs
+    beyond the overview's wide read) included, and when anything is left out
+    one "all (n)" line links the page that lists it: /investigations when
+    every hidden row is a run, /incidents otherwise.
+    """
+    crit = sum(r["kind"] == "incident" and r["severity"] == "critical" for r in rows)
+    shown = rows[:max(ATTENTION_CAP, crit)]
+    hidden = rows[len(shown):]
+    total = len(rows) + unread_runs
+    more = ""
+    if total > len(shown):
+        runs_only = all(r["kind"] == "investigation" for r in hidden)
+        more = "/investigations" if runs_only else "/incidents"
+    return {"attention_shown": shown, "attention_total": total, "attention_more": more}
 
 
 def _findings_line(findings: list[dict]) -> str:
@@ -1593,6 +2216,17 @@ def _metrics_view(payload: dict | None, cfg: Config, host: str, category: str,
             by_host.setdefault(str(row.get("host") or ""), {}) \
                    .setdefault(cat, []).append(row)
 
+    catalog = {q.qid: q for q in load_queries(cfg.queries_path)}
+
+    def charted(row: dict) -> dict:
+        # the catalog owns direction and thresholds; the (cached) payload row
+        # does not carry them, so the chart is a copy, never a mutation
+        q = catalog.get(str(row.get("qid") or ""))
+        return {**row, "chart": fmt.trend_chart(
+            row.get("day3d"), row.get("unit"), label=row.get("label"),
+            direction=q.dir if q else "", warn=q.warn if q else None,
+            crit=q.crit if q else None)}
+
     sections, total = [], 0
     for name in _host_order(cfg, by_host):
         groups = by_host[name]
@@ -1603,7 +2237,7 @@ def _metrics_view(payload: dict | None, cfg: Config, host: str, category: str,
         sections.append({
             "name": name,
             "flag": _FLAG_BY_RANK[worst],
-            "cats": [{"name": c, "rows": sorted(groups[c], key=_row_key)}
+            "cats": [{"name": c, "rows": [charted(r) for r in sorted(groups[c], key=_row_key)]}
                      for c in order if c in groups],
         })
     counts = payload.get("counts") or {}
@@ -1711,6 +2345,73 @@ def _incident_ctx(reader: StoreReader, fingerprint: str) -> dict:
             "sup": _suppressions(reader).get(fingerprint)}
 
 
+def _lift_mute(reader: StoreReader, fingerprint: str) -> bool:
+    """Unmute ``fingerprint`` the way `heim incidents unmute` does: drop the
+    suppression, and only a ``suppressed`` incident goes back to open.
+    Returns whether there was a mute to lift."""
+    if not reader.write(lambda s: s.unsuppress(fingerprint)):
+        return False
+    incident = reader.read(lambda s: s.incident(fingerprint))
+    if incident and incident.get("status") == "suppressed":
+        reader.write(lambda s: s.set_incident_status(fingerprint, "open"))
+    return True
+
+
+#: what an investigate key reads while its subject is in flight
+_INFLIGHT_LABEL = {"running": "Investigating", "pending_approval": "Awaiting approval"}
+
+
+def _in_flight(reader: StoreReader) -> dict:
+    """What is already under way, per subject: ``{"fp": {...}, "host": {...}}``.
+
+    An entry is ``{"label", "href", "title"}`` for the pressed key that
+    replaces an investigate key. A running investigation outranks one awaiting
+    approval, which outranks a job still in the queue (it has no row of its
+    own yet, so it links to /investigations, where its ghost row is).
+    """
+    out: dict[str, dict] = {"fp": {}, "host": {}}
+
+    def put(fp: str, host: str, entry: dict) -> None:
+        if fp:
+            out["fp"].setdefault(fp, entry)
+        if host:
+            out["host"].setdefault(host, entry)
+
+    for status, label in _INFLIGHT_LABEL.items():
+        for inv in reader.read(lambda s, st=status: s.investigations(limit=50, status=st)):
+            put(str(inv.get("fingerprint") or ""), str(inv.get("host") or ""),
+                {"label": label, "href": f"/investigations/{inv.get('id')}",
+                 "title": f"investigation #{inv.get('id')}: {label.lower()}"})
+    for job in reader.read(lambda s: s.jobs(limit=50, status="queued")):
+        payload = job.get("payload") or {}
+        put(str(payload.get("fingerprint") or ""), str(payload.get("host") or ""),
+            {"label": "Investigating", "href": "/investigations",
+             "title": f"job #{job.get('id')}: queued for the daemon"})
+    return out
+
+
+def _inflight_for(inflight: dict, subject: dict) -> dict | None:
+    """The in-flight entry for one subject: its fingerprint when it has one
+    (an incident's run), else its host (a bare manual run)."""
+    fp = str(subject.get("fingerprint") or "")
+    if fp:
+        return inflight["fp"].get(fp)
+    return inflight["host"].get(str(subject.get("host") or ""))
+
+
+def _requested(job: dict | None, tz) -> dict:
+    """The feedback line after a queueing action: when it was asked for, and
+    where to watch it — the investigation once the daemon made one, else the
+    queue (the ghost row on /investigations). Time in the configured zone."""
+    job = job or {}
+    when = fmt.parse_dt(job.get("created_at")) or datetime.now(timezone.utc)
+    when = when.astimezone(tz)
+    inv = int(job.get("investigation_id") or 0)
+    link = ({"href": f"/investigations/{inv}", "label": f"investigation #{inv}"} if inv
+            else {"href": "/investigations", "label": "queue"})
+    return {"text": f"Requested {when:%H:%M}, {when.day} {when:%b} → ", "link": link}
+
+
 def _muted_text(suppression: dict | None) -> str:
     """The feedback line for a mute — the verdict half is implied by the pill."""
     until = str((suppression or {}).get("until") or "")
@@ -1745,6 +2446,55 @@ def _trigger_findings(row: dict) -> list[dict]:
             "detail": str(f.get("detail") or f.get("summary") or ""),
         })
     return out
+
+
+def _sections_view(report_md: str) -> dict:
+    """``fmt.report_sections`` with each body rendered: model output, so raw
+    HTML stays off, as for the full report. ``other_names`` are the headings
+    the kind panels leave to the folded full report, named on its fold."""
+    parts = fmt.report_sections(report_md)
+    view: dict = {
+        kind: [(heading, _md_to_html(body, allow_raw_html=False) if body.strip() else "")
+               for heading, body in parts[kind]]
+        for kind in fmt.REPORT_KINDS
+    }
+    view["other_names"] = [heading for heading, _ in parts["other"] if heading]
+    view["raw"] = parts["raw"]
+    return view
+
+
+def _completed_actions(row: dict, suppression: dict | None) -> list[dict]:
+    """What the operator did about this run, ``[{"what", "at"}, …]``, from the
+    row and the mute on its fingerprint: the agent is read-only, so these are
+    the only actions there are.
+
+    A timed-out ask (approval or outcome) is nobody's decision, so it is not
+    listed. The row keeps no approval time (the decision column is all there
+    is), so an approval has none; a decline and an outcome are stamped with
+    ``finished_at``, which the pipeline writes as it records them.
+    """
+    status = str(row.get("status") or "")
+    outcome = str(row.get("outcome") or "")
+    finished = str(row.get("finished_at") or "")
+    done: list[dict] = []
+    decision = str(row.get("approval_decision") or "")
+    if decision == "approve":
+        done.append({"what": "Investigation approved", "at": ""})
+    elif decision == "decline":
+        done.append({"what": "Investigation declined", "at": finished})
+    # the same precedence as _outcome_line: a timed-out confirm is also stored
+    # as status=needs_human, and nobody said that
+    if outcome != "timeout":
+        if outcome == "resolved" or status == "resolved":
+            done.append({"what": "Marked resolved", "at": finished})
+        elif outcome == "needs_human" or status == "needs_human":
+            done.append({"what": "Marked as needing a human", "at": finished})
+    if suppression:
+        until = str(suppression.get("until") or "")
+        done.append({"what": f"Fingerprint muted until {fmt.day(until)}" if until
+                     else "Fingerprint muted for good",
+                     "at": str(suppression.get("created_at") or "")})
+    return done
 
 
 def _stored_transcript(row: dict) -> tuple[list[dict], str]:
@@ -1808,29 +2558,29 @@ def _outcome_line(row: dict) -> dict | None:
     outcome = str(row.get("outcome") or "")
     when = fmt.clock(row.get("finished_at"))
     if outcome == "resolved" or status == "resolved":
-        return {"icon": "✓", "cls": "st-ok", "text": f"Resolved by operator · {when}"}
+        return {"icon": "✓", "state": "resolved", "text": f"Resolved by operator · {when}"}
     # a timed-out ask is also stored as status=needs_human (pipelines/
     # investigate), so it has to be answered *before* the needs_human case —
-    # nobody said "needs human", the question simply went unanswered
+    # nobody said "needs you", the question simply went unanswered
     if outcome == "timeout":
-        return {"icon": "◌", "cls": "st-muted",
+        return {"icon": "◌", "state": "timeout",
                 "text": "No outcome confirmed — the ask timed out"}
     if outcome == "needs_human" or status == "needs_human":
-        return {"icon": "⚠", "cls": "st-serious",
-                "text": "Needs human — re-proposed next run"}
+        return {"icon": "⚠", "state": "needs_human",
+                "text": "Needs you — re-proposed next run"}
     if status == "declined":
-        return {"icon": "○", "cls": "st-muted",
+        return {"icon": "○", "state": "declined",
                 "text": "Declined — re-proposed next run"}
     if status == "failed":
-        return {"icon": "✕", "cls": "st-crit",
+        return {"icon": "✕", "state": "failed",
                 "text": row.get("incomplete_reason") or "Failed before writing a report"}
     if status == "incomplete":
-        return {"icon": "⚠", "cls": "st-serious",
+        return {"icon": "⚠", "state": "incomplete",
                 "text": row.get("incomplete_reason") or "Incomplete run"}
     if status == "running":
-        return {"icon": "●", "cls": "st-running", "text": "Still working…"}
+        return {"icon": "●", "state": "running", "text": "Still working…"}
     if status == "pending_approval":
-        return {"icon": "◷", "cls": "st-warn",
+        return {"icon": "◷", "state": "pending_approval",
                 "text": "Waiting for approval — approve or decline above, or "
                         "answer in Telegram."}
     return None

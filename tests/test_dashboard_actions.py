@@ -11,6 +11,7 @@ queued job, a suppressed incident and an unjudged finding — the four states th
 action UI exists for.
 """
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -192,23 +193,29 @@ def test_investigate_needs_a_configured_host(client, store):
     assert _jobs_by_dashboard(store) == []
 
 
-def test_htmx_investigate_returns_the_panel_with_the_feedback_line(client, store):
+def test_htmx_investigate_returns_the_panel_with_the_feedback_line(client, store, ids):
     r = client.post("/actions/investigate", data={"host": "ubuntu-server"}, headers=HX)
     assert r.status_code == 200
     body = r.text
     assert "<html" not in body and "<!doctype" not in body.lower()
     job_id = _jobs_by_dashboard(store)[0]["id"]
-    assert (f"Queued as job #{job_id} — the daemon picks it up within a few seconds."
-            in body)
-    assert "INVESTIGATE" in body                      # the host card, re-rendered
+    assert job_id
+    # when it was asked for, and where to watch it (the job has no run yet)
+    assert re.search(r'Requested \d\d:\d\d, \d{1,2} [A-Z][a-z]{2} → '
+                     r'<a href="/investigations">queue</a>', body)
+    # the host card, re-rendered: its key pressed on the run already in flight
+    assert (f'<a class="btn pressed go" href="/investigations/{ids["pending"]}"'
+            in body and ">Awaiting approval</a>" in body)
 
 
-def test_htmx_investigate_from_an_incident_returns_the_incident_panel(client):
+def test_htmx_investigate_from_an_incident_returns_the_incident_panel(client, ids):
     r = client.post("/actions/investigate",
                     data={"host": "ubuntu-server", "fingerprint": FP_MEM}, headers=HX)
     assert r.status_code == 200
-    assert "Queued as job #" in r.text
-    assert "INVESTIGATE NOW" in r.text and "MARK FALSE POSITIVE" in r.text
+    assert "Requested " in r.text and '<a href="/investigations">queue</a>' in r.text
+    assert (f'<a class="btn pressed go" href="/investigations/{ids["pending"]}"'
+            in r.text and ">Awaiting approval</a>" in r.text)
+    assert "Mark false positive" in r.text
 
 
 # -------------------------------------------------------------- retrigger
@@ -245,8 +252,9 @@ def test_htmx_retrigger_returns_the_header_actions(client, ids, store):
                     headers=HX)
     assert r.status_code == 200 and "<html" not in r.text
     job_id = _jobs_by_dashboard(store)[0]["id"]
-    assert f"Queued as job #{job_id}" in r.text
-    assert "RE-RUN" in r.text
+    assert job_id and "Requested " in r.text
+    assert '<a href="/investigations">queue</a>' in r.text
+    assert "Re-run" in r.text
 
 
 # --------------------------------------------------------------- approval
@@ -310,9 +318,10 @@ def test_false_positive_sets_the_verdict_and_suppresses(client, ids, store, app_
     assert _until_day(sup) == _day_from_now(cfg.settings.suppression_days)
     # the incident follows the verdict, through the backend helper
     assert store.incident(FP_MEM)["status"] == "suppressed"
-    # fragment: the verdict pill replaced the buttons, plus the feedback line
+    # fragment: the chosen key pressed, the other still live, plus the feedback line
     assert "Marked false positive — muted until" in r.text
-    assert "CONFIRM" not in r.text
+    assert 'class="btn pressed other" type="submit" aria-pressed="true"' in r.text
+    assert '<button class="btn" type="submit">Confirm</button>' in r.text
     assert "false positive" in r.text
 
 
@@ -362,7 +371,7 @@ def test_unmute_lifts_the_suppression_and_reopens_the_incident(client, store):
     assert store.incident(FP_HA)["status"] == "open"
     assert "Unmuted — the pipelines report this fingerprint again." in r.text
     # the panel now offers the pre-mute actions again
-    assert "INVESTIGATE NOW" in r.text and "UNMUTE" not in r.text
+    assert "Investigate now" in r.text and ">Unmute<" not in r.text
 
 
 def test_unmute_of_something_that_is_not_muted_is_404(client):
@@ -471,17 +480,20 @@ def test_ghost_rows_in_the_partial_and_under_filters(client, ids):
 
 # ----------------------------------------------------------- rendered UI
 
-def test_incidents_page_shows_the_muted_row_with_unmute(client):
+def test_incidents_page_shows_the_muted_row_with_unmute(client, ids):
     html = client.get("/incidents").text
     assert FP_HA in html                       # suppressed rows are listed
     assert "muted · until" in html
-    assert "UNMUTE" in html
+    assert "Unmute" in html
     assert 'action="/actions/unmute"' in html
-    # an open incident keeps the other two actions instead
-    assert "INVESTIGATE NOW" in html and "MARK FALSE POSITIVE" in html
+    # an open incident keeps the other two actions instead; both are in
+    # flight in this seed, so their investigate key is the pressed link
+    assert (f'<a class="btn pressed go" href="/investigations/{ids["pending"]}"' in html
+            and f'<a class="btn pressed go" href="/investigations/{ids["retry"]}"' in html)
+    assert "Mark false positive" in html
     # a muted row does not offer to investigate what it just silenced
     muted_cell = html.split(FP_HA)[-1]
-    assert "UNMUTE" in muted_cell.split("</details>")[0]
+    assert "Unmute" in muted_cell.split("</details>")[0]
 
 
 def test_incident_actions_post_the_fingerprint_as_a_form_field(client):
@@ -493,15 +505,15 @@ def test_incident_actions_post_the_fingerprint_as_a_form_field(client):
 
 def test_pending_approval_detail_offers_approve_and_decline(client, ids):
     html = client.get(f"/investigations/{ids['pending']}").text
-    assert "APPROVE" in html and "DECLINE" in html
+    assert "Approve" in html and "Decline" in html
     assert 'class="btn ember"' in html          # approve is the ember exception
-    assert "RE-RUN" in html
+    assert "Re-run" in html
 
 
 def test_finished_detail_has_re_run_but_no_approval_pair(client, ids):
     html = client.get(f"/investigations/{ids['done']}").text
-    assert "RE-RUN" in html
-    assert "APPROVE" not in html and "DECLINE" not in html
+    assert "Re-run" in html
+    assert "Approve" not in html and "Decline" not in html
 
 
 def test_retry_detail_links_back_to_the_original(client, ids):
@@ -512,15 +524,20 @@ def test_retry_detail_links_back_to_the_original(client, ids):
 
 def test_findings_page_offers_the_verdict_pair_then_shows_the_pill(client, ids):
     html = client.get("/findings").text
-    assert "✓ CONFIRM" in html and "✗ FALSE POSITIVE" in html
+    assert ">Confirm<" in html and ">False positive<" in html
     assert f'name="finding_id" value="{ids["finding_mem"]}"' in html
 
     _post(client, "/actions/verdict",
           {"finding_id": ids["finding_mem"], "verdict": "confirmed"})
     after = client.get("/findings").text
-    # that finding now renders a pill; the other one keeps its buttons
+    # that finding's Confirm is pressed and False positive still live; the
+    # other finding keeps its plain pair: one pressed verdict key per judged row
     assert "confirmed</span>" in after
-    assert after.count("✓ CONFIRM") == 1
+    cells = re.findall(r'<td class="c-verdict">(.*?)</td>', after, re.S)
+    judged = [c for c in cells if 'class="btn pressed' in c]
+    assert len(judged) == 1 and judged[0].count('class="btn pressed') == 1
+    assert 'class="btn pressed go" type="submit"' in judged[0]
+    assert ">False positive</button>" in judged[0] and "disabled" not in judged[0]
 
 
 def test_host_cards_offer_investigate(app_store):
@@ -528,8 +545,14 @@ def test_host_cards_offer_investigate(app_store):
     adding a host does not fail a test about buttons."""
     client, _ids, _store, cfg = app_store
     html = client.get("/hosts").text
-    assert html.count('action="/actions/investigate"') == len(cfg.hosts)
-    assert "INVESTIGATE" in html
+    pressed = html.count('<a class="btn pressed go" href="/investigations')
+    assert pressed == 2                     # ubuntu-server pending, homelab running
+    assert html.count('action="/actions/investigate"') + pressed == len(cfg.hosts)
+    # the idle hosts keep the plain key
+    rows = re.findall(r'<li class="hrow.*?</li>', html, re.S)
+    idle = [r for r in rows if "ubuntu-server" not in r and ">homelab<" not in r
+            and 'action="/actions/investigate"' in r]
+    assert idle and all(">Investigate<" in r for r in idle)
 
 
 def test_action_forms_work_without_js(client):
@@ -543,7 +566,10 @@ def test_action_forms_work_without_js(client):
 
 def test_confirm_prompts_on_the_destructive_actions(client, ids):
     incidents = client.get("/incidents").text
-    assert incidents.count("hx-confirm=") >= 4   # investigate now + false positive
+    forms = re.findall(r'<form class="act".*?</form>', incidents, re.S)
+    guarded = [f for f in forms
+               if "Mark false positive" in f or "Investigate now" in f]
+    assert guarded and all("hx-confirm=" in f for f in guarded)
     detail = client.get(f"/investigations/{ids['pending']}").text
     assert f"Re-run investigation #{ids['pending']}" in detail
 

@@ -27,7 +27,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (1029 tests). Design
+covered by golden tests against the original JavaScript behavior (1231 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -35,7 +35,7 @@ edges** (tools, channels, pipelines).
 
 | Area | Features |
 |---|---|
-| Detection | 49-query trend catalog · per-day averages, change %, warn/crit flags · Prometheus alert rules with `qid` labels (fast path) · anti-flap hysteresis (2 clear polls / 2 missed runs) |
+| Detection | 49-query trend catalog · per-day averages, change %, warn/crit flags · Prometheus alert rules with `qid` labels (fast path) · anti-flap hysteresis (2 clear polls / 2 missed runs) · Uptime Kuma poll half (`[uptime]` incidents, one Telegram message per host, flap-quiet reopen; report-only for non-investigable hosts) |
 | Incidents | SQLite store · deterministic fingerprints (`host\|qid\|name`) · open/clearing/resolved lifecycle · warn→crit escalation · per-fingerprint dispatch lock · poller-vs-daily ownership split (`[alert]` prefix) · false-positive verdicts + timed/forever suppression (pipeline-level, analyst hint) |
 | Agent | Anthropic-native tool loop · soft prompt budget + hard in-loop step cap · retries · real token accounting (run total **and** per-turn attribution per step) · per-run cost from a config price table · optional size-capped full transcript · output salvage (`## Summary` contract, leaked-tool-call detection) · offline replay of a stored run against another model/prompt from its recorded tool results (`heim replay`) · agent-written tooling feedback indexed per tool |
 | Tools | Guarded read-only SSH · PromQL instant/range with token-compact encoding · metric discovery · GET-allowlisted HA and Proxmox APIs · per-call Telegram live feed + local `audit.jsonl` |
@@ -43,7 +43,7 @@ edges** (tools, channels, pipelines).
 | Delivery | n8n-faithful HTML dashboard email · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
 | Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · crash-safe investigation job queue (`heim jobs`, restart sweep, re-trigger with `retry_of`) · dead-man's switch pinged after every completed poll · nightly WAL-safe SQLite backup (rotated) + retention prune · Docker/compose deployment (outbound-only, plus the optional dashboard port) · `.env` interpolation for all deployment identity |
 | Security audit | Weekly (Mon 06:00) read-only configuration-hygiene audit: 47 deterministic checks over the Proxmox API (audit-only token), Home Assistant REST, Prometheus and fixed guard-validated SSH lines · stable fingerprints `host\|check_id\|subject` · week-over-week new/persisting/resolved/carried · findings reuse the verdict/suppression machinery · one bounded Opus 5.5 pass (3 API tools, no SSH, cap 6) explains and prioritises, never detects, and ends with `## Audit feedback` (improve the audit / what else to check — proposals only, shown on `/security`) · degradable: a refusal costs only the `## AI assessment` appendix · `heim security-audit [--dry-run] [--no-llm]` |
-| Dashboard | Web UI (`heim dashboard`, FastAPI + Jinja + vendored htmx): overview KPIs incl. queue depth + 24h cost, a health card (latest analysis + per-host strip) and a tool-usage card, investigations list/filters with queued ghost rows, the agent-transcript detail page with burn line, cost and the optional full transcript, incidents, findings history, metrics, host cards · actions (queue an investigation, re-run, approve/decline, finding verdicts, mute/unmute) as real forms enhanced by htmx · optional HTTP basic auth · `/telemetry` Prometheus exposition (auth-exempt, aggregates only) · one SQLite connection (WAL) that writes action rows only |
+| Dashboard | Web UI (`heim dashboard`, FastAPI + Jinja + vendored htmx), laid out as an operator's console (system locked in `design.md`): a grouped rail with lamps and counts, light/dark · overview of instrument cards (condition, agent coverage, last sync, what requires you), Needs attention, Needs you and the Agents panel, then the health, latest-runs, tool-usage and token blocks · Agents pages (`/agents`, `/agents/<key>`): seven agents with honest state, run strips and monitoring-gap lines, from daemon heartbeats (`agent_runs`) · a Live / 24 h / 7 d window switch over the run strips · investigations list/filters with queued ghost rows and a detail page sorted by kind (observations, interpretation, proposed and completed actions) with burn line, cost and the optional full transcript · incidents, findings (each linked to its evidence), recommendations, security, metrics, costs, host cards · actions (queue an investigation, re-run, approve/decline, finding verdicts, mute/unmute) as real forms enhanced by htmx · optional HTTP basic auth · `/telemetry` Prometheus exposition (auth-exempt, aggregates only) · one SQLite connection (WAL) that writes action rows only |
 
 ---
 
@@ -51,7 +51,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 1029 tests, must stay green
+.venv/bin/pytest -q                    # 1231 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -64,6 +64,10 @@ Conventions:
 - **Ported modules are golden.** Files whose docstring names an n8n source node were
   ported line-faithfully, quirks included. Behavior changes there need a deliberate
   decision + updated golden tests + a docstring note — never a silent "cleanup".
+- **The dashboard has a locked design system.** [`design.md`](design.md) at the repo root
+  holds its tokens, lamps, labels and components (one stylesheet,
+  `src/heim/dashboard/static/heim.css`, capped by a test). Read it before touching a
+  template; change it on purpose, not as a side effect.
 - **Config is data.** New hosts/tools/agents/queries are new YAML files, not code edits.
   Deployment identity (IPs, users, ids) is `${VAR}`-interpolated from `.env`; never
   commit a real IP, username, chat id, or address.
@@ -78,7 +82,7 @@ Conventions:
    in the ansible-homelab repo, not here (§3, "Prometheus & Loki configuration").
 2. **Dispatch lock** — `investigated=true` is set when an investigation is *queued*;
    only decline / needs-human / timeout reset it.
-3. **Poller ownership** — the poller resolves only `[alert] `-prefixed incidents.
+3. **Poller ownership** — the poller resolves only `[alert] `, threshold detection only `[metric] `, the Uptime Kuma half only `[uptime] `-prefixed incidents.
 4. **Read-only agent** — every tool is read-only by guard *and* by OS/API privilege.
    Never add a mutating tool without a separate approval design.
 5. **Loki schema compatibility** — `job=homelab-ai-monitor`, low-cardinality labels,
@@ -113,6 +117,7 @@ Conventions:
 | Grafana | indirect (reads Loki/Prometheus) | `grafana/` dashboards | n/a |
 | Telegram | bidirectional (notify, live feed, approvals) | `channels/telegram` | bot token |
 | SMTP / Gmail | write (reports) | `channels/email` | app password |
+| Uptime Kuma | read (/metrics) | `pipelines/uptime`, `incidents/uptime_logic` | API key (basic auth) |
 | Home Assistant | read (agent tool) + write (report sensors) | `tools/ha_api`, `channels/ha` | non-admin LLAT |
 | Proxmox VE | read (agent tool) | `tools/proxmox_api` | auditor-role API token |
 | SSH (target hosts) | read-only diagnostics | `tools/ssh_diagnostic` | dedicated key + scoped sudoers |
@@ -251,7 +256,7 @@ daemon start. Enqueue helpers live in `pipelines/queue.py`
 Scheduled daily/poller dispatch still goes straight to `asyncio.create_task` —
 the queue is the path for *requested* work.
 
-### 5.3 The HEIM dashboard (self-contained web UI) — ✅ v1 + the actions slice shipped
+### 5.3 The HEIM dashboard (self-contained web UI) — ✅ v1, the actions slice and the console redesign shipped
 
 Grafana stays for time-series exploration — but it is read-only over Loki and can't
 *act*. A proprietary dashboard is justified exactly where actions and rich per-entity
@@ -302,6 +307,42 @@ form fields, never as path segments (fingerprints carry `|` and `/`). Accepted r
 documented in the module: no CSRF token, on the strength of LAN-only + basic auth and
 same-origin forms. Still deferred: the Recommendations page, manual "resolve", "load 50
 more" pagination (lists cap at 200 rows), and the live Telegram-feed stream.
+
+**Shipped (v3 — the console redesign, 2026-11-01; spec
+`docs/superpowers/specs/2026-11-01-dashboard-redesign-design.md`, system in
+`design.md`):** every page rebuilt as the operator's console — warm grey ground, lamps
+for state (always with the word beside them, no emoji or glyph as a status), tracked
+mono labels by the operator's ruling. New: **heartbeats** — the daemon's job wrappers
+write one `agent_runs` row per run (the dashboard and CLI one-offs never do), and the
+pure `agents.py` turns them into a per-agent status (healthy, degraded, failed,
+overdue, paused, no data yet; the investigator is derived from `investigations`);
+the **Agents** panel on the overview and the `/agents` and `/agents/<key>` pages, with
+run strips and monitoring-gap lines; the **window** (`?window=live|24h|7d`) that scopes
+the run strips only; **evidence links** from every finding to its metric row, incident
+or investigation; and the investigation page **labelled by kind** (observations,
+interpretation, proposed actions, completed actions, raw report kept). The
+Recommendations page and "Load 50 more" pagination, deferred above, have since
+shipped too. The before/after record lives in the gitignored `.hallmark/`.
+
+Known rough edges (accepted, not scheduled):
+- On phones most wide tables (tool usage, investigations, metrics, findings, security,
+  costs, the step table) scroll sideways inside their card instead of restacking; only
+  Needs attention, Agents, incidents and recommendations restack.
+- The metrics refresh key reads `refresh` in lower case (pinned by
+  `tests/test_metrics_page.py`).
+- Healthy blue-grey lamps sit near 2:1 on the light panel by design (`design.md`).
+- `/metrics#q-…` has no target when a filter hides the row; `/security#check-…` opens
+  the latest audit, not the finding's own run.
+- Poll heartbeats: if `run_poll` itself raises, only `alert_poller` is recorded and the
+  other two halves drift to Overdue.
+- `agent_first_seen()` is bounded by the 14-day `agent_runs` retention and is a lexical
+  `MIN` of the daemon's local-time ISO strings, so across a DST change a window strip
+  may blank (rather than miss) one extra slot.
+- The top bar's "Daemon quiet" chip still uses a fixed 20-minute threshold
+  (`DAEMON_FRESH_S`), not `poll_minutes`; with `poll_minutes` ≥ 20 it would flag a
+  healthy daemon between polls.
+- `page_title|ucfirst` is fine for today's titles; a cost chart's "n observations"
+  caption counts zero-filled days.
 
 ### 5.4 False-positive handling — ✅ implemented
 
@@ -503,6 +544,12 @@ Tests: `tests/test_durable_approvals.py`.
   `backup_keep: 14`. Backup runs **before** the retention prune in the same job, so the
   snapshot still holds what is about to be deleted; a failed backup skips the prune
   entirely, and neither failure can reach the scheduler (`log.exception`).
+- **Agent heartbeats** — ✅ implemented. `agent_runs(id, agent, started_at,
+  finished_at, ok, error, detail_json)`, written only by the daemon's job wrappers
+  (poll halves, daily, security audit, backup) — like the dead-man ping, a row asserts
+  the daemon ran it, so CLI one-offs write nothing and the dashboard never writes it.
+  `store.prune` keeps it to `AGENT_RUNS_RETENTION_DAYS` (14) whatever
+  `retention_days` says, "keep forever" included.
 
 ### 5.9 Weekly security audit — ✅ implemented
 
@@ -545,7 +592,7 @@ rollback design; multi-tenant SaaS-ification; replacing Grafana for time-series 
 ## 6. Notes for AI agents working here
 
 - Read `docs/ARCHITECTURE.md` first; it maps every module to its n8n source node.
-- Run `.venv/bin/pytest -q` before and after your change; 1029 must not regress.
+- Run `.venv/bin/pytest -q` before and after your change; 1231 must not regress.
 - Ported modules (docstring names an n8n node) are behavior-frozen — see §2.
 - Never log, commit, or email secrets; deployment identity comes from `.env` via
   `${VAR}` interpolation and must stay out of the tree.

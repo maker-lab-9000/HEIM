@@ -102,14 +102,13 @@ def many_client(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def empty_client(tmp_path, monkeypatch):
-    """Activity, but nothing that failed: one open incident keeps the page off
-    its own "no activity yet" state, so the card's empty state is what is under
-    test rather than the page's."""
+    """Activity, but nothing that needs attention: one clean investigation keeps
+    the page off its own "no activity yet" state, so the card's empty state is
+    what is under test rather than the page's. (Since the console redesign an
+    open incident is itself a Needs attention row.)"""
     def seed(s):
-        s.upsert([{"fingerprint": "homelab|temp|Drive", "host": "homelab",
-                   "metric": "temp", "severity": "warning", "status": "open",
-                   "firstSeen": _iso(1), "lastSeen": _iso(0), "timesSeen": 2,
-                   "missedRuns": 0, "description": "sdb warm."}])
+        s.create_investigation(fingerprint="homelab|temp|Drive", host="homelab",
+                               trigger="daily", status="complete", started_at=_iso(1))
     yield from _client(tmp_path, monkeypatch, seed)
 
 
@@ -194,21 +193,21 @@ def test_an_unrelated_later_run_does_not_hide_anything(tmp_path):
 
 def test_overview_needs_attention_card(seeded_client):
     html = seeded_client.get("/").text
-    card = html[html.index("needs attention"):]
-    assert "incomplete" in card and "RE-RUN" in card and "budget" in card
+    card = html[html.index("Needs attention"):]
+    assert "incomplete" in card and "Re-run" in card and "budget" in card
 
 
 def test_card_sits_under_the_health_card(seeded_client):
     html = seeded_client.get("/").text
     # bad news travels first: after the health card, before the latest runs
-    assert html.index("card health") < html.index("needs attention") \
+    assert html.index("Needs attention") < html.index("card health") \
         < html.index("latest runs")
 
 
 def test_card_shows_every_attention_status_and_no_clean_run(seeded_client):
     card = seeded_client.get("/").text
-    card = card[card.index("needs attention"):card.index("latest runs")]
-    assert "incomplete" in card and "failed" in card and "needs human" in card
+    card = card[card.index("Needs attention"):card.index("latest runs")]
+    assert "incomplete" in card and "failed" in card and "needs you" in card
     assert "cpu|Load" not in card and "#5" not in card     # the complete run
     # each row links its investigation and carries its own retrigger form
     for inv_id in (1, 2, 3, 4):
@@ -222,10 +221,10 @@ def test_reason_line_is_a_sentence_not_a_stored_keyword(seeded_client):
     """The reason line is the detail page's `_outcome_line` text, so a row can
     never show the raw column value (`outcome` holds "needs_human"/"timeout")."""
     card = seeded_client.get("/").text
-    card = card[card.index("needs attention"):card.index("latest runs")]
+    card = card[card.index("Needs attention"):card.index("latest runs")]
     assert "budget exhausted after 12 steps" in card        # incomplete: its own reason
     assert "Failed before writing a report" in card         # failed with no reason stored
-    assert "Needs human — re-proposed next run" in card     # the operator said so
+    assert "Needs you — re-proposed next run" in card     # the operator said so
     assert "No outcome confirmed — the ask timed out" in card   # nobody answered
     # the stored keywords never reach the page
     assert "needs_human" not in card and "timeout" not in card
@@ -234,10 +233,10 @@ def test_reason_line_is_a_sentence_not_a_stored_keyword(seeded_client):
 def test_reason_line_matches_the_detail_page(seeded_client):
     """One helper, two pages: the card's sentence is the detail page's."""
     card = seeded_client.get("/").text
-    card = card[card.index("needs attention"):card.index("latest runs")]
+    card = card[card.index("Needs attention"):card.index("latest runs")]
     for inv_id, phrase in ((1, "budget exhausted after 12 steps"),
                            (2, "Failed before writing a report"),
-                           (3, "Needs human — re-proposed next run"),
+                           (3, "Needs you — re-proposed next run"),
                            (4, "No outcome confirmed — the ask timed out")):
         assert phrase in card
         assert phrase in seeded_client.get(f"/investigations/{inv_id}").text
@@ -254,12 +253,13 @@ def test_card_rerun_form_enqueues_a_retry(seeded_client):
     hx = seeded_client.post("/actions/retrigger",
                             data={"investigation_id": "2", "back": "/"},
                             headers={"hx-request": "true"})
-    assert hx.status_code == 200 and "Queued as job #2" in hx.text
+    assert hx.status_code == 200 and "Requested " in hx.text
+    assert '<a href="/investigations">queue</a>' in hx.text
 
 
 def test_footer_link_appears_past_six(many_client):
     many = many_client.get("/").text
-    many = many[many.index("needs attention"):many.index("latest runs")]
+    many = many[many.index("Needs attention"):many.index("latest runs")]
     assert "all (7)" in many and 'href="/investigations"' in many
 
 
@@ -271,4 +271,4 @@ def test_empty_state_dot_is_hidden_from_screen_readers(empty_client):
     """Like every other dot in the UI (m.pill, m.hostbadge) the glyph is
     decoration — a reader should say the sentence, not "black circle"."""
     html = empty_client.get("/").text
-    assert '<span aria-hidden="true">●</span> Nothing needs attention.' in html
+    assert '<span class="lamp blue" aria-hidden="true"></span> Nothing needs attention.' in html

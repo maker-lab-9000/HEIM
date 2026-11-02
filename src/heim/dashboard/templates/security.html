@@ -56,6 +56,7 @@
 </section>
 {%- endif %}
 
+{%- set seen = namespace(checks=[]) %}
 {%- for g in groups %}
 <section class="card" id="sev-{{ g.severity }}">
   <h2 class="runline mono">{{ m.sev(g.severity) }} · {{ g.findings|length }} finding{{ '' if g.findings|length == 1 else 's' }}
@@ -71,9 +72,13 @@
     </tr></thead>
     <tbody>
       {%- for f in g.findings %}
+      {#- one anchor per check id, for the findings page's "check" link -#}
+      {%- set cid = (f.fingerprint or '').split('|')[1] if (f.fingerprint or '').count('|') >= 2 else '' %}
+      {%- set first = cid and cid not in seen.checks %}
+      {%- if first %}{% set _ = seen.checks.append(cid) %}{% endif %}
       <tr>
         <td class="c-host">{{ m.hostbadge(f.host) }}</td>
-        <td class="c-metric mono ink2">{{ f.metric or DASH }}
+        <td class="c-metric mono ink2"{% if first %} id="check-{{ cid }}"{% endif %}>{{ f.metric or DASH }}
           {%- if f.subject %}<br><span class="ink3">{{ f.subject }}</span>{% endif %}</td>
         <td>
           <span class="fsum">{{ f.summary }}</span>
