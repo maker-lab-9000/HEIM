@@ -755,7 +755,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             if key in TOOL_AGENTS else [])
         return page(request, "agent.html", page_title=f"agents / {row['name']}",
                     tool_feedback=fb[:AGENT_FEEDBACK_LIMIT],
-                    **_agent_feedback(fb, stats),
+                    **_agent_feedback(fb, stats, set(cfg.tools)),
                     tool_history=history, tool_stats=tool_summary(calls or []),
                     agent=row, cadence=_cadence_text(cfg, key),
                     evidence=_AGENT_EVIDENCE.get(key),
@@ -1610,16 +1610,18 @@ def _feedback_row(f: dict) -> dict:
     return {**f, "agent_key": key, "agent_label": AGENT_LABELS.get(key, f.get("agent_name", ""))}
 
 
-def _agent_feedback(rows: list[dict], stats: list[dict]) -> dict:
+def _agent_feedback(rows: list[dict], stats: list[dict], configured: set[str]) -> dict:
     """One agent's newest-first feedback split for its tool summary: the
-    latest note per tool it called (shown under that tool's row) and the
-    notes naming a tool it did not call (the 'general' footnotes)."""
+    latest note per tool in the summary (shown under that tool's row) and the
+    'general' footnotes, which are only notes naming NO configured tool. A
+    note for a real tool the agent did not call recently is still about that
+    tool: it appears in the Tooling feedback list, not as general."""
     latest: dict[str, dict] = {}
     for r in rows:
         latest.setdefault(r["tool"], r)
     known = {t["tool"] for t in stats}
     return {"feedback_by_tool": {k: v for k, v in latest.items() if k in known},
-            "feedback_general": [v for k, v in sorted(latest.items()) if k not in known]}
+            "feedback_general": [v for k, v in sorted(latest.items()) if k not in configured]}
 
 
 def _general_feedback(feedback: dict[str, dict], rows: list[dict]) -> list[dict]:

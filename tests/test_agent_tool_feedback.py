@@ -105,3 +105,18 @@ def test_agent_page_without_feedback_renders_no_list(tmp_path, monkeypatch):
         _inv(s, "investigator", 10, [("ssh_diagnostic", {"command": "df"}, False, 5)])
     html = _client(tmp_path, monkeypatch, seed).get("/agents/investigator").text
     assert "Tooling feedback" not in html
+
+
+def test_feedback_for_configured_tool_not_in_recent_summary_is_not_general(tmp_path, monkeypatch):
+    def seed(s):
+        _healthy_agents(s)
+        i = _inv(s, "investigator", 10, [("ssh_diagnostic", {"command": "df"}, False, 5)])
+        _fb(s, i, "loki_query", "wants a label filter", 9)
+        _fb(s, i, "made_up_tool", "who knows", 8)
+    html = _client(tmp_path, monkeypatch, seed).get("/agents/investigator").text
+    hist = html[html.index('aria-labelledby="h-tools"'):]
+    assert "Suggestion, general: loki_query" not in hist
+    assert "Suggestion, general: made_up_tool: who knows" in hist
+    assert 'class="tufb"' not in hist.split("Calls, newest first")[0].split("Tooling feedback")[0]
+    lst = hist[hist.index('<caption class="label">Tooling feedback'):hist.index("Calls, newest first")]
+    assert "wants a label filter" in lst
