@@ -47,6 +47,7 @@ from jinja2 import Environment, FileSystemLoader
 from heim.agent.runner import run_agent
 from heim.config import AgentCfg, ModelRef, expand_env
 from heim.model_chain import INVESTIGATOR_AGENT, find_model, resolve_model
+from heim.runctx import TRIGGER_JOB, current_run
 from heim.costing import cost_of
 from heim.channels.telegram import chunk_text
 from heim.reports.render import (
@@ -526,6 +527,20 @@ def extend_pending_investigation(rt: Runtime, investigation_id: int, findings: l
     return True
 
 
+def record_incident_changes(rt: Runtime, job: str, at: str, loki_events: list[dict]) -> None:
+    """Store the incident changes a job run caused, under its heartbeat id
+    (spec 2026-11-04-activity-jobs-tools). Skipped outside a daemon run —
+    a CLI one-off has no id; a failure here never costs the pipeline."""
+    run_id = current_run(job)
+    if not run_id:
+        return
+    try:
+        from heim.jobs import incident_changes
+        rt.store.add_incident_events(run_id, at, incident_changes(loki_events))
+    except Exception:
+        log.exception("recording the incident events of %s run #%s failed", job, run_id)
+
+
 def model_label(key: str) -> str:
     """The model id inside a model key (``provider|model[|url]``) or bare id."""
     return key.split("|")[1] if "|" in key else key
@@ -652,6 +667,8 @@ async def run_investigation(
             model=agent_cfg.model,
             provider=agent_cfg.provider,
             model_pinned=int(pinned),
+            # the job run that dispatched it (spec 2026-11-04-activity-jobs-tools)
+            parent_run_id=current_run(TRIGGER_JOB.get(trigger, "")),
             trigger=trigger,
             status="pending_approval" if will_ask else "running",
             started_at=generated_at,

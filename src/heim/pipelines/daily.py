@@ -23,7 +23,8 @@ from heim.costing import cost_of
 from heim.llm import AnalystChainFailed, run_chain, parse_analysis
 from heim.metrics.aggregate import aggregate
 from heim.metrics.queries import build_window, load_queries
-from heim.pipelines.investigate import dispatch_all
+from heim.pipelines.investigate import dispatch_all, record_incident_changes
+from heim.runctx import current_run
 from heim.pipelines.suppression import (
     filter_incident_events,
     filter_reconcile,
@@ -211,6 +212,10 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
             headline=str(analysis.get("headline") or ""),
             summary=str(analysis.get("executiveSummary") or ""),
             attempts_json=json.dumps([a.as_dict() for a in res.attempts], ensure_ascii=False),
+            # spec 2026-11-04-activity-jobs-tools: the job run it belongs to,
+            # and what the analyst was given
+            agent_run_id=current_run("daily"),
+            input_text=user,
         )
         rt.store.insert_findings(
             run_id, run_at, "daily", findings,
@@ -240,9 +245,9 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     })
 
     # 6. Loki emits (findings, categories, incidents, run state)
-    events = finding_and_category_events(analysis, payload) + filter_incident_events(
-        incident_events(rec.summary or {}), suppressed
-    )
+    inc_events = filter_incident_events(incident_events(rec.summary or {}), suppressed)
+    record_incident_changes(rt, "daily", run_at, inc_events)
+    events = finding_and_category_events(analysis, payload) + inc_events
     events.append(compute_state(rt.store.open_rows(), routing=cfg.routing(), trigger="run",
                                 last_run_ms=int(time.time() * 1000)))
     await rt.emit_loki(events)

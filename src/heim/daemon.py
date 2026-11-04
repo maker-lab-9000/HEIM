@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import contextmanager
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -27,6 +28,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from heim.agents import BACKUP_TIME
 from heim.channels import deadman
 from heim.llm import AnalystChainFailed
+from heim.runctx import current_run, run_ids, set_runs
 from heim.pipelines.daily import run_daily
 from heim.pipelines.investigate import (model_label, notify_investigation_failed,
                                        rearm_pending_approvals, run_investigation)
@@ -65,11 +67,39 @@ BACKUP_STEM = "heim-%Y%m%d"
 
 def _record_agent_run(rt: Runtime, agent: str, started_at: str, ok: bool,
                       error: str = "", detail: dict | None = None) -> None:
-    """Heartbeat for the dashboard. A side channel: never breaks a job."""
+    """Heartbeat for the dashboard. A side channel: never breaks a job.
+
+    Closes the row :func:`_job_runs` opened for ``agent`` in this run, when
+    there is one (spec 2026-11-04-activity-jobs-tools); otherwise writes a
+    finished row, as before.
+    """
     try:
-        rt.store.record_agent_run(agent, started_at, rt.now_iso(), ok, error, detail)
+        run_id = current_run(agent)
+        if run_id:
+            rt.store.finish_agent_run(run_id, rt.now_iso(), ok, error, detail)
+        else:
+            rt.store.record_agent_run(agent, started_at, rt.now_iso(), ok, error, detail)
     except Exception:
         log.exception("recording the %s heartbeat failed", agent)
+
+
+@contextmanager
+def _job_runs(rt: Runtime, started_at: str, *agents: str):
+    """Open one heartbeat per job when it starts and make the ids the run
+    context, so everything the run creates records it (spec 2026-11-04-
+    activity-jobs-tools). An id that cannot be opened is simply absent; the
+    job then records its heartbeat at the end, as before."""
+    ids: dict[str, int] = {}
+    for agent in agents:
+        try:
+            ids[agent] = rt.store.start_agent_run(agent, started_at)
+        except Exception:
+            log.exception("opening the %s heartbeat failed", agent)
+    token = set_runs(ids)
+    try:
+        yield ids
+    finally:
+        run_ids.reset(token)
 
 
 def _exc_text(exc: BaseException) -> str:
@@ -88,6 +118,11 @@ def _query_count(rt: Runtime) -> int | None:
 
 async def _daily_job(rt: Runtime) -> None:
     started = rt.now_iso()
+    with _job_runs(rt, started, "daily"):
+        await _daily_job_body(rt, started)
+
+
+async def _daily_job_body(rt: Runtime, started: str) -> None:
     try:
         result = await run_daily(rt, dispatch_concurrently=True)
         log.info("daily run complete: %s", result)
@@ -140,18 +175,28 @@ def _record_poll_agents(rt: Runtime, started: str, summary: dict) -> None:
                            "report_only": summary.get("uptime_report_only")})
 
 
+def _poll_halves(rt: Runtime) -> list[str]:
+    """The poll halves that run at all (a half switched off in config has none)."""
+    st = rt.config.settings
+    return (["alert_poller"] + (["thresholds"] if st.threshold_detection else [])
+            + (["uptime"] if st.uptime_kuma.url else []))
+
+
 async def _poll_job(rt: Runtime) -> None:
     started = rt.now_iso()
-    try:
-        summary = await run_poll(rt, dispatch_concurrently=True)
-    except Exception as exc:
-        log.exception("alert poll failed")  # next poll retries in a few minutes
-        _record_agent_run(rt, "alert_poller", started, False, _exc_text(exc))
-        return
-    try:
-        _record_poll_agents(rt, started, summary or {})
-    except Exception:  # a heartbeat must never cost the dead-man ping
-        log.exception("recording the poll heartbeats failed")
+    with _job_runs(rt, started, *_poll_halves(rt)) as opened:
+        try:
+            summary = await run_poll(rt, dispatch_concurrently=True)
+        except Exception as exc:
+            log.exception("alert poll failed")  # next poll retries in a few minutes
+            # every half opened for this cycle is closed, none left "running"
+            for half in opened:
+                _record_agent_run(rt, half, started, False, _exc_text(exc))
+            return
+        try:
+            _record_poll_agents(rt, started, summary or {})
+        except Exception:  # a heartbeat must never cost the dead-man ping
+            log.exception("recording the poll heartbeats failed")
     # Every *completed* cycle pings, including the no-op ones: the switch
     # asserts "the scheduler is alive", not "an incident happened". A poll
     # that raised deliberately stays silent — that is the outage to report.
@@ -163,6 +208,11 @@ async def _security_audit_job(rt: Runtime) -> None:
     raise into the scheduler; a failure is one Telegram line. Success is
     silent here because the pipeline delivers its own digest."""
     started = rt.now_iso()
+    with _job_runs(rt, started, "security"):
+        await _security_audit_body(rt, started)
+
+
+async def _security_audit_body(rt: Runtime, started: str) -> None:
     try:
         result = await run_security_audit(rt)
         log.info("security audit complete: %s", result)
@@ -243,6 +293,11 @@ async def _backup_job(rt: Runtime) -> None:
     store keeps growing), while ``backup_file`` still names the file written.
     """
     started = rt.now_iso()
+    with _job_runs(rt, started, "backup"):
+        _backup_body(rt, started)
+
+
+def _backup_body(rt: Runtime, started: str) -> None:
     try:
         dest = run_backup(rt)
     except Exception as exc:
