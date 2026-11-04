@@ -64,6 +64,11 @@ deployment-specific from `.env`. Copy it when you want to change structure.
   and accepted by `heim investigate --model`. The choice applies to that run only and is
   recorded on it. List only priced ids. Empty means no select and the investigator's
   own model.
+- **`analyst_models`** ([]). The models the dashboard may put in the daily analyst's
+  chain on `/agents/daily`, each `{provider, model}` (plus `base_url` /
+  `api_key_env` for `openai_compat`). The chosen order applies from the next run and
+  stays until Reset to default. Empty means the chain is shown read-only. An override
+  naming a model later removed from this list is ignored, and the YAML chain runs.
 - **`instance_host_map`.** Prometheus `instance` address prefixes to host names, first
   match wins, so put longer prefixes first.
 - **`host_color_order`.** Badge colours go by position in this list. Append new hosts;
@@ -107,8 +112,11 @@ hard-scoped client, then list it in an agent's YAML. The tools are described in
 - `investigator.yaml`: Anthropic model, `max_tokens`, `soft_step_budget` (told to the
   model, 15), `hard_step_cap` (enforced by the loop, 25), prompt template, tool list.
 - `security_auditor.yaml`: the same fields, with a cap of 6 and no SSH tool.
-- `daily_analyst.yaml` (`kind: analyst`): a primary model (OpenRouter) and a fallback
-  (Anthropic), one completion, no tools, strict-JSON prompt.
+- `daily_analyst.yaml` (`kind: analyst`): an ordered `chain` of models tried until one
+  answers with parseable JSON — one completion, no tools, strict-JSON prompt. Providers:
+  `anthropic`, `openrouter` (`OPENROUTER_API_KEY`), and `openai_compat` for any other
+  OpenAI-compatible server such as a local llama.cpp (`base_url`, and `api_key_env`
+  only if it needs a key). The older `primary` / `fallback` form still loads.
 
 Prompts live in `config/prompts/`: `analyst.md`, `investigator.md.j2`,
 `security_auditor.md.j2`, and per-role briefs in `briefs/`.
