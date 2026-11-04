@@ -64,17 +64,35 @@ Decline red; False positive grey.
   last sync with Prometheus), and what requires you. Then **Needs attention**: open
   incidents by severity, each saying what HEIM is doing about it, and runs that need a
   re-run. **Needs you**: approvals, physical checks the agent cannot make remotely, and
-  manual checks. Then the **Agents** panel, and below it the health tiles (open
+  manual checks. Then the **Jobs and agents** panel (all seven, with links into Jobs,
+  Agents, Tools and Activity), and below it the health tiles (open
   incidents, running investigations, pending approvals, tokens and cost in 24 h, queue),
   the latest analysis with a per-host strip, the last daily runs, the tool-usage card
   (calls, blocked, average time and tokens per tool, agent and model, with the latest
   tooling feedback), token usage by weekday, recent investigations and recent findings.
-- **Agents** (`/agents`). The seven agents with state, scope, last success and a run
-  strip; a stale or failing one gets a monitoring-gap line. Each has a page
-  (`/agents/<key>`) with its coverage, cadence, last error, a run table, a link to its
-  evidence and, for the investigator and the security audit, its last 50 tool calls with
-  that agent's tooling feedback. Below the agents table, a Tooling feedback panel lists the
-  newest 50 suggestions from all agents.
+- **Activity** (`/activity`). What ran, when, and what it started. On top, a map of how
+  the parts are wired: jobs → agents → tools, each box with its state and last run; a box
+  filters the timeline, and pressing it again clears the filter. Below, the timeline:
+  every run newest first, with what it started nested under it — the daily run → the
+  analyst (model, fallback) → the incidents it opened or escalated → the investigations
+  it dispatched → their tool calls. A child is nested only when HEIM recorded that this
+  run started it; older rows appear on their own, labelled. A job's quiet runs merge into
+  one row. Filters: all, jobs, agents, runs that triggered something.
+- **Jobs** (`/jobs`, `/jobs/<key>`). The scheduled, model-free parts: daily run, alert
+  poller, threshold watch, uptime monitor, security audit, backup. Each shows its state,
+  schedule, last run and a **Pause** control (1 h, 4 h or 24 h): a paused job skips its
+  work until then, the dead-man ping keeps running, and Telegram gets one line when the
+  pause starts and one when it ends. "Off" means switched off in config. A job's page
+  has its run strip, run table, last error and evidence link.
+- **Agents** (`/agents`, `/agents/analyst|investigator|auditor`). The three that call a
+  model. Each page has its Models panel (analyst and investigator), its runs, its tool
+  history, and its **Prompt**: the prompt as sent (the investigator's rendered for a host
+  you pick), the template as written, and for the analyst the input of its latest run.
+  Old `/agents/<job>` links redirect to the new pages.
+- **Tools** (`/tools`, `/tools/<name>`). Every tool: what it does, which agents use it,
+  calls and blocked calls in the window, its guard, its definition exactly as the model
+  sees it, recent calls, and the agents' **tooling feedback** on it (the full list, newest
+  50 first, is on `/tools`).
 - **Investigations.** A filterable list (status, host, trigger). Running rows refresh
   every 5 seconds; queued jobs appear as ghost rows on top. The detail page shows the
   header (host, status, trigger, agent and model, tokens, cost, duration, fingerprint),
@@ -121,8 +139,9 @@ URL.
 | Confirm / False positive | findings, security | a verdict; false positive also mutes the fingerprint |
 | Mute / Unmute | incidents | a suppression and the incident's `suppressed` status |
 | Done / Dismiss | recommendations | the recommendation's state |
-| Save order / Reset to default | `/agents/daily`, Models panel | the daily analyst's model chain override (from `analyst_models`) |
+| Save order / Reset to default | `/agents/analyst`, Models panel | the daily analyst's model chain override (from `analyst_models`) |
 | Save / Reset to default | `/agents/investigator`, Models panel | the investigator's model override (from `investigator_models`) |
+| Pause / Resume now | `/jobs`, a job's page | a timed job pause (1 h, 4 h, 24 h); the daemon skips the job's work until then and announces start and end on Telegram |
 
 Decisions are reversible: pressing a pressed verdict or recommendation key clears it,
 the other key switches it, and leaving False positive lifts the mute it set. While a run

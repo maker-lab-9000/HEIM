@@ -49,6 +49,16 @@ completed poll cycle, including cycles that found nothing, so silence means HEIM
 A failed ping is one warning line. This is the only cover for the loss of the host HEIM
 runs on.
 
+## Pausing a job for maintenance
+
+On the dashboard's **Jobs** page, pick 1 h, 4 h or 24 h next to a job and press Pause.
+Until then the daemon skips that job's work and records the skipped run as "Paused", so
+it never reads as overdue. The poll cycle itself keeps running, so the dead-man's switch
+keeps pinging and the external watchdog stays quiet. Telegram gets one line when the
+pause starts and one when it ends (within one poll interval). A pause always ends by
+itself; "Resume now" ends it early. A paused daily run or weekly audit is skipped, not
+caught up. A job switched off in config reads "Off" and has no Pause control.
+
 ## Backups and retention
 
 At 03:30 local time the daemon snapshots the store with SQLite's online backup API (safe

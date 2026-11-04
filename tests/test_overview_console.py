@@ -463,7 +463,7 @@ def test_agents_panel_has_seven_rows_filter_and_flag(tmp_path, monkeypatch):
         running = c.get("/?agents=running").text
 
     panel = _agents(html)
-    assert '<h2 id="h-ag">Agents</h2>' in panel
+    assert '<h2 id="h-ag">Jobs and agents</h2>' in panel
     rows = _rows(panel)
     assert [re.search(r'class="name"><a href="([^"]+)">(.*?)</a>', r).groups() for r in rows] == [
         # since 2026-11-04 the model-free rows link to their job page
@@ -597,3 +597,16 @@ def test_needs_human_status_pill_reads_needs_you(tmp_path, monkeypatch):
         html = c.get("/investigations").text
     assert "needs you" in html
     assert "needs human" not in html.lower() and "needs a human" not in html.lower()
+
+
+def test_overview_groups_jobs_agents_tools(tmp_path, monkeypatch):
+    # spec 2026-11-04-activity-jobs-tools: the overview's panel points into
+    # the three sections and the Activity page; it is still one table.
+    with _client(tmp_path, monkeypatch, _healthy_agents) as c:
+        panel = _agents(c.get("/").text)
+        assert '<h2 id="h-ag">Jobs and agents</h2>' in panel
+        for href, word in (("/jobs", "Jobs"), ("/agents", "Agents"), ("/tools", "Tools"),
+                           ("/activity", "See what ran")):
+            assert f'href="{href}"' in panel and word in panel, href
+        # the /agents page's own copy of the panel keeps its plain title
+        assert '<h2 id="h-ag">Agents</h2>' in c.get("/agents").text
