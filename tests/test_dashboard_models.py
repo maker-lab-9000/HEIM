@@ -178,3 +178,34 @@ def test_a_first_try_run_is_not_marked(client):
 def test_action_helpers_allow_list():
     assert "set_model_override" in dash._ACTION_HELPERS
     assert "clear_model_override" in dash._ACTION_HELPERS
+
+
+# ------------------------------------------------ final review fixes
+
+
+def test_run_table_text_for_normal_and_fallback_runs():
+    normal = {"ok": True, "detail": {"queries": 50, "hosts": 4, "fallback": False,
+                                     "model_used": "claude-opus-5-5", "failed_models": []}}
+    assert dash._what_happened(normal) == "50 queries · 4 hosts"
+    fb = {"ok": True, "detail": {"queries": 50, "hosts": 4, "fallback": True,
+                                 "model_used": "deepseek/deepseek-v4.1-flash-1017",
+                                 "failed_models": ["claude-opus-5-5"]}}
+    assert dash._what_happened(fb) == ("50 queries · 4 hosts · answered by "
+                                       "deepseek/deepseek-v4.1-flash-1017 (fallback)")
+
+
+def test_htmx_invalid_chain_returns_the_panel_with_the_error(client):
+    cfg, c = client
+    r = c.post("/actions/models", data={"action": "set", "slot_1": OPUS.key, "slot_2": OPUS.key},
+               headers={"HX-Request": "true"})
+    assert r.status_code == 200
+    assert 'id="h-models"' in r.text
+    assert 'class="flash mono err"' in r.text and "Each model can appear once." in r.text
+    assert _store(cfg).model_override("daily_analyst") is None
+
+
+def test_slots_are_compacted_when_a_yaml_entry_is_not_offered(tmp_path):
+    cfg, c = _client(tmp_path, [DEEPSEEK])      # Opus (YAML's first) is not offered
+    html = _panel(c.get("/agents/daily").text)
+    first = html[html.index('name="slot_1"'):html.index("</select>", html.index('name="slot_1"'))]
+    assert f'value="{DEEPSEEK.key}" selected' in first

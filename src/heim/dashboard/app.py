@@ -382,9 +382,11 @@ def _models_ctx(cfg, override: dict | None) -> dict:
     prices = cfg.settings.model_prices or {}
     chain = [{"model": r.model, "provider": r.provider, "priced": r.model in prices}
              for r in eff.chain]
-    keys = [r.key for r in eff.chain]
-    slots = [keys[i] if i < len(keys) and keys[i] in {a.key for a in allowed} else ""
-             for i in range(len(allowed))]
+    # only offered models can be preselected; compacted so a YAML entry that is
+    # not offered leaves no gap the form would then refuse
+    offered = {a.key for a in allowed}
+    keys = [r.key for r in eff.chain if r.key in offered]
+    slots = (keys + [""] * len(allowed))[:len(allowed)]
     options = [{"key": a.key, "label": f"{a.model} ({a.provider})",
                 "priced": a.model in prices} for a in allowed]
     return {"models": {"chain": chain, "source": eff.source, "stale": eff.stale,
@@ -1200,7 +1202,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         fields = await _fields(request)
         action = _choice_field(fields, "action", ("set", "reset"))
         if action == "set":
-            chain = _chain_field(fields, list(cfg.settings.analyst_models))
+            try:
+                chain = _chain_field(fields, list(cfg.settings.analyst_models))
+            except ActionError as exc:
+                if not request.headers.get("hx-request"):
+                    raise
+                # htmx does not swap a 4xx, so a choice the operator can make
+                # (a repeat, a gap) comes back as the panel with the reason
+                return partial(request, "partials/_models_panel.html",
+                               flash={"text": exc.message, "err": True},
+                               back=_back_to(request, fields),
+                               **_models_ctx(cfg, reader.read(
+                                   lambda s: s.model_override(OVERRIDE_AGENT))))
             reader.write(lambda s: s.set_model_override(OVERRIDE_AGENT, chain))
             flash = {"text": MODELS_SAVED}
         else:
@@ -1912,8 +1925,12 @@ def _what_happened(run: dict) -> str:
     """The error text, else the run's counters (``4 hosts · 50 queries``)."""
     if run.get("error"):
         return str(run["error"])
-    parts = [f"{v} {k.replace('_', ' ')}" for k, v in (run.get("detail") or {}).items()
-             if v is not None and not isinstance(v, (dict, list))]
+    detail = run.get("detail") or {}
+    # numeric counters only; the analyst chain's keys are said in words below
+    parts = [f"{v} {k.replace('_', ' ')}" for k, v in detail.items()
+             if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    if detail.get("fallback") and detail.get("model_used"):
+        parts.append(f"answered by {detail['model_used']} (fallback)")
     return " · ".join(parts)
 
 

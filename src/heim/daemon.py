@@ -73,7 +73,8 @@ def _record_agent_run(rt: Runtime, agent: str, started_at: str, ok: bool,
 
 def _exc_text(exc: BaseException) -> str:
     # A chain failure lists every model it tried; give it room to (spec 2026-11-04).
-    clip = 600 if isinstance(exc, AnalystChainFailed) else 200
+    # each attempt's error is already clipped to llm.ERROR_CLIP
+    clip = 400 * len(exc.attempts) + 100 if isinstance(exc, AnalystChainFailed) else 200
     return f"{type(exc).__name__}: {exc}"[:clip]
 
 
@@ -96,7 +97,9 @@ async def _daily_job(rt: Runtime) -> None:
             "failed_models": list(result.get("failed_models") or [])})
     except Exception as exc:
         log.exception("daily run failed")
-        _record_agent_run(rt, "daily", started, False, _exc_text(exc))
+        _record_agent_run(rt, "daily", started, False, _exc_text(exc),
+                          detail={"attempts": [a.as_dict() for a in exc.attempts]}
+                          if isinstance(exc, AnalystChainFailed) else None)
         await rt.notify(f"🔴 HEIM daily run FAILED: {type(exc).__name__}: {exc}")
 
 

@@ -94,7 +94,13 @@ async def _complete_openai_compat(url: str, key: str | None, model: str, system:
                 ],
             },
         )
-        r.raise_for_status()
+        try:
+            r.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # keep the provider's own reason (e.g. "Insufficient credits"),
+            # not httpx's boilerplate about where to read up on status codes
+            body = str(getattr(r, "text", "") or "").strip()[:200]
+            raise RuntimeError(f"HTTP {exc.response.status_code}: {body}") from None
         data = r.json()
     content = data["choices"][0]["message"]["content"]
     usage = data.get("usage") or {}

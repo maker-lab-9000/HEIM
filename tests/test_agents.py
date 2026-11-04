@@ -484,3 +484,25 @@ async def test_daily_job_failure_heartbeat_lists_every_attempt(rt, monkeypatch):
     assert row["ok"] is False
     assert "claude-opus-5-5" in row["error"]
     assert "deepseek/deepseek-v4.1-flash-1017" in row["error"] and "429" in row["error"]
+
+
+async def test_daily_job_failure_heartbeat_keeps_three_long_attempts(rt, monkeypatch):
+    from heim.llm import AnalystChainFailed, Attempt
+
+    attempts = [Attempt("anthropic", "claude-opus-5-5", False, "A" * 300),
+                Attempt("openrouter", "deepseek/deepseek-v4.1-flash-1017", False, "B" * 300),
+                Attempt("openai_compat", "local", False, "ConnectError: " + "C" * 280)]
+
+    async def all_fail(_rt, **_kw):
+        raise AnalystChainFailed(attempts)
+
+    async def quiet(_text):
+        pass
+
+    monkeypatch.setattr(daemon, "run_daily", all_fail)
+    monkeypatch.setattr(rt, "notify", quiet)
+    await daemon._daily_job(rt)
+    (row,) = rt.store.agent_runs("daily")
+    assert "openai_compat local" in row["error"]
+    assert [a["model"] for a in row["detail"]["attempts"]] == [
+        "claude-opus-5-5", "deepseek/deepseek-v4.1-flash-1017", "local"]

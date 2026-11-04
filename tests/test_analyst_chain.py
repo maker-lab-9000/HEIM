@@ -558,3 +558,28 @@ async def test_all_fail_when_email_send_raises_still_raises_chain_failure(drt, r
 
 def test_failure_subject_constant():
     assert FAILURE_SUBJECT.startswith("HEIM daily report NOT produced")
+
+
+async def test_openai_compat_http_error_keeps_the_response_body(monkeypatch):
+    import httpx
+
+    class _BadResp:
+        status_code = 402
+        text = '{"error": {"message": "Insufficient credits"}}'
+
+        def raise_for_status(self):
+            req = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+            raise httpx.HTTPStatusError("402 Payment Required", request=req,
+                                        response=httpx.Response(402, request=req))
+
+    class _BadHttp(_Http):
+        async def post(self, url, headers=None, json=None):
+            return _BadResp()
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    monkeypatch.setattr("heim.llm.httpx.AsyncClient", lambda *a, **k: _BadHttp({}))
+    with pytest.raises(AnalystChainFailed) as ei:
+        await run_chain([ModelRef(**DEEPSEEK)], "sys", "user", 8192)
+    err = ei.value.attempts[0].error
+    assert "402" in err and "Insufficient credits" in err
+    assert "developer.mozilla.org" not in err
