@@ -877,13 +877,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         history = None if calls is None else [
             {**c, "short": (a := short_args(c["tool"], c["args_json"]))[0], "full": a[1]}
             for c in calls]
-        stats = tool_summary(calls or [])
-        fb = ([_feedback_row(f) for f in reader.read(
-            lambda s: s.tool_feedback_rows(limit=None, agent_names=TOOL_AGENTS[key]))]
-            if key in TOOL_AGENTS else [])
-        return dict(tool_feedback=fb[:AGENT_FEEDBACK_LIMIT],
-                    **_agent_feedback(fb, stats, set(cfg.tools)),
-                    tool_history=history, tool_stats=tool_summary(calls or []),
+        # the agents' feedback on their tools lives on /tools since 2026-11-04
+        return dict(tool_history=history, tool_stats=tool_summary(calls or []),
                     agent=row, cadence=_cadence_text(cfg, key),
                     evidence=_AGENT_EVIDENCE.get(key),
                     backup_file=_last_backup_file(by_agent.get("backup", []))
@@ -977,13 +972,56 @@ def create_app(config: Config | None = None) -> FastAPI:
         by_key = {r["key"]: r for r in rows}
         rows = [{**by_key[hb], "name": name, "href": f"/agents/{pk}"}
                 for pk, (hb, name) in AGENT_PAGES.items() if hb in by_key]
-        every = reader.read(lambda s: s.tool_feedback_rows(limit=None))
-        shown = every if request.query_params.get("feedback") == "all" else every[:FEEDBACK_LIMIT]
         return page(request, "agents.html", page_title="agents", window=window,
-                    feedback=[_feedback_row(f) for f in shown],
-                    feedback_total=len(every), feedback_capped=len(every) > len(shown),
                     **_agents_panel(rows, request.query_params.get("agents", "")),
                     base_href="/agents")
+
+    @app.get("/tools", response_class=HTMLResponse)
+    async def tools_page(request: Request):
+        """Every tool: what it is, who uses it, how much, and the agents'
+        feedback on it (moved here from the Agents page)."""
+        window, window_s = _window(request)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        since = (datetime.fromisoformat(now_iso)
+                 - timedelta(seconds=window_s or WINDOWS["24h"])).isoformat()
+        calls = reader.read(lambda s: s.tool_calls(list(_PAGE_OF_AGENT_CFG), 100_000, since))
+        every = [_feedback_row(f) for f in reader.read(lambda s: s.tool_feedback_rows(limit=None))]
+        latest: dict[str, dict] = {}
+        for f in every:
+            latest.setdefault(f["tool"], f)
+        users = _tool_users(cfg)
+        rows = []
+        for name, tcfg in cfg.tools.items():
+            mine = [c for c in calls if c["tool"] == name]
+            rows.append({"name": name, "description": tcfg.description,
+                         "users": users.get(name, []), "calls": len(mine),
+                         "blocked": sum(1 for c in mine if c.get("blocked")),
+                         "feedback": latest.get(name)})
+        shown = every if request.query_params.get("feedback") == "all" else every[:FEEDBACK_LIMIT]
+        return page(request, "tools.html", page_title="tools", window=window, rows=rows,
+                    feedback=shown, feedback_total=len(every),
+                    feedback_capped=len(every) > len(shown),
+                    feedback_general=[v for k, v in sorted(latest.items()) if k not in cfg.tools])
+
+    @app.get("/tools/{name}", response_class=HTMLResponse)
+    async def tool_detail(request: Request, name: str):
+        tcfg = cfg.tools.get(name)
+        if tcfg is None:
+            return page(request, "error.html", status=404, page_title="not found",
+                        message=f"No tool called {name!r}.",
+                        detail="The tools are listed on the Tools page.")
+        calls = [c for c in reader.read(
+            lambda s: s.tool_calls(list(_PAGE_OF_AGENT_CFG), 2_000)) if c["tool"] == name]
+        history = [{**c, "short": (a := short_args(c["tool"], c["args_json"]))[0], "full": a[1],
+                    "agent": AGENT_PAGES.get(_PAGE_OF_AGENT_CFG.get(c.get("agent_name"), ""),
+                                             ("", c.get("agent_name") or ""))[1]}
+                   for c in calls[:TOOL_HISTORY_LIMIT]]
+        fb = [_feedback_row(f) for f in reader.read(lambda s: s.tool_feedback_rows(limit=None))
+              if f["tool"] == name]
+        return page(request, "tool.html", page_title=f"tools / {name}", tool=tcfg,
+                    definition=json.dumps(_tool_definition(tcfg), indent=2, ensure_ascii=False),
+                    guard=TOOL_GUARDS.get(name, ""), users=_tool_users(cfg).get(name, []),
+                    history=history, feedback=fb)
 
     @app.get("/agents/{key}", response_class=HTMLResponse)
     async def agent_detail(request: Request, key: str):
@@ -1890,27 +1928,15 @@ def _tool_usage(rows: list[dict], feedback: dict[str, dict] | None = None) -> li
 
 #: rows on the Agents page's feedback panel, and on one agent's list
 FEEDBACK_LIMIT = 50
-AGENT_FEEDBACK_LIMIT = 20
 
 
 def _feedback_row(f: dict) -> dict:
-    """A feedback row plus the agent key and display name its investigation maps to."""
+    """A feedback row plus the agent page and name its investigation maps to."""
     key = agent_key_for(f.get("agent_name", ""))
-    return {**f, "agent_key": key, "agent_label": AGENT_LABELS.get(key, f.get("agent_name", ""))}
-
-
-def _agent_feedback(rows: list[dict], stats: list[dict], configured: set[str]) -> dict:
-    """One agent's newest-first feedback split for its tool summary: the
-    latest note per tool in the summary (shown under that tool's row) and the
-    'general' footnotes, which are only notes naming NO configured tool. A
-    note for a real tool the agent did not call recently is still about that
-    tool: it appears in the Tooling feedback list, not as general."""
-    latest: dict[str, dict] = {}
-    for r in rows:
-        latest.setdefault(r["tool"], r)
-    known = {t["tool"] for t in stats}
-    return {"feedback_by_tool": {k: v for k, v in latest.items() if k in known},
-            "feedback_general": [v for k, v in sorted(latest.items()) if k not in configured]}
+    page_key = _PAGE_OF_JOB.get(key, key) if key else ""
+    label = (AGENT_PAGES[page_key][1] if page_key in AGENT_PAGES
+             else AGENT_LABELS.get(key, f.get("agent_name", "")))
+    return {**f, "agent_key": page_key, "agent_label": label}
 
 
 def _general_feedback(feedback: dict[str, dict], rows: list[dict]) -> list[dict]:
@@ -2034,6 +2060,45 @@ def _add_tool_counts(reader, rows: list[dict], window_s: int | None, now_iso: st
         names = TOOL_AGENTS.get(r["key"])
         r["tools"] = (reader.read(lambda s, n=names: s.tool_call_counts(n, since))
                       if names else None)
+
+
+#: what keeps each tool read-only, in one sentence (spec 2026-11-04-activity-
+#: jobs-tools). A test pins one entry per configured tool.
+TOOL_GUARDS = {
+    "ssh_diagnostic": "Read-only SSH: every command passes guards/command_guard.py "
+                      "(default-deny for destructive, network and interpreter binaries, "
+                      "no shell escapes or redirection), and runs as a dedicated user "
+                      "whose sudoers grants only read commands.",
+    "prometheus_query": "Read-only PromQL against Prometheus' query API (instant and "
+                        "range); there is no write path in the client.",
+    "discover_metrics": "Read-only metric-catalog lookups against Prometheus' "
+                        "label and series API.",
+    "loki_query": "Read-only LogQL against Loki's query API, bounded in lookback "
+                  "and line count.",
+    "ha_api": "GET-only Home Assistant API: paths pass guards/ha_guard.py's allowlist "
+              "of read endpoints, with a non-admin long-lived token.",
+    "proxmox_api": "GET-only Proxmox API: paths pass guards/proxmox_guard.py's "
+                   "allowlist of read endpoints, with an auditor-role token.",
+}
+
+#: which agent YAML is which agent page
+_PAGE_OF_AGENT_CFG = {"investigator": "investigator", "security_auditor": "auditor"}
+
+
+def _tool_definition(tcfg) -> dict:
+    """A tool exactly as both loops describe it to the model."""
+    return {"name": tcfg.name, "description": tcfg.description,
+            "parameters": tcfg.input_schema()}
+
+
+def _tool_users(cfg: Config) -> dict[str, list[tuple[str, str]]]:
+    """tool name -> [(agent page key, agent name)] from the agents' YAML."""
+    users: dict[str, list[tuple[str, str]]] = {}
+    for agent_name, page_key in _PAGE_OF_AGENT_CFG.items():
+        agent = cfg.agents.get(agent_name)
+        for t in (agent.tools if agent else []):
+            users.setdefault(t, []).append((page_key, AGENT_PAGES[page_key][1]))
+    return users
 
 
 #: the three that call a model (spec 2026-11-04-activity-jobs-tools):

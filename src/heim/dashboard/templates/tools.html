@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m %}
+{% block switch %}{% include "partials/_window_switch.html" %}{% endblock %}
+{% block content %}
+{#- the tools the agents call (spec 2026-11-04-activity-jobs-tools): what each
+    is, who uses it, how much in the window, and the agents' feedback on it. -#}
+<section class="panel" aria-labelledby="h-tools">
+  <div class="panel-head">
+    <h2 id="h-tools">Tools</h2>
+    <span class="label">every tool is read-only, by guard and by privilege</span>
+  </div>
+  <div class="inc"><table class="tbl dense">
+    <thead><tr>
+      <th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Used by</th>
+      <th scope="col" class="num">Calls</th><th scope="col" class="num">Blocked</th>
+    </tr></thead>
+    <tbody>
+      {%- for t in rows %}
+      <tr>
+        <td class="name"><a href="/tools/{{ t.name }}">{{ m.tool(t.name) }}</a></td>
+        <td class="ink2">{{ t.description|truncate(140) }}</td>
+        <td>{% for key, name in t.users %}<a href="/agents/{{ key }}">{{ name }}</a>{% if not loop.last %}, {% endif %}{% else %}{{ DASH }}{% endfor %}</td>
+        <td class="num mono">{{ t.calls }}</td>
+        <td class="num mono">{{ t.blocked or DASH }}</td>
+      </tr>
+      {%- if t.feedback %}
+      <tr class="tufb"><td colspan="5" class="ink3">Suggestion: {{ t.feedback.suggestion }}
+        · <a class="mono" href="/investigations/{{ t.feedback.investigation_id }}">#{{ t.feedback.investigation_id }}</a>
+        · {{ m.when(t.feedback.created_at) }}</td></tr>
+      {%- endif %}
+      {%- endfor %}
+    </tbody>
+  </table></div>
+  {%- for f in feedback_general %}
+  <p class="ink3 tufb-note">Suggestion, general: {{ f.tool }}: {{ f.suggestion }}
+    · <a class="mono" href="/investigations/{{ f.investigation_id }}">#{{ f.investigation_id }}</a>
+    · {{ m.when(f.created_at) }}</p>
+  {%- endfor %}
+</section>
+<section class="panel" id="feedback" aria-labelledby="h-fb">
+  <div class="panel-head">
+    <h2 id="h-fb">Tooling feedback</h2>
+    <span class="label">{{ feedback_total }} suggestion{{ '' if feedback_total == 1 else 's' }}</span>
+  </div>
+  {%- if feedback %}
+  <div class="inc"><table class="tbl dense">
+    <thead><tr>
+      <th scope="col" class="label">Tool</th><th scope="col" class="label">Suggestion</th>
+      <th scope="col" class="label">Agent</th><th scope="col" class="label">Investigation</th>
+      <th scope="col" class="label">Age</th>
+    </tr></thead>
+    <tbody>
+      {%- for f in feedback %}
+      <tr>
+        <td>{{ m.tool(f.tool) }}</td>
+        <td>{{ f.suggestion }}</td>
+        <td>{% if f.agent_key %}<a href="/agents/{{ f.agent_key }}">{{ f.agent_label }}</a>{% else %}{{ f.agent_label or DASH }}{% endif %}</td>
+        <td><a href="/investigations/{{ f.investigation_id }}">investigation {{ f.investigation_id }}</a></td>
+        <td>{{ m.when(f.created_at) }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table></div>
+  {%- if feedback_capped %}
+  <p><a class="more" href="/tools?{{ qs_with(feedback='all') }}#feedback">All {{ feedback_total }} suggestions<span class="arr" aria-hidden="true">→</span></a></p>
+  {%- endif %}
+  {%- else %}
+  <p class="empty">No tooling feedback yet. Agents add it at the end of a report.</p>
+  {%- endif %}
+</section>
+{% endblock %}

@@ -1,10 +1,5 @@
 {% extends "base.html" %}
 {% import "partials/_macros.html" as m %}
-{%- macro fb_line(f, general=false) -%}
-Suggestion{% if general %}, general{% endif %}: {% if general %}{{ f.tool }}: {% endif %}{{ f.suggestion }}
-        · <a class="mono" href="/investigations/{{ f.investigation_id }}">#{{ f.investigation_id }}</a>
-        · {{ m.when(f.created_at) }}
-{%- endmacro %}
 {% block content %}
 
 <nav class="crumb" aria-label="Breadcrumb">
@@ -143,34 +138,11 @@ Suggestion{% if general %}, general{% endif %}: {% if general %}{{ f.tool }}: {%
         <td class="num">{{ t.blocked or DASH }}</td>
         <td class="num">{{ '%.0f'|format(t.avg_ms) }} ms</td>
       </tr>
-      {%- if feedback_by_tool[t.tool] %}
-      <tr class="tufb"><td colspan="4" class="ink3">{{ fb_line(feedback_by_tool[t.tool]) }}</td></tr>
-      {%- endif %}
       {%- endfor %}
     </tbody>
   </table></div>
-  {%- for f in feedback_general %}
-  <p class="ink3 tufb-note">{{ fb_line(f, true) }}</p>
-  {%- endfor %}
-  {%- if tool_feedback %}
-  <div class="inc"><table class="tbl dense">
-    <caption class="label">Tooling feedback</caption>
-    <thead><tr>
-      <th scope="col">Tool</th><th scope="col">Suggestion</th>
-      <th scope="col">Investigation</th><th scope="col">Age</th>
-    </tr></thead>
-    <tbody>
-      {%- for f in tool_feedback %}
-      <tr>
-        <td>{{ m.tool(f.tool) }}</td>
-        <td>{{ f.suggestion }}</td>
-        <td><a href="/investigations/{{ f.investigation_id }}">investigation {{ f.investigation_id }}</a></td>
-        <td>{{ m.when(f.created_at) }}</td>
-      </tr>
-      {%- endfor %}
-    </tbody>
-  </table></div>
-  {%- endif %}
+  <p class="ink3">Definitions, guards and the agents' feedback on each tool:
+    <a href="/tools">Tools</a>.</p>
   <div class="inc"><table class="tbl dense">
     <caption class="label">Calls, newest first</caption>
     <thead><tr>
