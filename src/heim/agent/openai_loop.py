@@ -46,11 +46,27 @@ async def _post_with_retry(client: httpx.AsyncClient, url: str, headers: dict,
         except httpx.TransportError as exc:
             last = f"{type(exc).__name__}: {exc}"
         else:
-            if r.status_code < 400:
-                return r.json()
-            last = f"HTTP {r.status_code}: {str(r.text or '').strip()[:200]}"
-            if r.status_code != 429 and r.status_code < 500:
-                raise RuntimeError(last)
+            if r.status_code >= 400:
+                last = f"HTTP {r.status_code}: {str(r.text or '').strip()[:200]}"
+                if r.status_code != 429 and r.status_code < 500:
+                    raise RuntimeError(last)
+            else:
+                try:
+                    data = r.json()
+                except ValueError:
+                    raise RuntimeError(f"{body.get('model')} answered HTTP {r.status_code} "
+                                       f"but not JSON: {str(r.text or '').strip()[:200]}") from None
+                # OpenRouter reports an upstream provider failure as a 200 with
+                # an error object and no choices; it must fail (and notify),
+                # never pass as an empty — "incomplete" — answer.
+                err = data.get("error") if isinstance(data, dict) else None
+                if not err:
+                    return data
+                code = err.get("code") if isinstance(err, dict) else None
+                msg = err.get("message") if isinstance(err, dict) else err
+                last = f"provider error {code or ''}: {str(msg)[:200]}".replace("  ", " ")
+                if not (isinstance(code, int) and (code == 429 or code >= 500)):
+                    raise RuntimeError(last)
         log.warning("%s call failed (attempt %d/%d): %s", body.get("model"), attempt + 1,
                     RETRIES, last)
         if attempt + 1 < RETRIES:
@@ -111,15 +127,23 @@ async def run_openai_agent(
             out_tok += turn[1]
             credit = turn
 
-            choice = (data.get("choices") or [{}])[0]
+            choices = data.get("choices") or []
+            if not choices:
+                raise RuntimeError(f"provider error: no choices in the answer "
+                                   f"({json.dumps(data)[:200]})")
+            choice = choices[0]
             msg = choice.get("message") or {}
             text = msg.get("content") or ""
             calls = msg.get("tool_calls") or []
             finish = str(choice.get("finish_reason") or "")
+            if finish == "error":
+                raise RuntimeError(f"provider error: finish_reason error "
+                                   f"({json.dumps(choice)[:200]})")
 
             if calls:
-                messages.append({"role": "assistant", "content": msg.get("content"),
-                                 "tool_calls": calls})
+                # echoed back as returned: reasoning models (DeepSeek via
+                # OpenRouter) expect their reasoning fields within a tool exchange
+                messages.append({**msg, "role": "assistant"})
                 if collect_transcript:
                     blocks = [{"type": "text", "text": text}] if text else []
                     for c in calls:

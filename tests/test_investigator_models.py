@@ -370,3 +370,16 @@ async def test_dry_run_does_not_notify(tmp_path, monkeypatch):
     rig.fail_with = RuntimeError("boom")
     await rig.run()
     assert sent == []
+
+
+async def test_restart_sweep_notifies_only_investigator_runs(rig):
+    from heim import daemon
+    rt = rig.rt
+    mine = rt.store.create_investigation(host="homelab", agent_name="investigator",
+                                         trigger="daily", status="running", started_at="t")
+    rt.store.create_investigation(host="homelab", agent_name="security_auditor",
+                                  trigger="security_audit", status="running", started_at="t")
+    rt.store.create_investigation(host="homelab", agent_name="investigator",
+                                  trigger="replay", status="running", started_at="t")
+    await daemon._sweep_and_notify(rt)
+    assert len(rig.notes) == 1 and rig.notes[0].startswith(f"❌ Investigation #{mine} ")

@@ -274,6 +274,11 @@ async def _sweep_and_notify(rt: Runtime) -> int:
     if swept:
         log.warning("crash recovery: %d job/investigation row(s) marked interrupted", swept)
     for row in cut_short:
+        # only the investigator's own runs: the notice points at its model page
+        # (a security audit or an offline replay cut short is not one)
+        if (row.get("agent_name") or "investigator") != "investigator" \
+                or row.get("trigger") == "replay":
+            continue
         await notify_investigation_failed(
             rt, inv_id=int(row["id"]), host=str(row.get("host") or "?"),
             model=str(row.get("model") or ""), error="interrupted by daemon restart")

@@ -234,3 +234,42 @@ def test_tool_openai_schema_matches_its_yaml():
         "parameters": {"type": "object", "properties": {"command": {"type": "string"}},
                        "required": ["command"]}}}
     assert t.anthropic_schema()["input_schema"] == t.openai_schema()["function"]["parameters"]
+
+
+# ------------------------------------------------ final review fixes
+
+
+async def test_error_object_in_a_200_raises_with_the_reason():
+    script = Script({"error": {"code": 400, "message": "Provider returned error"}})
+    with pytest.raises(RuntimeError, match="provider error.*Provider returned error"):
+        await _run(script, [])
+    assert len(script.requests) == 1
+
+
+async def test_retryable_error_object_in_a_200_is_retried():
+    script = Script({"error": {"code": 502, "message": "upstream down"}}, _reply(REPORT))
+    res = await _run(script, [])
+    assert len(script.requests) == 2 and res.output_text.startswith("## Summary")
+
+
+async def test_finish_reason_error_raises():
+    with pytest.raises(RuntimeError, match="provider error"):
+        await _run(Script(_reply(None, finish="error")), [])
+
+
+async def test_non_json_200_raises_clearly():
+    with pytest.raises(RuntimeError, match="not JSON"):
+        await _run(Script(httpx.Response(200, text="<html>gateway</html>")), [])
+
+
+async def test_assistant_turn_echoed_back_as_returned():
+    reply = _reply(None, calls=[_call(1, "ssh_diagnostic", {"command": "df"})])
+    reply["choices"][0]["message"]["reasoning"] = "think"
+    reply["choices"][0]["message"]["reasoning_details"] = [{"type": "reasoning.text",
+                                                            "text": "think"}]
+    script = Script(reply, _reply(REPORT))
+    await _run(script, [StubTool("ssh_diagnostic")])
+    echoed = script.body(1)["messages"][2]
+    assert echoed["role"] == "assistant"
+    assert echoed["reasoning"] == "think" and echoed["reasoning_details"][0]["text"] == "think"
+    assert echoed["tool_calls"][0]["id"] == "call_1"
