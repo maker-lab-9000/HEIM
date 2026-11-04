@@ -46,6 +46,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from heim.agent.runner import run_agent
 from heim.config import AgentCfg, ModelRef, expand_env
+from heim.model_chain import INVESTIGATOR_AGENT, find_model, resolve_model
 from heim.costing import cost_of
 from heim.channels.telegram import chunk_text
 from heim.reports.render import (
@@ -139,7 +140,8 @@ def _has_ssh(cfg, host: str) -> bool:
     return entry is not None and entry.ssh is not None
 
 
-def _approval_text(req: InvestigationRequest, ftext: str, *, has_ssh: bool = True) -> str:
+def _approval_text(req: InvestigationRequest, ftext: str, *, has_ssh: bool = True,
+                   model: ModelRef | None = None) -> str:
     """Port of the n8n 'Ask Approval (Telegram)' message.
 
     Extended (Uptime Kuma grouped prompts, 2026-11-01): a non-empty
@@ -162,7 +164,13 @@ def _approval_text(req: InvestigationRequest, ftext: str, *, has_ssh: bool = Tru
     )
     # §5.1: name the model only when the trigger chose one — on the default
     # path there is nothing to disclose, and the line would be noise.
-    chosen = f" · model: {req.model_override}" if req.model_override else ""
+    # Since 2026-11-04 the caller passes ``model`` whenever the run is not on
+    # the YAML default (a pick OR the dashboard's choice), so the person
+    # approving knows when it will run on, say, DeepSeek.
+    shown = model or (ModelRef.from_key(req.model_override) if req.model_override else None)
+    chosen = (f" · model: {shown.model}"
+              + (f" ({shown.provider})" if shown.provider != "anthropic" else "")
+              if shown else "")
     lead = f"{req.headline}\n\n" if req.headline else ""
     return (
         f"{lead}🔍 Investigation approval needed for host \"{req.host}\".{chosen}{note}\n\n"
@@ -518,6 +526,63 @@ def extend_pending_investigation(rt: Runtime, investigation_id: int, findings: l
     return True
 
 
+def model_label(key: str) -> str:
+    """The model id inside a model key (``provider|model[|url]``) or bare id."""
+    return key.split("|")[1] if "|" in key else key
+
+
+#: how much of an error the failure notice carries
+FAILURE_ERROR_CLIP = 300
+
+
+def effective_investigator(rt: Runtime, choice: str = "") -> tuple[AgentCfg, bool]:
+    """The investigator config a run uses, and whether its model is pinned.
+
+    Spec 2026-11-04-investigator-openrouter: a per-run ``choice`` (a model key
+    or bare id) wins and is pinned; otherwise the dashboard override, else
+    config/agents/investigator.yaml. A choice no longer offered resolves only
+    when it is an Anthropic id (the legacy and CLI form); anything else —
+    e.g. a removed llama.cpp entry — raises ``ValueError`` rather than
+    guessing a URL.
+    """
+    cfg = rt.config
+    agent = cfg.agents["investigator"]
+    allowed = list(cfg.settings.investigator_models)
+    choice = (choice or "").strip()
+    if choice:
+        try:
+            return agent.with_ref(find_model(choice, allowed)), True
+        except ValueError:
+            pass
+        provider, _, rest = choice.partition("|") if "|" in choice else ("anthropic", "", choice)
+        model = rest.partition("|")[0]
+        for ref in allowed + [agent.ref]:
+            if ref.provider == provider and ref.model == model:
+                return agent.with_ref(ref), True
+        if provider == "anthropic" and model:
+            return agent.with_ref(ModelRef(model=model)), True
+        raise ValueError(f"model {model or choice} ({provider}) is no longer offered "
+                         "in settings.investigator_models")
+    eff = resolve_model(agent.ref, rt.store.model_override(INVESTIGATOR_AGENT), allowed)
+    if eff.stale:
+        log.warning("investigator model override ignored: it is no longer in "
+                    "settings.investigator_models (set %s); using %s",
+                    eff.updated_at or "?", agent.model)
+    return agent.with_ref(eff.chain[0]), False
+
+
+async def notify_investigation_failed(rt: Runtime, *, inv_id: int, host: str, model: str,
+                                      error: str) -> None:
+    """One Telegram line per failed investigation (never raises)."""
+    what = f"Investigation #{inv_id} ({host})" if inv_id else f"Investigation of {host}"
+    text = (f"❌ {what} failed on {model or 'the default model'}: "
+            f"{str(error)[:FAILURE_ERROR_CLIP]} — change the model on /agents/investigator")
+    try:
+        await rt.notify(text)
+    except Exception:
+        log.exception("failure notice for investigation #%s not sent", inv_id)
+
+
 async def run_investigation(
     rt: Runtime,
     req: InvestigationRequest,
@@ -542,7 +607,15 @@ async def run_investigation(
     cfg = rt.config
     # §5.1: the trigger may pick the model for this run only — same copy the
     # replay harness makes, so the row, the cost and the API call all agree.
-    agent_cfg = with_model(cfg.agents["investigator"], req.model_override)
+    # spec 2026-11-04-investigator-openrouter: resolved here for the row and
+    # the approval prompt, and again once approved (the operator may switch
+    # models while it waits). An unresolvable model fails the run, loudly.
+    try:
+        agent_cfg, pinned = effective_investigator(rt, req.model_override)
+        resolve_error = ""
+    except ValueError as exc:
+        agent_cfg, pinned = cfg.agents["investigator"], True
+        resolve_error = str(exc)
     jenv = Environment(loader=FileSystemLoader(cfg.prompts_dir))
     ftext = findings_text(req.findings)
     generated_at = rt.now_iso()
@@ -577,6 +650,8 @@ async def run_investigation(
             host_role=req.host_role,
             agent_name="investigator",
             model=agent_cfg.model,
+            provider=agent_cfg.provider,
+            model_pinned=int(pinned),
             trigger=trigger,
             status="pending_approval" if will_ask else "running",
             started_at=generated_at,
@@ -589,6 +664,14 @@ async def run_investigation(
             on_start(inv_id)
         except Exception:
             log.exception("on_start callback failed for investigation #%s", inv_id)
+    if resolve_error:
+        log.error("investigation #%s of %s: %s", inv_id, req.host, resolve_error)
+        rt.store.update_investigation(inv_id, status="failed", finished_at=rt.now_iso(),
+                                      incomplete_reason=resolve_error)
+        await notify_investigation_failed(rt, inv_id=inv_id, host=req.host,
+                                          model=model_label(req.model_override),
+                                          error=resolve_error)
+        return None
 
     # ------------------------------------------------------------- approval
     if will_ask:
@@ -596,7 +679,10 @@ async def run_investigation(
             await rt.emit_loki([_action(req.host, "approval_requested", req.fingerprint,
                                         f"Approval requested for {req.host}", generated_at)])
         answer, source = await _await_approval(
-            rt, inv_id, _approval_text(req, ftext, has_ssh=_has_ssh(cfg, req.host)),
+            rt, inv_id, _approval_text(
+                req, ftext, has_ssh=_has_ssh(cfg, req.host),
+                model=(agent_cfg.ref if agent_cfg.ref.key != cfg.agents["investigator"].ref.key
+                       else None)),
             cfg.settings.approvals.approve_timeout_s,
             send_prompt=resume_id is None,
         )
@@ -634,6 +720,13 @@ async def run_investigation(
     # hours and must not hold a slot.
     try:
         async with rt.investigation_slot():
+            # ------------------------------------------- the model, as of now
+            agent_cfg, pinned = effective_investigator(rt, req.model_override)
+            row = rt.store.investigation(inv_id) or {}
+            if (row.get("provider"), row.get("model")) != (agent_cfg.provider, agent_cfg.model):
+                rt.store.update_investigation(inv_id, model=agent_cfg.model,
+                                              provider=agent_cfg.provider,
+                                              model_pinned=int(pinned))
             # -------------------------------------------------------- the agent
             system = _build_system_prompt(rt, jenv, req)
             ctx = ToolContext(config=cfg, tag=req.tag, feed=rt.feed, audit=rt.audit)
@@ -731,6 +824,9 @@ async def run_investigation(
             )
         except Exception:
             log.exception("could not record investigation failure")
+        await notify_investigation_failed(rt, inv_id=inv_id, host=req.host,
+                                          model=agent_cfg.model,
+                                          error=f"{type(exc).__name__}: {exc}")
         return None
 
     # ------------------------------------------------------ outcome confirm

@@ -28,7 +28,8 @@ from heim.agents import BACKUP_TIME
 from heim.channels import deadman
 from heim.llm import AnalystChainFailed
 from heim.pipelines.daily import run_daily
-from heim.pipelines.investigate import rearm_pending_approvals, run_investigation
+from heim.pipelines.investigate import (model_label, notify_investigation_failed,
+                                       rearm_pending_approvals, run_investigation)
 from heim.pipelines.poller import run_poll
 from heim.pipelines.queue import request_from_payload
 from heim.pipelines.security_audit import run_security_audit
@@ -261,6 +262,24 @@ async def _backup_job(rt: Runtime) -> None:
                       detail={"backup_file": dest.name})
 
 
+async def _sweep_and_notify(rt: Runtime) -> int:
+    """Crash recovery at startup, and one failure notice per investigation the
+    restart cut short (spec 2026-11-04-investigator-openrouter). Never raises."""
+    try:
+        cut_short = rt.store.running_investigations()
+        swept = rt.store.sweep_interrupted()
+    except Exception:
+        log.exception("sweeping interrupted jobs failed")
+        return 0
+    if swept:
+        log.warning("crash recovery: %d job/investigation row(s) marked interrupted", swept)
+    for row in cut_short:
+        await notify_investigation_failed(
+            rt, inv_id=int(row["id"]), host=str(row.get("host") or "?"),
+            model=str(row.get("model") or ""), error="interrupted by daemon restart")
+    return int(swept)
+
+
 async def run_job(rt: Runtime, job: dict) -> None:
     """Execute one claimed job and close it out (never raises)."""
     job_id = int(job.get("id") or 0)
@@ -284,6 +303,13 @@ async def run_job(rt: Runtime, job: dict) -> None:
         log.exception("job #%d failed", job_id)
         rt.store.finish_job(job_id, "failed", investigation_id=seen.get("id", 0),
                             error=f"{type(exc).__name__}: {exc}")
+        if not seen.get("id"):
+            # no investigation row, so run_investigation never told anyone
+            payload = job.get("payload") or {}
+            await notify_investigation_failed(
+                rt, inv_id=0, host=str(payload.get("host") or "?"),
+                model=model_label(str(payload.get("model") or "")),
+                error=f"{type(exc).__name__}: {exc}")
         return
 
     inv_id = seen.get("id", 0)
@@ -338,12 +364,7 @@ async def run_daemon() -> None:
         scheduler.add_job(_security_audit_job, weekly_trigger(audit_spec, tz), args=[rt],
                           name="security-audit", misfire_grace_time=AUDIT_MISFIRE_GRACE_S)
 
-    try:
-        swept = rt.store.sweep_interrupted()
-        if swept:
-            log.warning("crash recovery: %d job/investigation row(s) marked interrupted", swept)
-    except Exception:
-        log.exception("sweeping interrupted jobs failed")
+    await _sweep_and_notify(rt)
 
     # The sweep deliberately leaves parked approvals alone; this picks them
     # back up. Order matters — re-arming before the sweep would race it.
