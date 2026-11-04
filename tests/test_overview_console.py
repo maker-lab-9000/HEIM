@@ -8,6 +8,7 @@ clock because the app reads it.
 """
 import json
 import re
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import version
 
@@ -610,3 +611,30 @@ def test_overview_groups_jobs_agents_tools(tmp_path, monkeypatch):
             assert f'href="{href}"' in panel and word in panel, href
         # the /agents page's own copy of the panel keeps its plain title
         assert '<h2 id="h-ag">Agents</h2>' in c.get("/agents").text
+
+
+def test_needs_you_is_capped_like_needs_attention(tmp_path, monkeypatch):
+    # a long approval backlog must not stretch the overview (2026-11-04)
+    def seed(s):
+        _healthy_agents(s)
+        for n in range(9):
+            s.create_investigation(
+                fingerprint=f"homelab|drive_temp|d{n}", host="homelab",
+                agent_name="investigator", status="pending_approval", started_at=_iso(30 + n),
+                findings_json=json.dumps([{"metric": f"DriveTempWarning d{n}"}]))
+
+    with _client(tmp_path, monkeypatch, seed) as c:
+        html = c.get("/").text
+    you = _section(html, 'aria-labelledby="h-you"', "</section>")
+    assert len(re.findall(r"<article", you)) == 6
+    assert re.search(r'href="/investigations\?status=pending_approval">all \(9\)', you)
+    # the Requires-you card still counts every one
+    assert "9 approvals" in _cards(html)["Requires you"]
+
+
+def test_layout_hooks_for_alignment(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch, _healthy_agents) as c:
+        assert '<table class="tbl dense jobs">' in c.get("/jobs").text
+        assert 'class="act prompt-host"' in c.get("/agents/investigator").text
+    css = (Path(__file__).resolve().parent.parent / "src/heim/dashboard/static/heim.css").read_text()
+    assert ".tbl tbody tr:last-child th" in css and ".tbl.jobs td" in css

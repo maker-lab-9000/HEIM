@@ -857,7 +857,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             # one "all (n)" line is what reaches them
             **_attention_view(attention_rows,
                               max(0, attention_count - len(troubled))),
-            needs_you=needs_you,
+            **_needs_you_view(needs_you),
             **_agents_panel(agent_rows, request.query_params.get("agents", "")),
             base_href="/",
             window=window,
@@ -2538,6 +2538,20 @@ def _attention_rows(open_incidents: list[dict], attention: list[dict],
     crit = [incident(i, "critical") for i in open_incidents if rank(i) == 0]
     warn = [incident(i, "warning") for i in open_incidents if rank(i) == 1]
     return crit + [run(i) for i in reversed(attention)] + warn
+
+
+def _needs_you_view(tasks: list[dict]) -> dict:
+    """Needs you, capped like Needs attention (``ATTENTION_CAP``): a long
+    approval backlog must not stretch the overview. One "all (n)" line links
+    the investigations that hold the rest — the pending approvals when every
+    hidden task is one."""
+    shown = tasks[:ATTENTION_CAP]
+    hidden = tasks[len(shown):]
+    more = ""
+    if hidden:
+        more = ("/investigations?status=pending_approval"
+                if all(t.get("kind") == "approval" for t in hidden) else "/investigations")
+    return {"needs_you": shown, "needs_you_total": len(tasks), "needs_you_more": more}
 
 
 def _attention_view(rows: list[dict], unread_runs: int = 0) -> dict:

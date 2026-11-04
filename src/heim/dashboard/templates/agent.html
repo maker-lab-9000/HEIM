@@ -55,7 +55,7 @@
     <span class="label mono">config/prompts/{{ prompt.file }}</span>
   </div>
   {%- if prompt.hosts %}
-  <form class="act" method="get" action="">
+  <form class="act prompt-host" method="get" action="">
     <select class="mselect mono" name="host" aria-label="Render the prompt for host">
       {%- for h in prompt.hosts %}<option value="{{ h }}"{% if h == prompt.host %} selected{% endif %}>{{ h }}</option>{% endfor %}
     </select>
