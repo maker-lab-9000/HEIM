@@ -1,6 +1,9 @@
 # The root-cause investigator agent (port of n8n PAM 20's Investigator).
 name: investigator
 model: claude-sonnet-5-5
+# provider: anthropic   # or openrouter / openai_compat (then also base_url:, and
+#                       # optionally api_key_env:). Usually left alone: pick other
+#                       # models on /agents/investigator from settings.investigator_models.
 # Doubled from 4096 with the move to Claude Sonnet 5: thinking is adaptive by
 # default there and counts toward max_tokens, so a 4.6-sized cap can end a
 # turn inside its own reasoning before the report is written.

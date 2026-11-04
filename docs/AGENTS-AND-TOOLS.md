@@ -96,7 +96,12 @@ is proposed again on a later run. `--dry-run` approves automatically, and
 
 ### The tool loop
 
-The investigator is an Anthropic tool-calling loop (`agent/runner.py`). The system
+The investigator is a tool-calling loop: Anthropic-native (`agent/runner.py`), or over
+the OpenAI-compatible chat API for OpenRouter and llama.cpp models
+(`agent/openai_loop.py`), with the same tools, guards and step cap. It runs on one model:
+a model picked for that run, else the one chosen on `/agents/investigator`, else
+`config/agents/investigator.yaml`. There is no automatic fallback; a failed
+investigation sends a Telegram line naming the model, so you can switch it. The system
 prompt is `investigator.md.j2` plus the host's `facts` and `privileges`. The model is told
 to finish within `soft_step_budget` (15) calls; at `hard_step_cap` (25) the loop refuses
 further calls and makes it write the report. The runner retries API errors, records real
