@@ -251,3 +251,61 @@ async def test_attempt_as_dict_round_trips():
     a = Attempt(provider="anthropic", model="m", ok=False, error="e", input_tokens=1, output_tokens=2)
     assert a.as_dict() == {"provider": "anthropic", "model": "m", "ok": False, "error": "e",
                            "input_tokens": 1, "output_tokens": 2}
+
+
+# ================================================== 3. store
+
+import json  # noqa: E402
+
+from heim.incidents.store import IncidentStore  # noqa: E402
+
+
+def test_model_override_round_trip(tmp_path):
+    s = IncidentStore(tmp_path / "s.sqlite3")
+    assert s.model_override("daily_analyst") is None
+    s.set_model_override("daily_analyst", [DEEPSEEK, OPUS])
+    got = s.model_override("daily_analyst")
+    assert [e["model"] for e in got["chain"]] == ["deepseek/deepseek-v4.1-flash-1017",
+                                                  "claude-opus-5-5"]
+    assert got["updated_by"] == "dashboard" and got["updated_at"]
+    assert s.clear_model_override("daily_analyst") is True
+    assert s.clear_model_override("daily_analyst") is False
+    assert s.model_override("daily_analyst") is None
+
+
+def test_set_model_override_replaces(tmp_path):
+    s = IncidentStore(tmp_path / "s.sqlite3")
+    s.set_model_override("daily_analyst", [OPUS])
+    s.set_model_override("daily_analyst", [DEEPSEEK])
+    assert [e["model"] for e in s.model_override("daily_analyst")["chain"]] == [
+        "deepseek/deepseek-v4.1-flash-1017"]
+
+
+def test_empty_override_is_refused(tmp_path):
+    s = IncidentStore(tmp_path / "s.sqlite3")
+    with pytest.raises(ValueError):
+        s.set_model_override("daily_analyst", [])
+    assert s.model_override("daily_analyst") is None
+
+
+def test_corrupt_override_reads_as_none(tmp_path):
+    s = IncidentStore(tmp_path / "s.sqlite3")
+    s._db.execute("INSERT INTO model_overrides (agent, chain_json, updated_at) "
+                  "VALUES ('daily_analyst', '{not json', 't')")
+    s._db.commit()
+    assert s.model_override("daily_analyst") is None
+
+
+def test_runs_gain_attempts_json_on_an_old_db(tmp_path):
+    db = tmp_path / "old.sqlite3"
+    s = IncidentStore(db)
+    s._db.execute("ALTER TABLE runs DROP COLUMN attempts_json")
+    s._db.commit()
+    s.close()
+    s = IncidentStore(db)
+    attempts = [{"provider": "anthropic", "model": "claude-opus-5-5", "ok": False}]
+    rid = s.insert_run(kind="daily", run_at="t", attempts_json=json.dumps(attempts))
+    run = [r for r in s.runs() if r["id"] == rid][0]
+    assert json.loads(run["attempts_json"]) == attempts
+    rid2 = s.insert_run(kind="daily", run_at="t2")
+    assert [r for r in s.runs() if r["id"] == rid2][0]["attempts_json"] == "[]"
