@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from heim.config import load_config
+from heim.config import ModelRef, load_config
 from heim.dashboard.app import create_app
 from heim.incidents.store import IncidentStore
 from heim.pipelines.investigate import InvestigationRequest, run_investigation
@@ -64,7 +64,7 @@ def rt(tmp_path, monkeypatch) -> Runtime:
     cfg.settings.email = None
     cfg.settings.home_assistant = None
     cfg.settings.telegram = None
-    cfg.settings.investigator_models = list(MODELS)
+    cfg.settings.investigator_models = [ModelRef(model=m) for m in MODELS]
     return Runtime(config=cfg, store=IncidentStore(tmp_path / "rt.sqlite3"),
                    dry_run=True, out_dir=tmp_path / "out")
 
@@ -72,7 +72,7 @@ def rt(tmp_path, monkeypatch) -> Runtime:
 def _client(tmp_path, monkeypatch, models: list[str]):
     cfg = _config(tmp_path, monkeypatch)
     cfg.settings.db_path = str(tmp_path / f"heim-{len(models)}.sqlite3")
-    cfg.settings.investigator_models = list(models)
+    cfg.settings.investigator_models = [ModelRef(model=m) for m in models]
     seed = IncidentStore(cfg.settings.db_path)
     seed.upsert([{
         "fingerprint": "ubuntu-server|mem_used|Memory climbing", "host": "ubuntu-server",
@@ -218,7 +218,8 @@ def test_dashboard_investigate_accepts_allowed_model(actions_client):
                             follow_redirects=False)
     assert r.status_code == 303
     job = store_of(actions_client).jobs(limit=10)[0]
-    assert '"model": "claude-opus-4-6"' in job["payload_json"]
+    # since 2026-11-04 the payload carries the model's key, not a bare id
+    assert '"model": "anthropic|claude-opus-4-6"' in job["payload_json"]
 
 
 def test_dashboard_investigate_without_a_model_queues_the_default(actions_client):
@@ -251,7 +252,7 @@ def test_select_rendered_only_when_configured(actions_client, plain_client):
     assert '<select class="mselect mono" name="model"' in with_models
     assert f"default ({configured})" in with_models
     for mid in MODELS:
-        assert f'<option value="{mid}">' in with_models
+        assert f'<option value="anthropic|{mid}">' in with_models
     assert '<select name="model"' not in plain_client.get("/hosts").text
     assert 'name="model"' not in plain_client.get("/hosts").text
 

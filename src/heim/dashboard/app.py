@@ -71,7 +71,7 @@ from heim.agents import (
 )
 from heim.config import Config, load_config
 from heim.costing import cost_of
-from heim.model_chain import OVERRIDE_AGENT, resolve_chain
+from heim.model_chain import OVERRIDE_AGENT, find_model, resolve_chain
 from heim.dashboard import format as fmt
 from heim.dashboard.recommendations import collect as collect_recommendations
 from heim.incidents.store import IncidentStore
@@ -393,22 +393,26 @@ def _models_ctx(cfg, override: dict | None) -> dict:
                        "updated_at": eff.updated_at, "options": options, "slots": slots}}
 
 
-def _model_field(fields: dict, allowed: list[str]) -> str:
-    """The model an investigate form chose (§5.1). "" = the configured default.
+def _model_field(fields: dict, allowed: list) -> str:
+    """The model an investigate form chose (§5.1), as its key. "" = the default.
 
     Validated against ``settings.investigator_models`` and nothing else: the
-    value ends up in a job payload the daemon will run on, so an id that was
-    never offered is refused rather than passed to the API.
+    value ends up in a job payload the daemon will run on, so a model that was
+    never offered is refused rather than passed to the API. A full key or a
+    bare model id that exactly one entry has are both accepted.
     """
     value = str(fields.get("model") or "").strip()
-    if value and value not in allowed:
+    if not value:
+        return ""
+    try:
+        return find_model(value, list(allowed)).key
+    except ValueError as exc:
         raise ActionError(
             f"{value} is not a model this deployment offers.",
-            "Pick one of the models in settings.investigator_models — the "
-            "dropdown lists exactly those." if allowed else
+            (f"{exc}. Pick one of the models in settings.investigator_models — the "
+             "dropdown lists exactly those.") if allowed else
             "settings.investigator_models is empty, so every investigation "
-            "runs on the investigator agent's own model.", 400)
-    return value
+            "runs on the investigator agent's own model.", 400) from None
 
 
 def _back_to(request: Request, fields: dict) -> str:

@@ -234,6 +234,15 @@ def _request_from_incident(rt, incident: dict, role: str | None) -> "object":
     )
 
 
+def _cli_model_choice(cfg, value) -> str:
+    """``--model`` as a model key ("" = the default). Accepts a full key or a
+    bare id that exactly one ``settings.investigator_models`` entry has;
+    raises ``ValueError`` otherwise (spec 2026-11-04-investigator-openrouter)."""
+    from heim.model_chain import find_model
+    value = str(value or "").strip()
+    return find_model(value, list(cfg.settings.investigator_models)).key if value else ""
+
+
 async def _cmd_investigate(args) -> int:
     from heim.pipelines.investigate import InvestigationRequest, run_investigation
     from heim.runtime import build_runtime
@@ -246,11 +255,11 @@ async def _cmd_investigate(args) -> int:
     # §5.1: the CLI offers the same list the dashboard's dropdown does — the
     # config is only readable once the runtime is built, so this is checked
     # here rather than by argparse's `choices`.
-    model = str(getattr(args, "model", "") or "").strip()
-    offered = list(rt.config.settings.investigator_models)
-    if model and model not in offered:
-        print(f"error: {model} is not in settings.investigator_models "
-              f"({', '.join(offered) if offered else 'empty'})")
+    try:
+        model = _cli_model_choice(rt.config, getattr(args, "model", ""))
+    except ValueError as exc:
+        offered = [r.key for r in rt.config.settings.investigator_models]
+        print(f"error: {exc} ({', '.join(offered) if offered else 'empty'})")
         return 2
     if not args.host:
         # --fingerprint alone: pull the subject out of the incident store

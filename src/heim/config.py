@@ -163,6 +163,17 @@ class ModelRef(BaseModel):
     def label(self) -> str:
         return self.model
 
+    @classmethod
+    def from_key(cls, key: str) -> "ModelRef":
+        """Inverse of ``key``; a bare model id (no ``|``) means Anthropic.
+        ``api_key_env`` is not part of a key — look the full entry up in an
+        allow-list when it matters."""
+        if "|" not in key:
+            return cls(model=key)
+        provider, _, rest = key.partition("|")
+        model, _, base_url = rest.partition("|")
+        return cls(provider=provider, model=model, base_url=base_url)
+
 
 class Settings(BaseModel):
     prometheus: PrometheusCfg
@@ -208,11 +219,21 @@ class Settings(BaseModel):
     # select is rendered and every run uses the investigator agent's own model.
     # Anything listed here should also have a `model_prices` entry, or its runs
     # render an em dash instead of a cost.
-    investigator_models: list[str] = []
+    # Since 2026-11-04 entries are ModelRefs, so OpenRouter / llama.cpp models
+    # can be offered; a plain string still means an Anthropic model id.
+    investigator_models: list[ModelRef] = []
     # The models the dashboard may put in the daily analyst's chain (spec
     # 2026-11-04). Empty = the chain is shown read-only and only YAML sets it.
     # Each entry should also have a `model_prices` row, or its runs render "—".
     analyst_models: list[ModelRef] = []
+
+    @field_validator("investigator_models", mode="before")
+    @classmethod
+    def _plain_ids_are_anthropic(cls, v):
+        if isinstance(v, list):
+            return [{"provider": "anthropic", "model": e} if isinstance(e, str) else e
+                    for e in v]
+        return v
     # instance-label address prefix -> host name (used by the alert poller to
     # attribute a firing alert's `instance` label to a configured host)
     instance_host_map: dict[str, str] = {}
@@ -301,13 +322,30 @@ class ToolCfg(BaseModel):
 
 class AgentCfg(BaseModel):
     name: str
-    model: str                         # anthropic model id (the agent loop is Anthropic-native)
+    model: str                         # the model id at ``provider``
+    # Which API runs the tool loop (spec 2026-11-04-investigator-openrouter):
+    # the Anthropic-native loop, or the OpenAI-compatible one for openrouter /
+    # openai_compat (same fields and meaning as ``ModelRef``).
+    provider: Literal["anthropic", "openrouter", "openai_compat"] = "anthropic"
+    base_url: str = ""
+    api_key_env: str = ""
     max_tokens: int = 4096
     soft_step_budget: int = 15         # told to the model in the prompt
     hard_step_cap: int = 25            # loop refuses tools beyond this
     prompt: str = ""                   # template filename under prompts/
     tools: list[str] = []
     temperature: float | None = None
+
+    @property
+    def ref(self) -> ModelRef:
+        return ModelRef(provider=self.provider, model=self.model,
+                        base_url=self.base_url, api_key_env=self.api_key_env)
+
+    def with_ref(self, ref: ModelRef) -> "AgentCfg":
+        """A copy that runs on ``ref`` (provider, model, url and key)."""
+        return self.model_copy(update={"provider": ref.provider, "model": ref.model,
+                                       "base_url": ref.base_url,
+                                       "api_key_env": ref.api_key_env})
 
 
 class AnalystCfg(BaseModel):

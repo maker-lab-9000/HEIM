@@ -98,11 +98,16 @@ currency: USD                 # "$" for USD, otherwise the bare code ("EUR 0.42"
 # cassette an offline replay serves back to another model.
 store_transcripts: false
 
-# Exact model ids offered in the dashboard's investigate dropdown; empty =
-# default only (no select is rendered, every run uses the investigator agent's
-# model). List only ids that appear in `model_prices` above, so a run on the
-# chosen model is still priced. Example:
-#   investigator_models: [claude-opus-5-5, claude-haiku-4-5]
+# The models the investigator may run on: offered in the dashboard's
+# investigate dropdown, on /agents/investigator (the default for every run)
+# and to `heim investigate --model`. Empty = the investigator agent's own
+# model only. A plain id means an Anthropic model; OpenRouter or a local
+# OpenAI-compatible server take the same {provider, model, base_url} form as
+# analyst_models below. Give each a `model_prices` row, or its runs render "—".
+# Example:
+#   investigator_models:
+#     - claude-opus-5-5
+#     - {provider: openrouter, model: deepseek/deepseek-v4.1-flash-1017}
 investigator_models: []
 
 # The models the dashboard may put in the daily analyst's chain, on

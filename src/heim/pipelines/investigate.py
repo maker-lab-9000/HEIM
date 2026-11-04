@@ -45,7 +45,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
 from heim.agent.runner import run_agent
-from heim.config import AgentCfg, expand_env
+from heim.config import AgentCfg, ModelRef, expand_env
 from heim.costing import cost_of
 from heim.channels.telegram import chunk_text
 from heim.reports.render import (
@@ -107,8 +107,11 @@ def with_model(agent: AgentCfg, model: str | None) -> AgentCfg:
     replay harness (§5.6) and reused verbatim by the trigger-time choice
     (§5.1), so there is exactly one place that decides what "override the
     model" means; both then price and record the model the copy carries.
+
+    ``model`` may be a model key (``provider|model[|base_url]``, spec
+    2026-11-04-investigator-openrouter) or a bare id, which means Anthropic.
     """
-    return agent.model_copy(update={"model": model}) if model else agent
+    return agent.with_ref(ModelRef.from_key(model)) if model else agent
 
 
 def findings_text(findings: list[dict]) -> str:
