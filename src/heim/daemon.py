@@ -26,6 +26,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from heim.agents import BACKUP_TIME
 from heim.channels import deadman
+from heim.llm import AnalystChainFailed
 from heim.pipelines.daily import run_daily
 from heim.pipelines.investigate import rearm_pending_approvals, run_investigation
 from heim.pipelines.poller import run_poll
@@ -71,7 +72,10 @@ def _record_agent_run(rt: Runtime, agent: str, started_at: str, ok: bool,
 
 
 def _exc_text(exc: BaseException) -> str:
-    return f"{type(exc).__name__}: {exc}"[:200]
+    # A chain failure lists every model it tried; give it room to (spec 2026-11-04).
+    # each attempt's error is already clipped to llm.ERROR_CLIP
+    clip = 400 * len(exc.attempts) + 100 if isinstance(exc, AnalystChainFailed) else 200
+    return f"{type(exc).__name__}: {exc}"[:clip]
 
 
 def _query_count(rt: Runtime) -> int | None:
@@ -87,10 +91,15 @@ async def _daily_job(rt: Runtime) -> None:
         result = await run_daily(rt, dispatch_concurrently=True)
         log.info("daily run complete: %s", result)
         _record_agent_run(rt, "daily", started, True, detail={
-            "queries": _query_count(rt), "hosts": len(rt.config.hosts)})
+            "queries": _query_count(rt), "hosts": len(rt.config.hosts),
+            "fallback": bool(result.get("fallback")),
+            "model_used": str(result.get("model_used") or ""),
+            "failed_models": list(result.get("failed_models") or [])})
     except Exception as exc:
         log.exception("daily run failed")
-        _record_agent_run(rt, "daily", started, False, _exc_text(exc))
+        _record_agent_run(rt, "daily", started, False, _exc_text(exc),
+                          detail={"attempts": [a.as_dict() for a in exc.attempts]}
+                          if isinstance(exc, AnalystChainFailed) else None)
         await rt.notify(f"🔴 HEIM daily run FAILED: {type(exc).__name__}: {exc}")
 
 

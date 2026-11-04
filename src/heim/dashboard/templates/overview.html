@@ -162,7 +162,7 @@
   {%- if latest_run %}
   {%- for r in run_list %}
   <p class="runline mono{{ '' if loop.first else ' dim' }}">daily · {{ r.run.run_at|day }} {{ r.run.run_at|clock }}
-    · {{ r.run.model_used or DASH }} · overall {{ m.pill(r.run.overall) }}
+    · {{ r.run.model_used or DASH }}{% if r.run|fallback_of %} <span class="word warn" title="{{ r.run|fallback_of }}">fallback</span>{% endif %} · overall {{ m.pill(r.run.overall) }}
     · {{ r.run.duration_s|dur_s }}{% if r.line %} · {{ r.line }}{% endif %}
     · <a class="qlink" href="/findings#run-{{ r.run.id }}">details</a></p>
   {%- endfor %}

@@ -39,6 +39,10 @@ Suggestion{% if general %}, general{% endif %}: {% if general %}{{ f.tool }}: {%
   </table>
 </section>
 
+{%- if models %}
+{% include "partials/_models_panel.html" %}
+{%- endif %}
+
 <section class="panel" aria-labelledby="h-runs">
   <div class="panel-head"><h2 id="h-runs">Runs</h2></div>
   {%- if runs and has_invs %}

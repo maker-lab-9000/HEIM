@@ -20,8 +20,9 @@ Required:
 
 Optional (each one adds a capability, and HEIM runs without it):
 
-- **OpenRouter**: the daily analyst's primary model. Without it the Anthropic fallback
-  answers.
+- **OpenRouter**: the daily analyst's fallback model (DeepSeek Flash), tried when
+  Anthropic fails. Without it an Anthropic outage means no daily report, and an email
+  saying so.
 - **Loki**: logs the investigator can query (the systemd journal and container logs),
   and HEIM's own event stream.
 - **Uptime Kuma**: service outages, read from its `/metrics`.

@@ -56,8 +56,12 @@ ignores `[uptime] ` incidents.
 
 At each `schedules.daily` time (07:00 and 22:00), fetches the 50 catalog queries over
 three days, folds them into per-host, per-category rows (per-day averages, change,
-flags), and sends that payload to the analyst model (OpenRouter primary, Anthropic
-fallback) with a strict-JSON contract. The reconciler turns the findings into incidents
+flags), and sends that payload to the analyst's model chain (Anthropic Opus first,
+then OpenRouter DeepSeek Flash; the dashboard can reorder it) with a strict-JSON
+contract. A model that errors or answers with unparseable JSON hands over to the next;
+a fallback answer is tagged in the email subject and banner, sent to Telegram, and
+marks the Daily analysis agent Degraded. If every model fails, an email lists each one
+and why. The reconciler turns the findings into incidents
 (two missed runs before one resolves), and the run produces the HTML email, the
 `sensor.pam_report_morning` / `_evening` sensor, findings rows and Loki events. Muted
 fingerprints are listed in the analyst's prompt (at most 10) as known false positives.

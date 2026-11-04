@@ -800,8 +800,8 @@ def test_price_keys_cover_the_configured_agent_models(tmp_path, monkeypatch):
     cfg = _config(tmp_path, monkeypatch)
     priced = set(cfg.settings.model_prices)
     assert cfg.agents["investigator"].model in priced
-    assert cfg.analyst.fallback.model in priced
-    assert cfg.analyst.primary.model in priced
+    for ref in cfg.analyst.chain:
+        assert ref.model in priced
 
 
 def test_no_dashboard_token_leaks_into_the_environment():

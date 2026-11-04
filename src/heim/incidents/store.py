@@ -229,6 +229,16 @@ CREATE TABLE IF NOT EXISTS uptime_source (
     fail_polls  INTEGER NOT NULL DEFAULT 0
 );
 
+-- The dashboard's override of an agent's model chain (spec 2026-11-04). One
+-- row per agent; no row = the YAML chain. Written only by the dashboard's
+-- action allow-list; the daemon reads it at the start of each run.
+CREATE TABLE IF NOT EXISTS model_overrides (
+    agent       TEXT PRIMARY KEY,
+    chain_json  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    updated_by  TEXT NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_steps_investigation ON investigation_steps (investigation_id, seq);
 CREATE INDEX IF NOT EXISTS idx_tool_feedback_tool ON tool_feedback (tool, id);
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings (run_id);
@@ -276,6 +286,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # only in the email. The dashboard's health card reads them.
         ("headline", "TEXT NOT NULL DEFAULT ''"),
         ("summary", "TEXT NOT NULL DEFAULT ''"),
+        # Every model the analyst chain tried, in order, with ok/error/usage
+        # (spec 2026-11-04). A failed first attempt marks a fallback run.
+        ("attempts_json", "TEXT NOT NULL DEFAULT '[]'"),
     ],
 }
 
@@ -294,7 +307,7 @@ _INVESTIGATION_COLS = [
 ]
 
 _RUN_COLS = ["run_at", "kind", "overall", "model_used", "duration_s", "counts_json",
-             "input_tokens", "output_tokens", "cost", "headline", "summary"]
+             "input_tokens", "output_tokens", "cost", "headline", "summary", "attempts_json"]
 
 _FINDING_FIELDS = ["host", "metric", "severity", "trend", "summary", "detail", "recommendation"]
 
@@ -1381,6 +1394,43 @@ class IncidentStore:
         return str(row["approval_decision"] or "") if row is not None else ""
 
     # ------------------------------------------------- §9 recommendations
+
+    def set_model_override(self, agent: str, chain: list[dict],
+                           updated_by: str = "dashboard") -> None:
+        """Replace ``agent``'s model chain override. An empty chain is refused:
+        "no override" is :meth:`clear_model_override`, not an empty list."""
+        if not chain:
+            raise ValueError("a model override needs at least one model")
+        self._db.execute(
+            "INSERT OR REPLACE INTO model_overrides (agent, chain_json, updated_at, updated_by) "
+            "VALUES (?, ?, ?, ?)",
+            (str(agent), json.dumps(list(chain), ensure_ascii=False), self._now(),
+             str(updated_by)),
+        )
+        self._db.commit()
+
+    def clear_model_override(self, agent: str) -> bool:
+        """Back to the YAML chain. Returns whether there was an override."""
+        cur = self._db.execute("DELETE FROM model_overrides WHERE agent = ?", (str(agent),))
+        self._db.commit()
+        return cur.rowcount > 0
+
+    def model_override(self, agent: str) -> dict | None:
+        """``{"chain": [...], "updated_at", "updated_by"}``, or ``None`` when
+        there is no override or its JSON no longer parses."""
+        row = self._db.execute(
+            "SELECT chain_json, updated_at, updated_by FROM model_overrides WHERE agent = ?",
+            (str(agent),)).fetchone()
+        if row is None:
+            return None
+        try:
+            chain = json.loads(row["chain_json"])
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(chain, list) or not chain:
+            return None
+        return {"chain": chain, "updated_at": str(row["updated_at"] or ""),
+                "updated_by": str(row["updated_by"] or "")}
 
     #: The only states a recommendation can be in. "open" is the absence of a
     #: row, not a value — storing it would make the table grow with every item

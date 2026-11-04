@@ -20,7 +20,7 @@ from heim.incidents.state import compute_state
 from heim.incidents.uptime_logic import is_uptime_row
 from heim.config import expand_env
 from heim.costing import cost_of
-from heim.llm import analyst_complete, parse_analysis
+from heim.llm import AnalystChainFailed, run_chain, parse_analysis
 from heim.metrics.aggregate import aggregate
 from heim.metrics.queries import build_window, load_queries
 from heim.pipelines.investigate import dispatch_all
@@ -28,6 +28,10 @@ from heim.pipelines.suppression import (
     filter_incident_events,
     filter_reconcile,
     suppression_prompt_block,
+)
+from heim.model_chain import OVERRIDE_AGENT, resolve_chain
+from heim.reports.analyst_notice import (
+    failure_email, fallback_banner_html, fallback_subject, fallback_telegram,
 )
 from heim.reports.render import daily_email
 from heim.runtime import Runtime
@@ -87,6 +91,16 @@ def _ha_report_md(analysis: dict) -> str:
     return md
 
 
+async def _send_failure_email(rt: Runtime, exc: AnalystChainFailed, run_at: str) -> None:
+    """Every model failed: tell the operator by email. Fire-and-forget — the
+    chain failure, not a mail error, is what the run must raise."""
+    try:
+        subject, html = failure_email(exc.attempts, run_at)
+        await rt.send_email(subject, html)
+    except Exception:
+        log.exception("the all-models-failed email could not be sent")
+
+
 async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     cfg = rt.config
     t0 = time.time()
@@ -127,12 +141,29 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     block = suppression_prompt_block(sup_rows)
     if block:
         user += "\n\n" + block
-    text, model_used, usage = await analyst_complete(cfg.analyst, system, user)
-    analysis = parse_analysis(text)
-    if analysis is None:
-        await rt.notify(f"⚠️ HEIM daily run: analyst output unparseable (model {model_used}); no report sent.")
-        raise RuntimeError(f"analyst returned unparseable output (model {model_used}): {text[:400]}")
-    log.info("analysis by %s: %s — %s", model_used, analysis.get("overallHealth"), analysis.get("headline"))
+    # The chain in effect: the dashboard's override while every entry is still
+    # allowed, else config/agents/daily_analyst.yaml (spec 2026-11-04).
+    try:
+        override = rt.store.model_override(OVERRIDE_AGENT)
+    except Exception:
+        log.exception("reading the analyst model override failed — using the YAML chain")
+        override = None
+    eff = resolve_chain(cfg.analyst.chain, override, cfg.settings.analyst_models)
+    if eff.stale:
+        log.warning("analyst model override (set %s) ignored: an entry is no longer in "
+                    "settings.analyst_models — running the YAML chain", eff.updated_at)
+    try:
+        res = await run_chain(eff.chain, system, user, cfg.analyst.max_tokens,
+                              accept=parse_analysis)
+    except AnalystChainFailed as exc:
+        await _send_failure_email(rt, exc, run_at)
+        raise
+    analysis = res.analysis
+    model_used = res.model_used
+    fallback = res.index > 0
+    failed_models = [a.model for a in res.attempts if not a.ok]
+    log.info("analysis by %s%s: %s — %s", model_used, " (fallback)" if fallback else "",
+             analysis.get("overallHealth"), analysis.get("headline"))
 
     # 3. reconcile incidents
     # [uptime] incidents belong to the Uptime Kuma poll half: the LLM never sees
@@ -157,8 +188,12 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     # §5.6: price the completion against the model that actually answered (the
     # fallback is a different price). An unpriced model stores 0, which the UI
     # renders as an em dash rather than a confident "free".
-    cost = cost_of(model_used, usage.get("input"), usage.get("output"),
-                   cfg.settings.model_prices)
+    # Every attempt that got an answer was billed — a rejected one included —
+    # so the run's tokens and cost are summed over all of them.
+    in_tok = sum(a.input_tokens for a in res.attempts)
+    out_tok = sum(a.output_tokens for a in res.attempts)
+    cost = sum(cost_of(a.model, a.input_tokens, a.output_tokens,
+                       cfg.settings.model_prices) or 0.0 for a in res.attempts)
     try:
         run_id = rt.store.insert_run(
             kind="daily", run_at=run_at,
@@ -168,13 +203,14 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
             # delivery steps and the fire-and-forget investigation dispatch
             duration_s=round(time.time() - t0, 3),
             counts_json=json.dumps(counts, ensure_ascii=False, default=str),
-            input_tokens=int(usage.get("input") or 0),
-            output_tokens=int(usage.get("output") or 0),
+            input_tokens=int(in_tok),
+            output_tokens=int(out_tok),
             cost=float(cost or 0.0),
             # what the analyst actually said — until now it survived only in
             # the email; the dashboard's health card reads it from here
             headline=str(analysis.get("headline") or ""),
             summary=str(analysis.get("executiveSummary") or ""),
+            attempts_json=json.dumps([a.as_dict() for a in res.attempts], ensure_ascii=False),
         )
         rt.store.insert_findings(
             run_id, run_at, "daily", findings,
@@ -185,6 +221,14 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
 
     # 4. report email
     subject, html = daily_email(analysis=analysis, payload=payload, incident_summary=rec.summary, generated_at=run_at)
+    if fallback:
+        # Outside the golden renderer: a subject tag and a banner on top.
+        subject = fallback_subject(subject, model_used)
+        html = fallback_banner_html(model_used, res.attempts) + html
+        try:
+            await rt.notify(fallback_telegram(model_used, res.attempts))
+        except Exception:
+            log.exception("fallback Telegram line failed")
     await rt.send_email(subject, html)
 
     # 5. HA sensor push
@@ -212,6 +256,9 @@ async def run_daily(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
     return {
         "overall": analysis.get("overallHealth"),
         "model": model_used,
+        "model_used": model_used,
+        "fallback": fallback,
+        "failed_models": failed_models,
         "findings": len(analysis.get("findings") or []),
         "incidents": counts,
         "investigations": len(rec.to_investigate),

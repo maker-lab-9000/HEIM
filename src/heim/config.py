@@ -22,7 +22,7 @@ from typing import Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from heim.incidents.types import HostRouting
 
@@ -134,6 +134,36 @@ class UptimeKumaCfg(BaseModel):
     url: str = Field(default_factory=lambda: os.environ.get("HEIM_UPTIME_KUMA_URL", ""))
 
 
+class ModelRef(BaseModel):
+    """One model in a provider chain.
+
+    ``openrouter`` and ``openai_compat`` speak the same OpenAI-compatible chat
+    API; ``openrouter`` is the named shortcut (its URL + ``OPENROUTER_API_KEY``),
+    ``openai_compat`` is any other such server — e.g. a LAN llama.cpp — at
+    ``base_url``, authenticated only when ``api_key_env`` names a variable.
+    """
+    provider: Literal["anthropic", "openrouter", "openai_compat"] = "anthropic"
+    model: str
+    base_url: str = ""
+    api_key_env: str = ""
+
+    @model_validator(mode="after")
+    def _compat_needs_url(self) -> "ModelRef":
+        if self.provider == "openai_compat" and not self.base_url.strip():
+            raise ValueError("an openai_compat model needs a base_url")
+        return self
+
+    @property
+    def key(self) -> str:
+        """Stable identity: what the dashboard posts and the allow-list matches."""
+        k = f"{self.provider}|{self.model}"
+        return f"{k}|{self.base_url}" if self.base_url else k
+
+    @property
+    def label(self) -> str:
+        return self.model
+
+
 class Settings(BaseModel):
     prometheus: PrometheusCfg
     loki: LokiCfg | None = None
@@ -179,6 +209,10 @@ class Settings(BaseModel):
     # Anything listed here should also have a `model_prices` entry, or its runs
     # render an em dash instead of a cost.
     investigator_models: list[str] = []
+    # The models the dashboard may put in the daily analyst's chain (spec
+    # 2026-11-04). Empty = the chain is shown read-only and only YAML sets it.
+    # Each entry should also have a `model_prices` row, or its runs render "—".
+    analyst_models: list[ModelRef] = []
     # instance-label address prefix -> host name (used by the alert poller to
     # attribute a firing alert's `instance` label to a configured host)
     instance_host_map: dict[str, str] = {}
@@ -265,11 +299,6 @@ class ToolCfg(BaseModel):
         return {"type": "object", "properties": self.args, "required": self.required}
 
 
-class ModelRef(BaseModel):
-    provider: Literal["anthropic", "openrouter"] = "anthropic"
-    model: str
-
-
 class AgentCfg(BaseModel):
     name: str
     model: str                         # anthropic model id (the agent loop is Anthropic-native)
@@ -282,11 +311,28 @@ class AgentCfg(BaseModel):
 
 
 class AnalystCfg(BaseModel):
+    """The daily analyst: one completion, no tools, an ordered model chain.
+
+    ``chain`` is tried in order until one entry answers usably (spec
+    2026-11-04). The n8n-era ``primary`` / ``fallback`` pair still loads, as
+    the chain ``[primary, fallback]``; giving both forms is an error.
+    """
     name: str = "daily_analyst"
-    primary: ModelRef
+    chain: list[ModelRef] = []
+    primary: ModelRef | None = None
     fallback: ModelRef | None = None
     max_tokens: int = 4096
     prompt: str = "analyst.md"
+
+    @model_validator(mode="after")
+    def _build_chain(self) -> "AnalystCfg":
+        if self.chain and (self.primary or self.fallback):
+            raise ValueError("give the analyst either `chain` or `primary`/`fallback`, not both")
+        if not self.chain:
+            if self.primary is None:
+                raise ValueError("the analyst needs a non-empty `chain`")
+            self.chain = [self.primary] + ([self.fallback] if self.fallback else [])
+        return self
 
 
 # --------------------------------------------------------------------------- loader

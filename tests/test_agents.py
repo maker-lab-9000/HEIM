@@ -429,3 +429,80 @@ def test_last_backup_file_reads_a_failed_prune_run():
             {"ok": True, "detail": {"backup_file": "heim-20261031.sqlite3"}}]
     assert _last_backup_file(runs) == "heim-20261101.sqlite3"
     assert _last_backup_file([]) == ""
+
+
+# --------------------------------------------- analyst chain (spec 2026-11-04)
+
+
+def test_ok_fallback_run_is_degraded():
+    r = {**run(60), "agent": "daily", "detail": {"fallback": True}}
+    st = agents.status_of(spec(key="daily"), [r], NOW_ISO)
+    assert st.state == "degraded"
+
+
+def test_ok_run_without_fallback_is_healthy():
+    r = {**run(60), "agent": "daily", "detail": {"fallback": False}}
+    assert agents.status_of(spec(key="daily"), [r], NOW_ISO).state == "healthy"
+
+
+async def test_daily_job_records_fallback_in_heartbeat(rt, monkeypatch):
+    async def fallback_daily(_rt, **_kw):
+        return {"overall": "healthy", "fallback": True,
+                "model_used": "deepseek/deepseek-v4.1-flash-1017",
+                "failed_models": ["claude-opus-5-5"]}
+
+    async def quiet(_text):
+        pass
+
+    monkeypatch.setattr(daemon, "run_daily", fallback_daily)
+    monkeypatch.setattr(rt, "notify", quiet)
+    await daemon._daily_job(rt)
+    (row,) = rt.store.agent_runs("daily")
+    assert row["ok"] is True
+    assert row["detail"]["fallback"] is True
+    assert row["detail"]["model_used"] == "deepseek/deepseek-v4.1-flash-1017"
+    assert row["detail"]["failed_models"] == ["claude-opus-5-5"]
+
+
+async def test_daily_job_failure_heartbeat_lists_every_attempt(rt, monkeypatch):
+    from heim.llm import AnalystChainFailed, Attempt
+
+    async def all_fail(_rt, **_kw):
+        raise AnalystChainFailed([
+            Attempt("anthropic", "claude-opus-5-5", False,
+                    "BadRequestError: Error code: 400 - " + "x" * 150),
+            Attempt("openrouter", "deepseek/deepseek-v4.1-flash-1017", False,
+                    "HTTPStatusError: 429 Too Many Requests")])
+
+    async def quiet(_text):
+        pass
+
+    monkeypatch.setattr(daemon, "run_daily", all_fail)
+    monkeypatch.setattr(rt, "notify", quiet)
+    await daemon._daily_job(rt)
+    (row,) = rt.store.agent_runs("daily")
+    assert row["ok"] is False
+    assert "claude-opus-5-5" in row["error"]
+    assert "deepseek/deepseek-v4.1-flash-1017" in row["error"] and "429" in row["error"]
+
+
+async def test_daily_job_failure_heartbeat_keeps_three_long_attempts(rt, monkeypatch):
+    from heim.llm import AnalystChainFailed, Attempt
+
+    attempts = [Attempt("anthropic", "claude-opus-5-5", False, "A" * 300),
+                Attempt("openrouter", "deepseek/deepseek-v4.1-flash-1017", False, "B" * 300),
+                Attempt("openai_compat", "local", False, "ConnectError: " + "C" * 280)]
+
+    async def all_fail(_rt, **_kw):
+        raise AnalystChainFailed(attempts)
+
+    async def quiet(_text):
+        pass
+
+    monkeypatch.setattr(daemon, "run_daily", all_fail)
+    monkeypatch.setattr(rt, "notify", quiet)
+    await daemon._daily_job(rt)
+    (row,) = rt.store.agent_runs("daily")
+    assert "openai_compat local" in row["error"]
+    assert [a["model"] for a in row["detail"]["attempts"]] == [
+        "claude-opus-5-5", "deepseek/deepseek-v4.1-flash-1017", "local"]

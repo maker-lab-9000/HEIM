@@ -18,7 +18,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
 
 1. **A twice-daily AI health report** — 50 PromQL range queries over a 3-day window are
    aggregated into a compact payload, analyzed for *degradation trends* by an LLM
-   (OpenRouter primary → Anthropic fallback), and delivered as a styled HTML dashboard
+   (an ordered model chain: Anthropic → OpenRouter DeepSeek, later llama.cpp), and delivered as a styled HTML dashboard
    email, a Home Assistant sensor, and a Loki event stream.
 2. **Fast-path detection** — a 5-minute poller diffs firing Prometheus alerts against the
    incident store, opening/escalating/resolving incidents between LLM runs.
@@ -30,7 +30,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (1305 tests). Design
+covered by golden tests against the original JavaScript behavior (1386 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -54,7 +54,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 1305 tests, must stay green
+.venv/bin/pytest -q                    # 1386 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -124,8 +124,8 @@ Conventions:
 | Home Assistant | read (agent tool) + write (report sensors) | `tools/ha_api`, `channels/ha` | non-admin LLAT |
 | Proxmox VE | read (agent tool) | `tools/proxmox_api` | auditor-role API token |
 | SSH (target hosts) | read-only diagnostics | `tools/ssh_diagnostic` | dedicated key + scoped sudoers |
-| Anthropic | agent loop + analyst fallback | `agent/runner`, `llm` | API key |
-| OpenRouter | analyst primary | `llm` | API key |
+| Anthropic | agent loop + analyst chain (first) | `agent/runner`, `llm` | API key |
+| OpenRouter (and any OpenAI-compatible server) | analyst chain fallback | `llm` | API key (none for a LAN llama.cpp) |
 
 ### Adding one
 
@@ -536,6 +536,15 @@ Tests: `tests/test_durable_approvals.py`.
   are never touched, and a row with an empty timestamp counts as unknown-age, not old.
   Returns per-table counts (logged when non-empty); `VACUUM` runs — outside any
   transaction, which also truncates the WAL — past `VACUUM_AFTER_DELETIONS` (500).
+- **Analyst provider chain** — ✅ implemented (spec
+  `docs/superpowers/specs/2026-11-04-analyst-provider-chain-design.md`). The daily
+  analyst walks an ordered `chain` (`llm.run_chain`); an error or unparseable reply
+  hands over to the next entry, every attempt is stored in `runs.attempts_json` and
+  priced. The dashboard's Models panel on `/agents/daily` overrides the order
+  (`model_overrides` table, allow-listed by `settings.analyst_models`); a fallback
+  answer tags the email, pings Telegram and marks the agent Degraded; an all-fail run
+  emails the operator. The investigator and security auditor are still Anthropic-only:
+  that is the next item.
 - **Multi-model agent loop**: an OpenAI-compatible tool-calling backend in
   `agent/runner.py` so the investigator can run on OpenRouter models too.
 - **More channels**: ntfy/Matrix/Discord via the channel recipe in §3.
@@ -596,7 +605,7 @@ rollback design; multi-tenant SaaS-ification; replacing Grafana for time-series 
 ## 6. Notes for AI agents working here
 
 - Read `docs/ARCHITECTURE.md` first; it maps every module to its n8n source node.
-- Run `.venv/bin/pytest -q` before and after your change; 1305 must not regress.
+- Run `.venv/bin/pytest -q` before and after your change; 1386 must not regress.
 - Ported modules (docstring names an n8n node) are behavior-frozen — see §2.
 - Never log, commit, or email secrets; deployment identity comes from `.env` via
   `${VAR}` interpolation and must stay out of the tree.
