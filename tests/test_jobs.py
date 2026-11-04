@@ -682,9 +682,9 @@ async def test_daily_filters_suppressed_and_hints_the_analyst(rt, monkeypatch):
     async def fake_fetch(base, qdefs, window):
         return []
 
-    async def fake_analyst(cfg, system, user):
+    async def fake_analyst(chain, system, user, max_tokens, accept=None):
         prompts.append(user)
-        return json.dumps(analysis), "model-x", {"input": 900, "output": 120}
+        return _chain_result(json.dumps(analysis), "model-x", 900, 120)
 
     async def fake_dispatch(rt_, items, *, concurrent, trigger="manual"):
         dispatched.append(items)
@@ -694,7 +694,7 @@ async def test_daily_filters_suppressed_and_hints_the_analyst(rt, monkeypatch):
 
     monkeypatch.setattr(daily, "_fetch_query_ranges", fake_fetch)
     monkeypatch.setattr(daily, "aggregate", lambda *a, **k: {"payload": payload})
-    monkeypatch.setattr(daily, "analyst_complete", fake_analyst)
+    monkeypatch.setattr(daily, "run_chain", fake_analyst)
     monkeypatch.setattr(daily, "dispatch_all", fake_dispatch)
     monkeypatch.setattr(rt, "emit_loki", fake_emit)
 
@@ -735,15 +735,15 @@ async def test_daily_does_not_resurrect_a_suppressed_incident_row(rt, monkeypatc
     async def fake_fetch(base, qdefs, window):
         return []
 
-    async def fake_analyst(cfg, system, user):
-        return json.dumps(analysis), "model-x", {"input": 900, "output": 120}
+    async def fake_analyst(chain, system, user, max_tokens, accept=None):
+        return _chain_result(json.dumps(analysis), "model-x", 900, 120)
 
     async def fake_dispatch(rt_, items, *, concurrent, trigger="manual"):
         pass
 
     monkeypatch.setattr(daily, "_fetch_query_ranges", fake_fetch)
     monkeypatch.setattr(daily, "aggregate", lambda *a, **k: {"payload": payload})
-    monkeypatch.setattr(daily, "analyst_complete", fake_analyst)
+    monkeypatch.setattr(daily, "run_chain", fake_analyst)
     monkeypatch.setattr(daily, "dispatch_all", fake_dispatch)
 
     await daily.run_daily(rt, dispatch_concurrently=False)
@@ -1031,3 +1031,11 @@ async def test_cli_investigate_needs_host_or_fingerprint():
         host=None, role=None, finding=None, metric="", severity="warning",
         fingerprint="", no_approval=False, dry_run=True))
     assert rc == 2
+
+
+def _chain_result(text: str, model: str, tokens_in: int, tokens_out: int):
+    """A one-entry analyst chain that answered on the first model."""
+    from heim.llm import Attempt, ChainResult, parse_analysis
+    return ChainResult(text=text, analysis=parse_analysis(text), model_used=model, index=0,
+                       usage={"input": tokens_in, "output": tokens_out},
+                       attempts=[Attempt("anthropic", model, True, "", tokens_in, tokens_out)])

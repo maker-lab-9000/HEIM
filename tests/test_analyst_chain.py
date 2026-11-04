@@ -390,3 +390,171 @@ def test_fallback_telegram_line():
     assert line.startswith("⚠️ HEIM daily:")
     assert "claude-opus-5-5" in line and "usage limits" in line
     assert line.endswith("report by deepseek/deepseek-v4.1-flash-1017")
+
+
+# ================================================== 5. the daily pipeline
+
+import logging  # noqa: E402
+
+from heim.llm import ChainResult  # noqa: E402
+from heim.pipelines import daily  # noqa: E402
+from heim.reports.analyst_notice import FAILURE_SUBJECT  # noqa: E402
+from heim.runtime import Runtime  # noqa: E402
+
+ANALYSIS = {"overallHealth": "healthy", "headline": "All quiet", "executiveSummary": "ok",
+            "categories": {}, "findings": [], "watchlist": []}
+PAYLOAD = {"generatedAt": "2026-11-04T07:00:00.000+01:00", "windowDays": 3, "hosts": [],
+           "counts": {"crit": 0, "warn": 0, "naQueries": 0}, "overall": "healthy",
+           "categories": {}, "topAlerts": []}
+
+
+class DailyRig:
+    """``run_daily`` with Prometheus, aggregation and dispatch stubbed; the
+    chain is whatever ``self.result`` says (a ChainResult or an exception)."""
+
+    def __init__(self, rt, monkeypatch):
+        self.rt = rt
+        self.chains: list = []
+        self.notes: list[str] = []
+        self.result = None
+
+        async def fetch(base, qdefs, window):
+            return []
+
+        async def fake_chain(chain, system, user, max_tokens, accept=None):
+            self.chains.append(chain)
+            if isinstance(self.result, Exception):
+                raise self.result
+            return self.result
+
+        async def dispatch(rt_, items, *, concurrent, trigger="manual"):
+            pass
+
+        async def notify(text):
+            self.notes.append(text)
+
+        monkeypatch.setattr(daily, "_fetch_query_ranges", fetch)
+        monkeypatch.setattr(daily, "aggregate", lambda *a, **k: {"payload": PAYLOAD})
+        monkeypatch.setattr(daily, "run_chain", fake_chain)
+        monkeypatch.setattr(daily, "dispatch_all", dispatch)
+        monkeypatch.setattr(rt, "notify", notify)
+
+    def emails(self) -> list:
+        return sorted((self.rt.out_dir).glob("*.html")) if self.rt.out_dir.exists() else []
+
+
+def _ok(index, attempts, model):
+    return ChainResult(text=json.dumps(ANALYSIS), analysis=dict(ANALYSIS), model_used=model,
+                       index=index, usage={"input": attempts[-1].input_tokens,
+                                           "output": attempts[-1].output_tokens},
+                       attempts=attempts)
+
+
+@pytest.fixture()
+def drt(tmp_path):
+    cfg = _repo_config(tmp_path)
+    cfg.settings.loki = None
+    cfg.settings.email = None
+    cfg.settings.home_assistant = None
+    cfg.settings.telegram = None
+    cfg.settings.analyst_models = list(ALLOWED)
+    return Runtime(config=cfg, store=IncidentStore(tmp_path / "rt.sqlite3"),
+                   dry_run=False, out_dir=tmp_path / "out")
+
+
+@pytest.fixture()
+def rig(drt, monkeypatch):
+    return DailyRig(drt, monkeypatch)
+
+
+OK_OPUS = Attempt("anthropic", "claude-opus-5-5", True, "", 7000, 300)
+
+
+async def test_daily_runs_the_yaml_chain_by_default(drt, rig):
+    rig.result = _ok(0, [OK_OPUS], "claude-opus-5-5")
+    await daily.run_daily(drt, dispatch_concurrently=False)
+    assert [r.key for r in rig.chains[0]] == [r.key for r in drt.config.analyst.chain]
+
+
+async def test_daily_uses_the_override_chain(drt, rig):
+    drt.store.set_model_override("daily_analyst", [DEEPSEEK])
+    rig.result = _ok(0, [OK_DEEPSEEK], "deepseek/deepseek-v4.1-flash-1017")
+    await daily.run_daily(drt, dispatch_concurrently=False)
+    assert [r.model for r in rig.chains[0]] == ["deepseek/deepseek-v4.1-flash-1017"]
+
+
+async def test_stale_override_runs_yaml_chain_and_warns(drt, rig, caplog):
+    drt.store.set_model_override("daily_analyst", [{"provider": "openrouter", "model": "gone/x"}])
+    rig.result = _ok(0, [OK_OPUS], "claude-opus-5-5")
+    with caplog.at_level(logging.WARNING):
+        await daily.run_daily(drt, dispatch_concurrently=False)
+    assert [r.key for r in rig.chains[0]] == [r.key for r in drt.config.analyst.chain]
+    assert "override" in caplog.text and "ignored" in caplog.text
+
+
+async def test_fallback_run_tags_subject_and_prepends_banner(drt, rig):
+    rig.result = _ok(1, [FAILED_OPUS, OK_DEEPSEEK], "deepseek/deepseek-v4.1-flash-1017")
+    res = await daily.run_daily(drt, dispatch_concurrently=False)
+    assert res["fallback"] is True
+    assert res["model_used"] == "deepseek/deepseek-v4.1-flash-1017"
+    assert res["failed_models"] == ["claude-opus-5-5"]
+    assert res["subject"].endswith("[fallback: deepseek/deepseek-v4.1-flash-1017]")
+    (email,) = rig.emails()
+    html = email.read_text()
+    assert html.startswith("<div") and "Answered by fallback model" in html
+    assert "usage limits" in html
+    (run,) = drt.store.runs()
+    assert [a["ok"] for a in json.loads(run["attempts_json"])] == [False, True]
+    assert any(n.startswith("⚠️ HEIM daily:") for n in rig.notes)
+
+
+async def test_non_fallback_email_unchanged(drt, rig):
+    rig.result = _ok(0, [OK_OPUS], "claude-opus-5-5")
+    res = await daily.run_daily(drt, dispatch_concurrently=False)
+    assert res["fallback"] is False and res["failed_models"] == []
+    assert "[fallback" not in res["subject"]
+    (email,) = rig.emails()
+    assert "Answered by fallback model" not in email.read_text()
+    assert rig.notes == []
+
+
+async def test_failed_attempt_tokens_are_priced_into_the_run(drt, rig):
+    drt.config.settings.model_prices = {
+        "claude-opus-5-5": {"input": 4.0, "output": 20.0},
+        "deepseek/deepseek-v4.1-flash-1017": {"input": 0.15, "output": 0.60}}
+    billed = Attempt("anthropic", "claude-opus-5-5", False, "unparseable output", 1_000_000, 0)
+    ok = Attempt("openrouter", "deepseek/deepseek-v4.1-flash-1017", True, "", 1_000_000, 1_000_000)
+    rig.result = _ok(1, [billed, ok], "deepseek/deepseek-v4.1-flash-1017")
+    await daily.run_daily(drt, dispatch_concurrently=False)
+    (run,) = drt.store.runs()
+    assert run["cost"] == pytest.approx(4.0 + 0.15 + 0.60)
+    assert (run["input_tokens"], run["output_tokens"]) == (2_000_000, 1_000_000)
+
+
+async def test_all_fail_sends_failure_email_and_reraises(drt, rig):
+    from heim.llm import AnalystChainFailed
+    second = Attempt("openrouter", "deepseek/deepseek-v4.1-flash-1017", False, "HTTPStatusError: 429")
+    rig.result = AnalystChainFailed([FAILED_OPUS, second])
+    with pytest.raises(AnalystChainFailed):
+        await daily.run_daily(drt, dispatch_concurrently=False)
+    (email,) = rig.emails()
+    assert "NOT produced" in email.name
+    html = email.read_text()
+    assert "claude-opus-5-5" in html and "429" in html
+    assert drt.store.runs() == []
+
+
+async def test_all_fail_when_email_send_raises_still_raises_chain_failure(drt, rig, monkeypatch):
+    from heim.llm import AnalystChainFailed
+
+    async def smtp_down(subject, html):
+        raise OSError("smtp down")
+
+    monkeypatch.setattr(drt, "send_email", smtp_down)
+    rig.result = AnalystChainFailed([FAILED_OPUS])
+    with pytest.raises(AnalystChainFailed):
+        await daily.run_daily(drt, dispatch_concurrently=False)
+
+
+def test_failure_subject_constant():
+    assert FAILURE_SUBJECT.startswith("HEIM daily report NOT produced")

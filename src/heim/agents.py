@@ -264,6 +264,9 @@ def status_of(spec: AgentSpec, runs: list[dict], now_iso: str) -> AgentStatus:
         return _status(spec.key, "stale", **info)
     if not last.get("ok"):
         return _status(spec.key, "failed", **info)
+    if (last.get("detail") or {}).get("fallback"):
+        # the run worked, but not on the first model it was meant to use
+        return _status(spec.key, "degraded", **info)
     if len(runs) > 1 and not runs[1].get("ok"):
         return _status(spec.key, "degraded", **info)
     return _status(spec.key, "healthy", **info)
