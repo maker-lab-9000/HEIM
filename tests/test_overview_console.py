@@ -466,10 +466,11 @@ def test_agents_panel_has_seven_rows_filter_and_flag(tmp_path, monkeypatch):
     assert '<h2 id="h-ag">Agents</h2>' in panel
     rows = _rows(panel)
     assert [re.search(r'class="name"><a href="([^"]+)">(.*?)</a>', r).groups() for r in rows] == [
-        ("/agents/alert_poller", "Alert poller"), ("/agents/thresholds", "Threshold watch"),
-        ("/agents/uptime", "Uptime monitor"), ("/agents/investigator", "Investigator"),
-        ("/agents/daily", "Daily analysis"), ("/agents/security", "Security audit"),
-        ("/agents/backup", "Backup verifier")]
+        # since 2026-11-04 the model-free rows link to their job page
+        ("/jobs/alert_poller", "Alert poller"), ("/jobs/thresholds", "Threshold watch"),
+        ("/jobs/uptime", "Uptime monitor"), ("/agents/investigator", "Investigator"),
+        ("/jobs/daily", "Daily analysis"), ("/jobs/security", "Security audit"),
+        ("/jobs/backup", "Backup verifier")]
     for row in rows:                                 # the chevron opens the agent too
         href, name = re.search(r'class="name"><a href="([^"]+)">(.*?)</a>', row).groups()
         assert f'<td class="go"><a href="{href}" aria-label="Open {name}">›</a></td>' in row
@@ -486,7 +487,7 @@ def test_agents_panel_has_seven_rows_filter_and_flag(tmp_path, monkeypatch):
     assert strip.rstrip().endswith('<i class="open"></i>')
     # one monitoring-gap line per flagged agent, linking its runs
     assert "Monitoring gap: latest backup verifier result not received." in panel
-    assert re.search(r'href="/agents/backup">Review backup verifier runs', panel)
+    assert re.search(r'href="/jobs/backup">Review backup verifier runs', panel)
     # the switch: counts from the same list, All engaged
     switch = _section(panel, 'aria-label="Filter agents"', "</div>")
     assert re.search(r'aria-current="true">.*?All<span class="n">7</span>', switch, re.S)
@@ -514,7 +515,7 @@ def test_failed_agent_gap_names_the_error(tmp_path, monkeypatch):
     flagged = [r for r in _rows(panel) if r.startswith('<tr class="flag"')]
     assert len(flagged) == 1 and "Uptime monitor" in flagged[0] and "Failed" in flagged[0]
     assert "Monitoring gap: uptime monitor failed: Uptime Kuma unreachable." in panel
-    assert re.search(r'href="/agents/uptime">Review uptime monitor runs', panel)
+    assert re.search(r'href="/jobs/uptime">Review uptime monitor runs', panel)
 
 
 # ----------------------------------------------------------- honest counts
@@ -550,7 +551,9 @@ def test_counts_agree_with_rows(tmp_path, monkeypatch):
     assert rail("/incidents") == len(incident_rows) == 3
     assert f"{len(attention)} findings" in _attention(html)
     agents = _rows(_agents(html))
-    assert rail("/agents") == len(agents) == 7
+    # the overview panel still shows all seven; the Agents rail counts the
+    # three that call a model (spec 2026-11-04-activity-jobs-tools)
+    assert len(agents) == 7 and rail("/agents") == 3
 
     cards = _cards(html)
     crit_rows = [r for r in incident_rows if 'class="lamp red"' in r]

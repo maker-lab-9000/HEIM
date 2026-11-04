@@ -38,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
@@ -50,6 +51,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from jinja2 import Environment, FileSystemLoader
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from heim.agents import (
@@ -70,8 +72,9 @@ from heim.agents import (
     run_strip,
     status_of,
 )
-from heim.config import Config, load_config
+from heim.config import Config, expand_env, load_config
 from heim.costing import cost_of
+from heim.jobs import JOB_KEYS, PAUSE_CHOICES, pause_active, pause_until
 from heim.model_chain import (INVESTIGATOR_AGENT, OVERRIDE_AGENT, find_model,
                                resolve_chain, resolve_model)
 from heim.dashboard import format as fmt
@@ -82,9 +85,10 @@ from heim.metrics.queries import build_window, load_queries
 # the daily pipeline's own fetcher: the metrics page must read Prometheus
 # through the exact code path the email did, or the numbers would drift
 from heim.pipelines.daily import _fetch_query_ranges
+from heim.pipelines.investigate import build_system_prompt
 from heim.pipelines.queue import enqueue_investigation, enqueue_retry
 from heim.pipelines.security_audit import AGENT_NAME as AUDIT_AGENT
-from heim.pipelines.security_audit import AUDIT_HOST, AUDIT_KIND
+from heim.pipelines.security_audit import AUDIT_HOST, AUDIT_KIND, build_audit_system_prompt
 from heim.pipelines.suppression import mark_false_positive, suppress_fingerprint
 from heim.reports.render import _md_to_html
 from heim.security.report import extract_audit_feedback
@@ -174,6 +178,9 @@ _ACTION_HELPERS = (
     # spec 2026-11-04: the daily analyst's model chain override; the daemon
     # reads it at the start of the next run and nothing else writes it.
     "set_model_override", "clear_model_override",
+    # spec 2026-11-04-activity-jobs-tools: a timed pause of a job, and its
+    # early end; the daemon obeys the row and announces both
+    "pause_job", "resume_job",
 )
 
 
@@ -361,7 +368,7 @@ class _ModelsPanel:
 
 #: by model_overrides key (spec 2026-11-04-investigator-openrouter)
 MODELS_PANELS = {
-    OVERRIDE_AGENT: _ModelsPanel(OVERRIDE_AGENT, "daily", "settings.analyst_models",
+    OVERRIDE_AGENT: _ModelsPanel(OVERRIDE_AGENT, "analyst", "settings.analyst_models",
                                  "config/agents/daily_analyst.yaml", False,
                                  MODELS_SAVED, MODELS_RESET),
     INVESTIGATOR_AGENT: _ModelsPanel(INVESTIGATOR_AGENT, "investigator",
@@ -860,28 +867,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         running = reader.read(lambda s: s.investigations(limit=5, status="running"))
         return by_agent, invs, running, datetime.now(timezone.utc).isoformat()
 
-    @app.get("/agents", response_class=HTMLResponse)
-    async def agents_page(request: Request):
-        by_agent, invs, running, now_iso = _agent_inputs()
-        window, window_s = _window(request)
-        rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s,
-                           _window_runs(reader, window_s, now_iso),
-                           _first_seen(reader, window_s))
-        _add_tool_counts(reader, rows, window_s, now_iso)
-        every = reader.read(lambda s: s.tool_feedback_rows(limit=None))
-        shown = every if request.query_params.get("feedback") == "all" else every[:FEEDBACK_LIMIT]
-        return page(request, "agents.html", page_title="agents", window=window,
-                    feedback=[_feedback_row(f) for f in shown],
-                    feedback_total=len(every), feedback_capped=len(every) > len(shown),
-                    **_agents_panel(rows, request.query_params.get("agents", "")),
-                    base_href="/agents")
-
-    @app.get("/agents/{key}", response_class=HTMLResponse)
-    async def agent_detail(request: Request, key: str):
-        if key not in AGENT_KEYS:
-            return page(request, "error.html", status=404, page_title="not found",
-                        message=f"No agent called {key!r}.",
-                        detail="The seven agents are listed on the Agents page.")
+    def _detail_ctx(key: str) -> dict:
+        """What a job or agent page shows about the runs behind ``key``."""
         by_agent, invs, running, now_iso = _agent_inputs()
         row = next(r for r in _agent_rows(cfg, by_agent, invs, running, now_iso)
                    if r["key"] == key)
@@ -894,8 +881,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         fb = ([_feedback_row(f) for f in reader.read(
             lambda s: s.tool_feedback_rows(limit=None, agent_names=TOOL_AGENTS[key]))]
             if key in TOOL_AGENTS else [])
-        return page(request, "agent.html", page_title=f"agents / {row['name']}",
-                    tool_feedback=fb[:AGENT_FEEDBACK_LIMIT],
+        return dict(tool_feedback=fb[:AGENT_FEEDBACK_LIMIT],
                     **_agent_feedback(fb, stats, set(cfg.tools)),
                     tool_history=history, tool_stats=tool_summary(calls or []),
                     agent=row, cadence=_cadence_text(cfg, key),
@@ -903,12 +889,121 @@ def create_app(config: Config | None = None) -> FastAPI:
                     backup_file=_last_backup_file(by_agent.get("backup", []))
                     if key == "backup" else "",
                     runs=(_investigator_runs(_own_runs(invs)) if key == "investigator"
-                          else _agent_run_table(by_agent.get(key, []), row["cadence_s"], now_iso)),
-                    has_invs=key == "investigator",
-                    **(_models_ctx(cfg, reader.read(
-                        lambda s: s.model_override(_PANEL_BY_PAGE[key].agent)),
-                        _PANEL_BY_PAGE[key].agent)
-                       if key in _PANEL_BY_PAGE else {}))
+                          else _agent_run_table(by_agent.get(key, []), row["cadence_s"],
+                                                now_iso)),
+                    has_invs=key == "investigator")
+
+    def _jobs_ctls(rows: list[dict]) -> dict[str, dict]:
+        pauses = reader.read(lambda s: s.job_pauses())
+        now_iso = datetime.now(timezone.utc).isoformat()
+        return {r["key"]: _job_ctl(r, pauses, now_iso, tz) for r in rows}
+
+    @app.get("/jobs", response_class=HTMLResponse)
+    async def jobs_page(request: Request):
+        by_agent, invs, running, now_iso = _agent_inputs()
+        rows = [r for r in _agent_rows(cfg, by_agent, invs, running, now_iso)
+                if r["key"] in JOB_KEYS]
+        rows.sort(key=lambda r: JOB_KEYS.index(r["key"]))
+        ctls = _jobs_ctls(rows)
+        for r in rows:
+            r["cadence"] = _cadence_text(cfg, r["key"])
+            r["ctl"] = ctls[r["key"]]
+        return page(request, "jobs.html", page_title="jobs", rows=rows,
+                    choices=list(PAUSE_CHOICES))
+
+    @app.get("/jobs/{key}", response_class=HTMLResponse)
+    async def job_detail(request: Request, key: str):
+        if key not in JOB_KEYS:
+            return page(request, "error.html", status=404, page_title="not found",
+                        message=f"No job called {key!r}.",
+                        detail="The jobs are listed on the Jobs page.")
+        ctx = _detail_ctx(key)
+        return page(request, "agent.html", page_title=f"jobs / {ctx['agent']['name']}",
+                    section="jobs", ctl=_jobs_ctls([ctx["agent"]])[key],
+                    choices=list(PAUSE_CHOICES),
+                    twin=(f"/agents/{_PAGE_OF_JOB[key]}", AGENT_PAGES[_PAGE_OF_JOB[key]][1])
+                    if key in _PAGE_OF_JOB else None,
+                    **ctx)
+
+    def _job_from(fields: dict) -> dict:
+        job = _choice_field(fields, "job", JOB_KEYS)
+        spec = next(sp for sp in agent_specs(cfg, {}) if sp.key == job)
+        if spec.paused:
+            raise ActionError(f"{spec.name} is switched off in config.",
+                              "Turn it on in config/settings.yaml; it cannot be paused "
+                              "or resumed from here.", 400)
+        return {"key": job, "name": spec.name}
+
+    def _ctl_now(job: dict) -> dict:
+        row = {"key": job["key"], "name": job["name"],
+               "status": SimpleNamespace(state="")}
+        return _jobs_ctls([row])[job["key"]]
+
+    @app.post("/actions/pause")
+    async def action_pause(request: Request):
+        """Pause a job for 1 h, 4 h or 24 h (spec 2026-11-04-activity-jobs-tools).
+        The daemon skips its work until then and announces start and end."""
+        fields = await _fields(request)
+        job = _job_from(fields)
+        choice = str(fields.get("for") or "").strip()
+        if choice not in PAUSE_CHOICES:
+            raise ActionError(f"{choice or '(nothing)'} is not a pause length.",
+                              f"Pick one of {', '.join(PAUSE_CHOICES)}.", 400)
+        now = datetime.now(tz).isoformat()
+        until = pause_until(now, choice)
+        reader.write(lambda s: s.pause_job(job["key"], until, "dashboard", now))
+        ctl = _ctl_now(job)
+        return respond(request, fields, "partials/_pause_ctl.html",
+                       {"text": f"Paused until {ctl['until']}."}, j=ctl,
+                       choices=list(PAUSE_CHOICES))
+
+    @app.post("/actions/resume")
+    async def action_resume(request: Request):
+        fields = await _fields(request)
+        job = _job_from(fields)
+        now = datetime.now(tz).isoformat()
+        reader.write(lambda s: s.resume_job(job["key"], now))
+        return respond(request, fields, "partials/_pause_ctl.html",
+                       {"text": "Resumed."}, j=_ctl_now(job), choices=list(PAUSE_CHOICES))
+
+    @app.get("/agents", response_class=HTMLResponse)
+    async def agents_page(request: Request):
+        by_agent, invs, running, now_iso = _agent_inputs()
+        window, window_s = _window(request)
+        rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s,
+                           _window_runs(reader, window_s, now_iso),
+                           _first_seen(reader, window_s))
+        _add_tool_counts(reader, rows, window_s, now_iso)
+        by_key = {r["key"]: r for r in rows}
+        rows = [{**by_key[hb], "name": name, "href": f"/agents/{pk}"}
+                for pk, (hb, name) in AGENT_PAGES.items() if hb in by_key]
+        every = reader.read(lambda s: s.tool_feedback_rows(limit=None))
+        shown = every if request.query_params.get("feedback") == "all" else every[:FEEDBACK_LIMIT]
+        return page(request, "agents.html", page_title="agents", window=window,
+                    feedback=[_feedback_row(f) for f in shown],
+                    feedback_total=len(every), feedback_capped=len(every) > len(shown),
+                    **_agents_panel(rows, request.query_params.get("agents", "")),
+                    base_href="/agents")
+
+    @app.get("/agents/{key}", response_class=HTMLResponse)
+    async def agent_detail(request: Request, key: str):
+        if key in OLD_AGENT_URLS:
+            return RedirectResponse(OLD_AGENT_URLS[key], status_code=302)
+        if key not in AGENT_PAGES:
+            return page(request, "error.html", status=404, page_title="not found",
+                        message=f"No agent called {key!r}.",
+                        detail="The three agents are listed on the Agents page.")
+        hb, name = AGENT_PAGES[key]
+        ctx = _detail_ctx(hb)
+        ctx["agent"] = {**ctx["agent"], "name": name}
+        panel = _PANEL_BY_PAGE.get(key)
+        return page(request, "agent.html", page_title=f"agents / {name}", section="agents",
+                    twin=(f"/jobs/{hb}", AGENT_LABELS[hb]) if hb in JOB_KEYS else None,
+                    **_prompt_ctx(cfg, key, str(request.query_params.get("host") or ""),
+                                  reader),
+                    **(_models_ctx(cfg, reader.read(lambda s: s.model_override(panel.agent)),
+                                   panel.agent) if panel else {}),
+                    **ctx)
 
     @app.get("/investigations", response_class=HTMLResponse)
     async def investigations(request: Request, status: str = "", host: str = "",
@@ -1390,7 +1485,10 @@ def exposition(stats: dict) -> str:
 NAV_GROUPS = [
     ("Workspace", [
         {"href": "/", "label": "Overview"},
+        {"href": "/activity", "label": "Activity"},
+        {"href": "/jobs", "label": "Jobs"},
         {"href": "/agents", "label": "Agents"},
+        {"href": "/tools", "label": "Tools"},
         {"href": "/investigations", "label": "Investigations"},
         {"href": "/incidents", "label": "Incidents"},
     ]),
@@ -1613,7 +1711,15 @@ def _env_chip(cfg: Config) -> str:
 def _rail_counts(reader: StoreReader, cfg: Config) -> dict[str, int]:
     """The rail's counts, keyed by href. Each is a plain store read, so it
     agrees with the list it summarises; one that fails is simply omitted."""
-    counts = {"/agents": len(AGENT_KEYS), "/hosts": len(cfg.hosts)}
+    counts = {"/agents": len(AGENT_PAGES), "/hosts": len(cfg.hosts)}
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        paused = sum(pause_active(r, now_iso)
+                     for r in reader.read(lambda s: s.job_pauses()).values())
+        if paused:                     # only when one is paused (spec)
+            counts["/jobs"] = paused
+    except sqlite3.Error:
+        pass
     try:
         by_status = reader.read(lambda s: s.counts_by_status())
         counts["/investigations"] = (by_status.get("running", 0)
@@ -1930,6 +2036,70 @@ def _add_tool_counts(reader, rows: list[dict], window_s: int | None, now_iso: st
                       if names else None)
 
 
+#: the three that call a model (spec 2026-11-04-activity-jobs-tools):
+#: page key -> (heartbeat / agent_runs key, name)
+AGENT_PAGES = {"analyst": ("daily", "Daily analyst"),
+               "investigator": ("investigator", "Investigator"),
+               "auditor": ("security", "Security auditor")}
+#: the job that runs an agent, and back (the daily run and the weekly audit
+#: are both: a schedule and a model)
+_PAGE_OF_JOB = {"daily": "analyst", "security": "auditor"}
+#: old /agents/<key> URLs -> their new home (302: a target may still change)
+OLD_AGENT_URLS = {"daily": "/agents/analyst", "security": "/agents/auditor",
+                  **{k: f"/jobs/{k}" for k in ("alert_poller", "thresholds", "uptime",
+                                               "backup")}}
+
+
+def _job_ctl(row: dict, pauses: dict[str, dict], now_iso: str, tz) -> dict:
+    """What a job's pause control shows: Off (config), Paused until, or Pause."""
+    key = row["key"]
+    pause = pauses.get(key)
+    active = pause if pause_active(pause, now_iso) else None
+    until = ""
+    if active:
+        try:
+            until = datetime.fromisoformat(active["until"]).astimezone(tz).strftime("%H:%M")
+        except (TypeError, ValueError):
+            until = str(active.get("until") or "")
+    return {"key": key, "name": row["name"], "off": row["status"].state == "off",
+            "pause": active, "until": until}
+
+
+def _prompt_ctx(cfg: Config, page_key: str, host: str, reader) -> dict:
+    """The Prompt section of an agent page: the template as written, the
+    prompt as it is sent (rendered now; for the investigator, for one host),
+    and for the analyst the input of its latest run."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    shim = SimpleNamespace(config=cfg, now_iso=lambda: now_iso)
+    jenv = Environment(loader=FileSystemLoader(cfg.prompts_dir))
+    ctx: dict = {"hosts": [], "host": "", "last_input": "", "last_input_at": ""}
+    if page_key == "analyst":
+        name = cfg.analyst.prompt if cfg.analyst else ""
+        render = lambda: expand_env((cfg.prompts_dir / name).read_text(),  # noqa: E731
+                                    source=name)
+        latest = next((r for r in reader.read(lambda s: s.runs(limit=10, kind="daily"))
+                       if r.get("input_text")), None)
+        if latest:
+            ctx.update(last_input=latest["input_text"], last_input_at=latest["run_at"])
+    elif page_key == "investigator":
+        name = cfg.agents["investigator"].prompt
+        ctx["hosts"] = sorted(cfg.hosts)
+        ctx["host"] = host if host in cfg.hosts else (ctx["hosts"][0] if ctx["hosts"] else "")
+        render = lambda: build_system_prompt(shim, jenv, ctx["host"])  # noqa: E731
+    else:
+        name = cfg.agents["security_auditor"].prompt
+        render = lambda: build_audit_system_prompt(shim, jenv)  # noqa: E731
+    try:
+        template = (cfg.prompts_dir / name).read_text()
+    except OSError as exc:
+        template = f"(could not read {name}: {exc})"
+    try:
+        rendered = render()
+    except Exception as exc:  # a prompt that will not render is shown as such
+        rendered = f"(could not render {name}: {type(exc).__name__}: {exc})"
+    return {"prompt": {"file": name, "template": template, "rendered": rendered, **ctx}}
+
+
 def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
                 running: list[dict], now_iso: str, window_s: int | None = None,
                 window_runs: dict[str, list[dict]] | None = None,
@@ -1972,7 +2142,8 @@ def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
                      "strip_label": _strip_label(strip),
                      "flag": status.state in FLAGGED_STATES,
                      "cadence_s": None if spec.paused else spec.cadence_s,
-                     "href": f"/agents/{spec.key}"})
+                     "href": (f"/jobs/{spec.key}" if spec.key in JOB_KEYS
+                              else f"/agents/{spec.key}")})
     return rows
 
 

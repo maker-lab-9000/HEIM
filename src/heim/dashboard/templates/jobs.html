@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m %}
+{% block content %}
+{#- the scheduled, model-free parts (spec 2026-11-04-activity-jobs-tools):
+    state, schedule, last run and a timed pause for each. -#}
+<section class="panel" aria-labelledby="h-jobs">
+  <div class="panel-head">
+    <h2 id="h-jobs">Jobs</h2>
+    <span class="label">a pause ends by itself · the dead-man ping keeps running</span>
+  </div>
+  <div class="inc"><table class="tbl dense">
+    <thead><tr>
+      <th scope="col">Job</th><th scope="col">State</th><th scope="col">Schedule</th>
+      <th scope="col">Last run</th><th scope="col">Pause</th>
+    </tr></thead>
+    <tbody>
+      {%- for r in rows %}
+      <tr{% if r.flag %} class="flag"{% endif %}>
+        <td class="name"><a href="/jobs/{{ r.key }}">{{ r.name }}</a></td>
+        <td><span class="ihost">{{ m.lamp(r.status.state|lamp) }}{{ r.status.word }}</span></td>
+        <td>{{ r.cadence }}</td>
+        <td>{% if r.status.last_run_at %}{{ m.when(r.status.last_run_at) }}{% else %}{{ DASH }}{% endif %}</td>
+        <td>{% with j = r.ctl %}{% include "partials/_pause_ctl.html" %}{% endwith %}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

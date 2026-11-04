@@ -601,3 +601,7 @@ details[open] > summary.btn { box-shadow: inset 0 2px 3px var(--shade); }
 }
 .evidence { margin: 4px 0 0; }
 .evidence a { color: var(--ink-2); }
+
+/* Agents: the prompt as sent (spec 2026-11-04-activity-jobs-tools) */
+pre.prompt{max-height:28rem;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.pausectl{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}

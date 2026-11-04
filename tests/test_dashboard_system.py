@@ -144,7 +144,7 @@ def test_rail_counts_come_from_the_store(client):
         item = re.search(rf'<a href="{href}"[^>]*>.*?</a>', html, re.S).group(0)
         return re.search(r'<span class="n">(\d+)</span>', item).group(1)
 
-    assert count("/agents") == "7"
+    assert count("/agents") == "3"      # the three that call a model
     assert count("/investigations") == "1"       # the seed: one running, none pending
     assert count("/incidents") == "2"            # the seed's two open incidents
     assert count("/hosts") == str(len(client.app.state.config.hosts))

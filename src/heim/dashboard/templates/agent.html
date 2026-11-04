@@ -8,7 +8,8 @@ Suggestion{% if general %}, general{% endif %}: {% if general %}{{ f.tool }}: {%
 {% block content %}
 
 <nav class="crumb" aria-label="Breadcrumb">
-  <a href="/agents">agents</a> <span aria-hidden="true">/</span>
+  {%- set sec = section|default('agents') %}
+  <a href="/{{ sec }}">{{ sec }}</a> <span aria-hidden="true">/</span>
   <span>{{ agent.name }}</span>
 </nav>
 
@@ -29,6 +30,15 @@ Suggestion{% if general %}, general{% endif %}: {% if general %}{{ f.tool }}: {%
         <td>{% if evidence %}<a href="{{ evidence[0] }}">{{ evidence[1] }}</a>
           {%- elif backup_file %}<span class="mono">{{ backup_file }}</span>
           {%- else %}{{ DASH }}{% endif %}</td></tr>
+      {%- if twin %}
+      <tr><th scope="row">{{ 'Agent' if sec == 'jobs' else 'Job' }}</th>
+        <td><a href="{{ twin[0] }}">{{ twin[1] }}</a>
+          <span class="ink3">{{ '· the model this job runs' if sec == 'jobs' else '· the schedule that runs it' }}</span></td></tr>
+      {%- endif %}
+      {%- if ctl %}
+      <tr><th scope="row">Pause</th>
+        <td>{% with j = ctl %}{% include "partials/_pause_ctl.html" %}{% endwith %}</td></tr>
+      {%- endif %}
       {%- if agent.strip %}
       <tr><th scope="row">Last 24 runs</th>
         <td><span class="runs" role="img" aria-label="{{ agent.strip_label }}">
@@ -41,6 +51,37 @@ Suggestion{% if general %}, general{% endif %}: {% if general %}{{ f.tool }}: {%
 
 {%- if models %}
 {% include "partials/_models_panel.html" %}
+{%- endif %}
+
+{%- if prompt %}
+<section class="panel" aria-labelledby="h-prompt">
+  <div class="panel-head">
+    <h2 id="h-prompt">Prompt</h2>
+    <span class="label mono">config/prompts/{{ prompt.file }}</span>
+  </div>
+  {%- if prompt.hosts %}
+  <form class="act" method="get" action="">
+    <select class="mselect mono" name="host" aria-label="Render the prompt for host">
+      {%- for h in prompt.hosts %}<option value="{{ h }}"{% if h == prompt.host %} selected{% endif %}>{{ h }}</option>{% endfor %}
+    </select>
+    <button class="btn" type="submit">Render</button>
+  </form>
+  {%- endif %}
+  <details open>
+    <summary class="label">As sent{% if prompt.host %} · for {{ prompt.host }}{% endif %}</summary>
+    <pre class="mono prompt">{{ prompt.rendered }}</pre>
+  </details>
+  <details>
+    <summary class="label">Template, as written</summary>
+    <pre class="mono prompt">{{ prompt.template }}</pre>
+  </details>
+  {%- if prompt.last_input %}
+  <details>
+    <summary class="label">Input of the latest run · {{ m.when(prompt.last_input_at) }}</summary>
+    <pre class="mono prompt">{{ prompt.last_input }}</pre>
+  </details>
+  {%- endif %}
+</section>
 {%- endif %}
 
 <section class="panel" aria-labelledby="h-runs">
@@ -82,6 +123,7 @@ Suggestion{% if general %}, general{% endif %}: {% if general %}{{ f.tool }}: {%
   {%- endif %}
 </section>
 
+{%- if sec != 'jobs' %}
 <section class="panel" aria-labelledby="h-tools">
   <div class="panel-head"><h2 id="h-tools">Tool history</h2></div>
   {%- if tool_history is none %}
@@ -152,4 +194,5 @@ Suggestion{% if general %}, general{% endif %}: {% if general %}{{ f.tool }}: {%
   <p class="empty">No tool calls recorded yet.</p>
   {%- endif %}
 </section>
+{%- endif %}
 {% endblock %}

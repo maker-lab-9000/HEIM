@@ -104,7 +104,8 @@ def test_agent_page_without_feedback_renders_no_list(tmp_path, monkeypatch):
         _healthy_agents(s)
         _inv(s, "investigator", 10, [("ssh_diagnostic", {"command": "df"}, False, 5)])
     html = _client(tmp_path, monkeypatch, seed).get("/agents/investigator").text
-    assert "Tooling feedback" not in html
+    # (the prompt section quotes the prompt's own "## Tooling feedback" rule)
+    assert '<caption class="label">Tooling feedback</caption>' not in html
 
 
 def test_feedback_for_configured_tool_not_in_recent_summary_is_not_general(tmp_path, monkeypatch):

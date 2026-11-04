@@ -1,4 +1,6 @@
-"""The Agents page (/agents) and the agent detail page (/agents/{key}).
+"""The Agents page (/agents) and the agent detail page (/agents/{key}), and
+— since 2026-11-04 (activity-jobs-tools) — the job pages (/jobs/{key}) the
+model-free agents moved to; the overview keeps the seven-row panel.
 
 Fixtures are the overview console's: committed example config, a temp store
 seeded before the app starts, times relative to the real clock.
@@ -8,24 +10,32 @@ import re
 from test_overview_console import _agents, _beat, _client, _healthy_agents, _iso, _rows
 
 
-def test_agents_page_lists_seven_and_filters(tmp_path, monkeypatch):
+def test_overview_panel_lists_seven_and_filters(tmp_path, monkeypatch):
     def seed(s):
         _healthy_agents(s, backup_minutes=60 * 40)   # backup overdue -> flagged
+
+    client = _client(tmp_path, monkeypatch, seed)
+    panel = _agents(client.get("/").text)
+    assert len(_rows(panel)) == 7
+    assert 'href="/jobs/backup"' in panel
+    assert "Monitoring gap: latest backup verifier result not received." in panel
+
+    flagged = _agents(client.get("/?agents=attention").text)
+    rows = _rows(flagged)
+    assert len(rows) == 1 and "Backup verifier" in rows[0]
+
+
+def test_agents_page_lists_the_three_and_filters(tmp_path, monkeypatch):
+    def seed(s):
+        _healthy_agents(s)
 
     client = _client(tmp_path, monkeypatch, seed)
     html = client.get("/agents").text
     assert "<title>Agents" in html
     panel = _agents(html)
-    assert len(_rows(panel)) == 7
-    assert 'href="/agents/backup"' in panel
-    assert "Monitoring gap: latest backup verifier result not received." in panel
-
-    flagged = _agents(client.get("/agents?agents=attention").text)
-    rows = _rows(flagged)
-    assert len(rows) == 1 and "Backup verifier" in rows[0]
-    assert re.search(r'href="/agents\?agents=attention#agents" class="on" aria-current="true"',
-                     flagged)
-    assert 'href="/agents#agents"' in flagged      # the All link goes back to the page
+    assert len(_rows(panel)) == 3
+    assert re.search(r'href="/agents\?agents=attention#agents"', panel)
+    assert 'href="/agents#agents"' in panel        # the All link goes back to the page
 
 
 def test_agent_detail_shows_runs_strip_and_evidence_link(tmp_path, monkeypatch):
@@ -37,8 +47,8 @@ def test_agent_detail_shows_runs_strip_and_evidence_link(tmp_path, monkeypatch):
         _beat(s, "backup", 60, detail={"backup_file": "heim-20261101.sqlite3"})
 
     client = _client(tmp_path, monkeypatch, seed)
-    html = client.get("/agents/alert_poller").text
-    assert "<title>Agents / Alert poller" in html
+    html = client.get("/jobs/alert_poller").text
+    assert "<title>Jobs / Alert poller" in html
     assert "every 5 min" in html
     assert 'href="/incidents"' in html
     assert "Prometheus unreachable" in html
@@ -50,12 +60,13 @@ def test_agent_detail_shows_runs_strip_and_evidence_link(tmp_path, monkeypatch):
     assert words == ["OK", "OK", "Missed", "Error", "OK"]
     assert "4 hosts" in rows[0]
 
-    backup = client.get("/agents/backup").text
+    backup = client.get("/jobs/backup").text
     assert "heim-20261101.sqlite3" in backup
     assert "daily at 03:30" in backup
-    for key, href in (("daily", "/findings"), ("security", "/security"),
-                      ("uptime", "/incidents"), ("thresholds", "/incidents")):
-        assert f'href="{href}"' in client.get(f"/agents/{key}").text
+    for path, href in (("/jobs/daily", "/findings"), ("/jobs/security", "/security"),
+                       ("/agents/analyst", "/findings"), ("/agents/auditor", "/security"),
+                       ("/jobs/uptime", "/incidents"), ("/jobs/thresholds", "/incidents")):
+        assert f'href="{href}"' in client.get(path).text, path
 
 
 def test_agent_detail_404_for_unknown_key(tmp_path, monkeypatch):
@@ -95,10 +106,13 @@ def test_investigator_detail_lists_investigations(tmp_path, monkeypatch):
 
 def test_rail_marks_agents_current(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch, lambda s: None)
-    for path in ("/agents", "/agents/backup"):
+    for path in ("/agents", "/agents/analyst"):
         html = client.get(path).text
         assert re.search(r'<a href="/agents" class="on" aria-current="page">', html), path
         assert not re.search(r'<a href="/" class="on"', html)
+    for path in ("/jobs", "/jobs/backup"):
+        html = client.get(path).text
+        assert re.search(r'<a href="/jobs" class="on" aria-current="page">', html), path
 
 
 def test_title_keeps_case_and_backup_file_is_newest_successful(tmp_path, monkeypatch):
@@ -107,9 +121,9 @@ def test_title_keeps_case_and_backup_file_is_newest_successful(tmp_path, monkeyp
         _beat(s, "backup", 30, ok=False, error="disk full")
 
     client = _client(tmp_path, monkeypatch, seed)
-    html = client.get("/agents/backup").text
-    assert "<title>Agents / Backup verifier" in html
-    assert '<h1 class="ptitle">Agents / Backup verifier</h1>' in html
+    html = client.get("/jobs/backup").text
+    assert "<title>Jobs / Backup verifier" in html
+    assert '<h1 class="ptitle">Jobs / Backup verifier</h1>' in html
     assert "heim-20261031.sqlite3" in html
     assert 'class="ihost"><span class="lamp red"' in html
     assert "<title>Overview" in client.get("/").text
