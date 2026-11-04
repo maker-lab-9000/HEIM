@@ -605,3 +605,11 @@ details[open] > summary.btn { box-shadow: inset 0 2px 3px var(--shade); }
 /* Agents: the prompt as sent (spec 2026-11-04-activity-jobs-tools) */
 pre.prompt{max-height:28rem;overflow:auto;white-space:pre-wrap;word-break:break-word}
 .pausectl{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+/* Activity: map + causal timeline (spec 2026-11-04-activity-jobs-tools) */
+.amap{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem}
+.amap-col{display:flex;flex-direction:column;gap:.4rem}
+.amap-box{display:flex;flex-direction:column;gap:.15rem;padding:.45rem .6rem;border:1px solid var(--line);border-radius:6px;color:inherit;text-decoration:none}
+.amap-box.on{border-color:var(--ink)}
+.tl{list-style:none;margin:0;padding:0}.tl .tl{padding-left:1.4rem;border-left:1px solid var(--line);margin-left:.4rem}
+.tl-row{display:flex;gap:.5rem;align-items:baseline;flex-wrap:wrap;padding:.2rem 0}
+@media (max-width:40rem){.amap{grid-template-columns:minmax(0,1fr)}}

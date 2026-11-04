@@ -74,6 +74,9 @@ from heim.agents import (
 )
 from heim.config import Config, expand_env, load_config
 from heim.costing import cost_of
+from heim.activity import KINDS as ACTIVITY_KINDS
+from heim.activity import map_model as activity_map
+from heim.activity import timeline as activity_timeline
 from heim.jobs import JOB_KEYS, PAUSE_CHOICES, pause_active, pause_until
 from heim.model_chain import (INVESTIGATOR_AGENT, OVERRIDE_AGENT, find_model,
                                resolve_chain, resolve_model)
@@ -975,6 +978,66 @@ def create_app(config: Config | None = None) -> FastAPI:
         return page(request, "agents.html", page_title="agents", window=window,
                     **_agents_panel(rows, request.query_params.get("agents", "")),
                     base_href="/agents")
+
+    @app.get("/activity", response_class=HTMLResponse)
+    async def activity_page(request: Request):
+        """What ran, when, and what it started (spec 2026-11-04-activity-jobs-
+        tools): the map on top, the causal timeline below. The timeline nests
+        only by recorded ids; a box on the map filters it."""
+        window, window_s = _window(request)
+        part = str(request.query_params.get("part") or "")
+        kind = str(request.query_params.get("kind") or "all")
+        kind = kind if kind in ACTIVITY_KINDS else "all"
+        now_iso = datetime.now(timezone.utc).isoformat()
+        since_dt = datetime.fromisoformat(now_iso) - timedelta(
+            seconds=window_s or WINDOWS["24h"])
+        since = since_dt.isoformat()
+
+        def recent(at: str) -> bool:
+            dt = fmt.parse_dt(at)
+            return bool(dt and dt >= since_dt)
+
+        beats = [b for rows in reader.read(
+            lambda s: s.agent_runs_by_agent(limit_per_agent=3000, since=since)).values()
+            for b in rows if recent(b.get("started_at") or "")]
+        invs = [i for i in reader.read(lambda s: s.investigations(limit=500))
+                if recent(i.get("started_at") or "")]
+        daily_runs = {int(r.get("agent_run_id") or 0): r
+                      for r in reader.read(lambda s: s.runs(limit=100, kind="daily"))
+                      if int(r.get("agent_run_id") or 0)}
+        events = reader.read(lambda s: s.incident_events_for([b["id"] for b in beats]))
+        tools = reader.read(lambda s: s.tools_by_investigation([i["id"] for i in invs]))
+        nodes = activity_timeline(beats, daily_runs, invs, events, tools, part=part, kind=kind)
+
+        # the map's lamps: the same statuses the Jobs and Agents pages show
+        by_agent, all_invs, running, _now = _agent_inputs()
+        rows = {r["key"]: r for r in _agent_rows(cfg, by_agent, all_invs, running, now_iso)}
+        statuses = {}
+        for key, r in rows.items():
+            st = r["status"]
+            statuses[key] = {"state": st.state, "word": st.word, "last": st.last_run_at,
+                             "fact": _cadence_text(cfg, key)}
+        for page_key, (hb, _name) in AGENT_PAGES.items():
+            if hb in statuses:
+                statuses[page_key] = dict(statuses[hb])
+        latest_daily = next(iter(reader.read(lambda s: s.runs(limit=1, kind="daily"))), None)
+        if latest_daily and "analyst" in statuses:
+            statuses["analyst"]["fact"] = str(latest_daily.get("model_used") or "")
+        waiting = sum(1 for i in _own_runs(all_invs) if i.get("status") == "pending_approval")
+        if "investigator" in statuses:
+            statuses["investigator"]["fact"] = (f"{waiting} waiting for you" if waiting
+                                                else statuses["investigator"]["fact"])
+        calls = reader.read(lambda s: s.tool_calls(list(_PAGE_OF_AGENT_CFG), 100_000, since))
+        for t in cfg.tools:
+            n = sum(1 for c in calls if c["tool"] == t)
+            statuses[t] = {"state": "healthy" if n else "unknown",
+                           "word": f"{n} call{'' if n == 1 else 's'}" if n else "Idle",
+                           "last": next((c["at"] for c in calls if c["tool"] == t), ""),
+                           "fact": f"{n} call{'' if n == 1 else 's'} in the window"}
+        return page(request, "activity.html", page_title="activity", window=window,
+                    amap=activity_map(cfg, statuses), nodes=nodes[:ACTIVITY_LIMIT],
+                    capped=len(nodes) > ACTIVITY_LIMIT, part=part, kind=kind,
+                    kinds=ACTIVITY_KINDS)
 
     @app.get("/tools", response_class=HTMLResponse)
     async def tools_page(request: Request):
@@ -2061,6 +2124,9 @@ def _add_tool_counts(reader, rows: list[dict], window_s: int | None, now_iso: st
         r["tools"] = (reader.read(lambda s, n=names: s.tool_call_counts(n, since))
                       if names else None)
 
+
+#: top-level rows the Activity timeline shows at most (quiet runs are merged)
+ACTIVITY_LIMIT = 200
 
 #: what keeps each tool read-only, in one sentence (spec 2026-11-04-activity-
 #: jobs-tools). A test pins one entry per configured tool.

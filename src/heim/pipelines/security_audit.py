@@ -27,6 +27,7 @@ from heim.pipelines.investigate import (
 )
 from heim.pipelines.security_sources import collect_evidence
 from heim.reports.render import salvage, security_audit_email
+from heim.runctx import current_run
 from heim.runtime import Runtime
 from heim.security.catalogue import load_catalogue
 from heim.security.diff import AuditDiff, diff_findings, finding_rows
@@ -200,6 +201,8 @@ async def _assessment(rt: Runtime, *, run_id: int, results: list[CheckResult], d
         inv_id = rt.store.create_investigation(
             fingerprint=f"{AUDIT_HOST}|{AUDIT_KIND}|run-{run_id}", host=AUDIT_HOST, host_role="audit",
             agent_name=AGENT_NAME, model=agent_cfg.model, trigger=AUDIT_KIND, status="running",
+            # the weekly job run it belongs to (spec 2026-11-04-activity-jobs-tools)
+            parent_run_id=current_run("security"),
             started_at=generated_at, brief_md=brief, findings_json=json.dumps(rows, ensure_ascii=False, default=str),
         )
         await rt.emit_loki([_security(_action(AUDIT_HOST, "audit_started", f"run-{run_id}", "Weekly security audit assessment started", rt.now_iso()))])

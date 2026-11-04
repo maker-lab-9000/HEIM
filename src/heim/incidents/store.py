@@ -763,6 +763,19 @@ class IncidentStore:
                  "agent_name": str(r["agent_name"] or "")}
                 for r in self._db.execute(sql, params).fetchall()]
 
+    def tools_by_investigation(self, inv_ids: list[int]) -> dict[int, dict[str, int]]:
+        """``investigation id -> {tool: calls}`` (spec 2026-11-04-activity-jobs-tools)."""
+        ids = [int(i) for i in inv_ids or [] if int(i)]
+        if not ids:
+            return {}
+        out: dict[int, dict[str, int]] = {}
+        for r in self._db.execute(
+                f"SELECT investigation_id AS i, tool, COUNT(*) AS n FROM investigation_steps "
+                f"WHERE investigation_id IN ({','.join('?' * len(ids))}) "
+                f"GROUP BY investigation_id, tool", ids):
+            out.setdefault(int(r["i"]), {})[str(r["tool"])] = int(r["n"])
+        return out
+
     def tool_call_counts(self, agent_names: list[str], since: str | None = None) -> dict:
         """``{"calls": n, "blocked": n}`` over the same rows ``tool_calls``
         reads (blocked calls are calls)."""
