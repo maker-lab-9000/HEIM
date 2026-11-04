@@ -391,8 +391,8 @@ async def _await_approval(rt: Runtime, investigation_id: int, text: str,
 def request_from_investigation(row: dict) -> InvestigationRequest:
     """Rebuild the request a stored investigation was created from.
 
-    ``model`` is replayed as an override so a re-armed run uses the model the
-    operator was told about, even if the configured default changed meanwhile.
+    ``model`` is replayed as an override only when the row's model was pinned
+    by its trigger; an unpinned row runs on the operator's current choice.
     """
     try:
         findings = json.loads(row.get("findings_json") or "[]")
@@ -405,7 +405,11 @@ def request_from_investigation(row: dict) -> InvestigationRequest:
         fingerprint=str(row.get("fingerprint") or ""),
         findings=findings if isinstance(findings, list) else [],
         retry_of=int(row.get("retry_of") or 0),
-        model_override=str(row.get("model") or ""),
+        # Only a model the trigger picked travels with the row; otherwise the
+        # run follows the operator's current choice (spec 2026-11-04-
+        # investigator-openrouter, the operator's ruling).
+        model_override=(f"{row.get('provider') or 'anthropic'}|{row.get('model') or ''}"
+                        if int(row.get("model_pinned") or 0) and row.get("model") else ""),
     )
 
 

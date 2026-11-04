@@ -122,3 +122,61 @@ def test_cli_model_bare_id_still_works(tmp_path):
     assert _cli_model_choice(cfg, "") == ""
     with pytest.raises(ValueError):
         _cli_model_choice(cfg, "gpt-9")
+
+
+# ================================================== 3. store and queue
+
+
+def _inv_row(s, **kw):
+    base = dict(fingerprint="ubuntu-server|disk|Disk", host="ubuntu-server",
+                host_role="guest", agent_name="investigator", model="claude-sonnet-5-5",
+                trigger="daily", status="pending_approval", started_at="2026-11-04T10:00:00")
+    base.update(kw)
+    return s.create_investigation(**base)
+
+
+def test_new_columns_migrate_on_old_db(tmp_path):
+    from heim.incidents.store import IncidentStore
+    db = tmp_path / "old.sqlite3"
+    s = IncidentStore(db)
+    s._db.execute("ALTER TABLE investigations DROP COLUMN provider")
+    s._db.execute("ALTER TABLE investigations DROP COLUMN model_pinned")
+    s._db.commit()
+    s.close()
+    s = IncidentStore(db)
+    row = s.investigation(_inv_row(s))
+    assert (row["provider"], row["model_pinned"]) == ("anthropic", 0)
+    row = s.investigation(_inv_row(s, provider="openrouter", model_pinned=1,
+                                   model=DEEPSEEK.model))
+    assert (row["provider"], row["model_pinned"]) == ("openrouter", 1)
+
+
+def test_rearm_request_pins_only_pinned_rows(tmp_path):
+    from heim.incidents.store import IncidentStore
+    from heim.pipelines.investigate import request_from_investigation
+    s = IncidentStore(tmp_path / "s.sqlite3")
+    unpinned = s.investigation(_inv_row(s))
+    assert request_from_investigation(unpinned).model_override == ""
+    pinned = s.investigation(_inv_row(s, provider="openrouter", model=DEEPSEEK.model,
+                                      model_pinned=1))
+    assert request_from_investigation(pinned).model_override == DEEPSEEK.key
+
+
+def test_running_investigations_lists_only_running(tmp_path):
+    from heim.incidents.store import IncidentStore
+    s = IncidentStore(tmp_path / "s.sqlite3")
+    running = _inv_row(s, status="running")
+    _inv_row(s, status="pending_approval")
+    _inv_row(s, status="complete")
+    assert [r["id"] for r in s.running_investigations()] == [running]
+
+
+def test_retry_payload_has_no_model(tmp_path):
+    from heim.incidents.store import IncidentStore
+    from heim.pipelines.queue import enqueue_retry
+    s = IncidentStore(tmp_path / "s.sqlite3")
+    original = _inv_row(s, status="failed", provider="openrouter", model=DEEPSEEK.model,
+                        model_pinned=1)
+    job_id = enqueue_retry(s, original)
+    job = next(j for j in s.jobs(limit=5) if j["id"] == job_id)
+    assert job["payload"]["model"] == ""
