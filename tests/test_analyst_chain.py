@@ -309,3 +309,84 @@ def test_runs_gain_attempts_json_on_an_old_db(tmp_path):
     assert json.loads(run["attempts_json"]) == attempts
     rid2 = s.insert_run(kind="daily", run_at="t2")
     assert [r for r in s.runs() if r["id"] == rid2][0]["attempts_json"] == "[]"
+
+
+# ================================================== 4. resolution + notices
+
+from heim.model_chain import OVERRIDE_AGENT, resolve_chain  # noqa: E402
+from heim.reports.analyst_notice import (  # noqa: E402
+    failure_email, fallback_banner_html, fallback_subject, fallback_telegram)
+
+ALLOWED = [ModelRef(**OPUS), ModelRef(**DEEPSEEK)]
+FAILED_OPUS = Attempt("anthropic", "claude-opus-5-5", False, "BadRequestError: usage limits")
+OK_DEEPSEEK = Attempt("openrouter", "deepseek/deepseek-v4.1-flash-1017", True, "", 900, 40)
+
+
+def test_override_agent_is_the_daily_analyst():
+    assert OVERRIDE_AGENT == "daily_analyst"
+
+
+def test_no_override_runs_yaml():
+    eff = resolve_chain(CHAIN, None, ALLOWED)
+    assert eff.chain == CHAIN and eff.source == "yaml" and eff.stale is False
+
+
+def test_valid_override_runs_in_its_order():
+    eff = resolve_chain(CHAIN, {"chain": [DEEPSEEK], "updated_at": "2026-11-04T08:00:00+00:00",
+                                "updated_by": "dashboard"}, ALLOWED)
+    assert [r.model for r in eff.chain] == ["deepseek/deepseek-v4.1-flash-1017"]
+    assert eff.source == "override" and eff.updated_at == "2026-11-04T08:00:00+00:00"
+
+
+def test_override_with_an_unlisted_entry_is_stale():
+    ov = {"chain": [DEEPSEEK, {"provider": "openrouter", "model": "evil/model"}],
+          "updated_at": "t", "updated_by": "dashboard"}
+    eff = resolve_chain(CHAIN, ov, ALLOWED)
+    assert eff.chain == CHAIN and eff.source == "yaml" and eff.stale is True
+    assert eff.updated_at == "t"
+
+
+def test_any_override_is_stale_when_nothing_is_allowed():
+    eff = resolve_chain(CHAIN, {"chain": [OPUS], "updated_at": "t", "updated_by": ""}, [])
+    assert eff.source == "yaml" and eff.stale is True
+
+
+def test_malformed_override_entry_is_stale():
+    eff = resolve_chain(CHAIN, {"chain": [{"model": 3, "provider": "nope"}], "updated_at": "t",
+                                "updated_by": ""}, ALLOWED)
+    assert eff.source == "yaml" and eff.stale is True
+
+
+def test_fallback_subject_tag():
+    assert fallback_subject("PAM Morning Report", "deepseek/deepseek-v4.1-flash-1017") == \
+        "PAM Morning Report [fallback: deepseek/deepseek-v4.1-flash-1017]"
+
+
+def test_banner_names_the_answer_and_every_failure_escaped():
+    bad = Attempt("anthropic", "claude-opus-5-5", False, "<script>x</script>")
+    html = fallback_banner_html("deepseek/deepseek-v4.1-flash-1017", [bad, OK_DEEPSEEK])
+    assert "deepseek/deepseek-v4.1-flash-1017" in html and "claude-opus-5-5" in html
+    assert "<script>" not in html and "&lt;script&gt;" in html
+
+
+def test_failure_email_lists_every_attempt():
+    second = Attempt("openrouter", "deepseek/deepseek-v4.1-flash-1017", False, "HTTPStatusError: 429")
+    subject, html = failure_email([FAILED_OPUS, second], "2026-11-04T07:00:00+01:00")
+    assert subject == "HEIM daily report NOT produced — all analyst models failed"
+    for s in ("claude-opus-5-5", "usage limits", "deepseek/deepseek-v4.1-flash-1017", "429",
+              "2026-11-04T07:00:00+01:00",
+              "Metrics were collected; the next scheduled run will retry."):
+        assert s in html
+    assert html.index("claude-opus-5-5") < html.index("deepseek/deepseek-v4.1-flash-1017")
+
+
+def test_failure_email_escapes():
+    _s, html = failure_email([Attempt("anthropic", "m", False, "<b>x</b>")], "t")
+    assert "<b>x</b>" not in html
+
+
+def test_fallback_telegram_line():
+    line = fallback_telegram("deepseek/deepseek-v4.1-flash-1017", [FAILED_OPUS, OK_DEEPSEEK])
+    assert line.startswith("⚠️ HEIM daily:")
+    assert "claude-opus-5-5" in line and "usage limits" in line
+    assert line.endswith("report by deepseek/deepseek-v4.1-flash-1017")
