@@ -1,8 +1,10 @@
-{#- the daily analyst's model chain (spec 2026-11-04 §4), on /agents/daily.
+{#- an agent's model choice: the daily analyst's chain (spec 2026-11-04 §4),
+    on /agents/daily, or the investigator's single model (spec
+    2026-11-04-investigator-openrouter), on /agents/investigator.
 
     The chain in effect, in the order a run tries it, and where it came from:
     the YAML default, the dashboard override, or an override that is ignored
-    because an entry left settings.analyst_models. The form posts one select
+    because an entry left the agent's allow-list. The form posts one select
     per slot (slot_1 is tried first); re-rendered alone after an htmx POST. -#}
 {% import "partials/_macros.html" as m with context %}
 <section class="panel models" aria-labelledby="h-models">
@@ -15,13 +17,13 @@
           override · set {{ m.when(models.updated_at) }}
         {%- elif models.stale -%}
           default <span class="ink3">· override ignored: a model in it is no longer in
-          settings.analyst_models (set {{ m.when(models.updated_at) }})</span>
+          {{ models.setting }} (set {{ m.when(models.updated_at) }})</span>
         {%- else -%}
-          default <span class="ink3">· config/agents/daily_analyst.yaml</span>
+          default <span class="ink3">· {{ models.yaml_file }}</span>
         {%- endif -%}
         </td></tr>
       {%- for e in models.chain %}
-      <tr><th scope="row">{{ 'First' if loop.first else 'Then' }}</th>
+      <tr><th scope="row">{{ 'Model' if models.single else ('First' if loop.first else 'Then') }}</th>
         <td><span class="mono">{{ e.model }}</span> <span class="ink3">{{ e.provider }}
           {%- if not e.priced %} · unpriced{% endif %}</span></td></tr>
       {%- endfor %}
@@ -30,20 +32,21 @@
   {%- if models.options %}
   <form class="act" method="post" action="/actions/models" hx-post="/actions/models"
         hx-target="closest .models" hx-swap="outerHTML">
-    <input type="hidden" name="back" value="/agents/daily">
+    <input type="hidden" name="agent" value="{{ models.agent }}">
+    <input type="hidden" name="back" value="/agents/{{ models.page }}">
     {%- for sel in models.slots %}
-    <select class="mselect mono" name="slot_{{ loop.index }}" aria-label="Model {{ loop.index }} in the chain">
+    <select class="mselect mono" name="slot_{{ loop.index }}" aria-label="{{ 'Model' if models.single else 'Model ' ~ loop.index ~ ' in the chain' }}">
       <option value="">{{ 'none' if not loop.first else 'choose a model' }}</option>
       {%- for o in models.options %}
       <option value="{{ o.key }}"{% if o.key == sel %} selected{% endif %}>{{ o.label }}{% if not o.priced %} · unpriced{% endif %}</option>
       {%- endfor %}
     </select>
     {%- endfor %}
-    <button class="btn primary" type="submit" name="action" value="set">Save order</button>
+    <button class="btn primary" type="submit" name="action" value="set">{{ 'Save' if models.single else 'Save order' }}</button>
     <button class="btn" type="submit" name="action" value="reset">Reset to default</button>
   </form>
   {%- else %}
-  <p class="ink3">List models in settings.analyst_models to choose the order here.</p>
+  <p class="ink3">List models in {{ models.setting }} to choose {{ 'the model' if models.single else 'the order' }} here.</p>
   {%- endif %}
   {% include "partials/_flash.html" %}
 </section>

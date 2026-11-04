@@ -26,6 +26,7 @@ import asyncio
 import base64
 import binascii
 import json
+from dataclasses import dataclass
 import logging
 import os
 import re
@@ -71,7 +72,8 @@ from heim.agents import (
 )
 from heim.config import Config, load_config
 from heim.costing import cost_of
-from heim.model_chain import OVERRIDE_AGENT, find_model, resolve_chain
+from heim.model_chain import (INVESTIGATOR_AGENT, OVERRIDE_AGENT, find_model,
+                               resolve_chain, resolve_model)
 from heim.dashboard import format as fmt
 from heim.dashboard.recommendations import collect as collect_recommendations
 from heim.incidents.store import IncidentStore
@@ -327,36 +329,87 @@ def _rec_key_field(fields: dict) -> str:
     return value
 
 
-def _default_model(cfg: Config) -> str:
-    """The investigator's configured model — the dropdown's first option."""
+def _default_model(cfg: Config, override: dict | None = None) -> str:
+    """The model a run with no pick uses — the dropdown's first option: the
+    dashboard override when it applies, else the investigator's YAML model."""
     agent = cfg.agents.get("investigator")
-    return agent.model if agent is not None else ""
+    if agent is None:
+        return ""
+    eff = resolve_model(agent.ref, override, list(cfg.settings.investigator_models))
+    return eff.chain[0].model
 
 
 #: the agent page that carries the Models panel (spec 2026-11-04 §4)
 MODELS_AGENT_KEY = "daily"
 MODELS_SAVED = "Saved. The next daily run uses this order."
 MODELS_RESET = "Reset. The next daily run uses the default order."
+INV_MODEL_SAVED = "Saved. The next investigation runs on this model."
+INV_MODEL_RESET = "Reset. The next investigation runs on the default model."
 
 
-def _chain_field(fields: dict, allowed: list) -> list[dict]:
+@dataclass(frozen=True)
+class _ModelsPanel:
+    """One agent's Models panel: where its choices and default come from."""
+    agent: str              # the model_overrides key
+    page: str               # /agents/<page>
+    setting: str            # the allow-list's name, for the operator
+    yaml_file: str
+    single: bool            # one model (investigator) or an ordered chain
+    saved: str
+    reset: str
+
+
+#: by model_overrides key (spec 2026-11-04-investigator-openrouter)
+MODELS_PANELS = {
+    OVERRIDE_AGENT: _ModelsPanel(OVERRIDE_AGENT, "daily", "settings.analyst_models",
+                                 "config/agents/daily_analyst.yaml", False,
+                                 MODELS_SAVED, MODELS_RESET),
+    INVESTIGATOR_AGENT: _ModelsPanel(INVESTIGATOR_AGENT, "investigator",
+                                     "settings.investigator_models",
+                                     "config/agents/investigator.yaml", True,
+                                     INV_MODEL_SAVED, INV_MODEL_RESET),
+}
+#: agent page key -> its panel
+_PANEL_BY_PAGE = {p.page: p for p in MODELS_PANELS.values()}
+
+
+def _panel_allowed(cfg, panel: _ModelsPanel) -> list:
+    return list(cfg.settings.investigator_models if panel.single
+                else cfg.settings.analyst_models)
+
+
+def _panel_effective(cfg, panel: _ModelsPanel, override: dict | None):
+    allowed = _panel_allowed(cfg, panel)
+    if panel.single:
+        return resolve_model(cfg.agents["investigator"].ref, override, allowed)
+    return resolve_chain(cfg.analyst.chain if cfg.analyst else [], override, allowed)
+
+
+def _chain_field(fields: dict, allowed: list,
+                 panel: "_ModelsPanel | None" = None) -> list[dict]:
     """The ordered chain a Models form posted: ``slot_1..slot_N`` (one field
     per slot — repeated keys would collapse), each blank or an allowed key.
 
     Filled slots must come first, without gaps or repeats, and at least one is
     needed; anything else is a form the panel never renders, so it is refused.
     """
+    panel = panel or MODELS_PANELS[OVERRIDE_AGENT]
     if not allowed:
         raise ActionError("No models can be chosen here.",
-                          "settings.analyst_models is empty, so only "
-                          "config/agents/daily_analyst.yaml sets the chain.", 400)
+                          f"{panel.setting} is empty, so only "
+                          f"{panel.yaml_file} sets the model.", 400)
+    n_slots = 1 if panel.single else len(allowed)
+    if panel.single and any(str(v or "").strip() for k, v in fields.items()
+                            if k.startswith("slot_") and k != "slot_1"):
+        raise ActionError("Pick one model.",
+                          "The investigator runs on one model at a time.", 400)
     by_key = {ref.key: ref for ref in allowed}
     extra = [k for k in fields if k.startswith("slot_")
-             and k not in {f"slot_{i}" for i in range(1, len(allowed) + 1)}]
+             and k not in {f"slot_{i}" for i in range(1, n_slots + 1)}]
     if extra:
         raise ActionError(f"{extra[0]} is not a slot on this form.",
-                          f"There are {len(allowed)} slots.", 400)
-    picked = [str(fields.get(f"slot_{i}") or "").strip() for i in range(1, len(allowed) + 1)]
+                          f"There are {n_slots} slots.", 400)
+    picked = [str(fields.get(f"slot_{i}") or "").strip() for i in range(1, n_slots + 1)]
     while picked and not picked[-1]:
         picked.pop()
     if not picked:
@@ -370,27 +423,43 @@ def _chain_field(fields: dict, allowed: list) -> list[dict]:
     unknown = [k for k in picked if k not in by_key]
     if unknown:
         raise ActionError(f"{unknown[0]} is not a model this deployment offers.",
-                          "Pick one of the models in settings.analyst_models.", 400)
+                          f"Pick one of the models in {panel.setting}.", 400)
     return [by_key[k].model_dump() for k in picked]
 
 
-def _models_ctx(cfg, override: dict | None) -> dict:
+def _models_ctx(cfg, override: dict | None, agent: str = OVERRIDE_AGENT) -> dict:
     """What the Models panel shows: the chain in effect, where it came from,
     and the form's slots preselected from it."""
-    allowed = list(cfg.settings.analyst_models)
-    eff = resolve_chain(cfg.analyst.chain if cfg.analyst else [], override, allowed)
+    panel = MODELS_PANELS[agent]
+    allowed = _panel_allowed(cfg, panel)
+    eff = _panel_effective(cfg, panel, override)
     prices = cfg.settings.model_prices or {}
     chain = [{"model": r.model, "provider": r.provider, "priced": r.model in prices}
              for r in eff.chain]
     # only offered models can be preselected; compacted so a YAML entry that is
     # not offered leaves no gap the form would then refuse
     offered = {a.key for a in allowed}
+    n_slots = 1 if panel.single else len(allowed)
     keys = [r.key for r in eff.chain if r.key in offered]
-    slots = (keys + [""] * len(allowed))[:len(allowed)]
+    slots = (keys + [""] * n_slots)[:n_slots] if allowed else []
     options = [{"key": a.key, "label": f"{a.model} ({a.provider})",
                 "priced": a.model in prices} for a in allowed]
     return {"models": {"chain": chain, "source": eff.source, "stale": eff.stale,
-                       "updated_at": eff.updated_at, "options": options, "slots": slots}}
+                       "updated_at": eff.updated_at, "options": options, "slots": slots,
+                       "agent": panel.agent, "page": panel.page, "single": panel.single,
+                       "setting": panel.setting, "yaml_file": panel.yaml_file}}
+
+
+def _will_run_on(cfg, row: dict, reader) -> str:
+    """For an approval still waiting: the model it will run on if approved now.
+    A pinned row keeps its model; an unpinned one follows the current choice
+    (spec 2026-11-04-investigator-openrouter, the operator's ruling)."""
+    if row.get("status") != "pending_approval" or (row.get("agent_name") or "investigator") \
+            != "investigator":
+        return ""
+    if int(row.get("model_pinned") or 0):
+        return str(row.get("model") or "")
+    return _default_model(cfg, reader.read(lambda s: s.model_override(INVESTIGATOR_AGENT)))
 
 
 def _model_field(fields: dict, allowed: list) -> str:
@@ -498,7 +567,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     investigator_models = list(cfg.settings.investigator_models)
     templates.env.globals.update(duration=fmt.duration, elapsed=fmt.elapsed,
                                  DASH=fmt.DASH, models=investigator_models,
-                                 default_model=_default_model(cfg),
+                                 # a callable: the dashboard override can change
+                                 # it between two page loads
+                                 default_model=lambda: _default_model(cfg, reader.read(
+                                     lambda st: st.model_override(INVESTIGATOR_AGENT))),
                                  colour_legend=fmt.LEGEND)
     app.state.templates = templates
 
@@ -833,8 +905,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                     runs=(_investigator_runs(_own_runs(invs)) if key == "investigator"
                           else _agent_run_table(by_agent.get(key, []), row["cadence_s"], now_iso)),
                     has_invs=key == "investigator",
-                    **(_models_ctx(cfg, reader.read(lambda s: s.model_override(OVERRIDE_AGENT)))
-                       if key == MODELS_AGENT_KEY else {}))
+                    **(_models_ctx(cfg, reader.read(
+                        lambda s: s.model_override(_PANEL_BY_PAGE[key].agent)),
+                        _PANEL_BY_PAGE[key].agent)
+                       if key in _PANEL_BY_PAGE else {}))
 
     @app.get("/investigations", response_class=HTMLResponse)
     async def investigations(request: Request, status: str = "", host: str = "",
@@ -878,6 +952,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             brief_html=_md_to_html(row.get("brief_md") or "", allow_raw_html=False) if row.get("brief_md") else "",
             outcome=_outcome_line(row),
             transcript=transcript, truncated=truncated,
+            will_run_on=_will_run_on(cfg, row, reader),
         )
 
     @app.get("/investigations/{inv_id}/transcript", response_class=HTMLResponse)
@@ -1198,16 +1273,24 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.post("/actions/models")
     async def action_models(request: Request):
-        """Set or reset the daily analyst's model chain (spec 2026-11-04 §4).
+        """Set or reset an agent's model choice (spec 2026-11-04 §4 and
+        2026-11-04-investigator-openrouter): the daily analyst's chain or the
+        investigator's single model, by the form's ``agent`` field.
 
-        Validated against ``settings.analyst_models`` only; the daemon picks
-        the new order up at the next daily run, with no restart.
+        Validated against that agent's allow-list only; the daemon picks the
+        choice up at the next run, with no restart.
         """
         fields = await _fields(request)
+        agent = str(fields.get("agent") or OVERRIDE_AGENT)
+        if agent not in MODELS_PANELS:
+            raise ActionError(f"{agent} has no model choice.",
+                              "Only the daily analyst and the investigator do.", 400)
+        panel = MODELS_PANELS[agent]
         action = _choice_field(fields, "action", ("set", "reset"))
+        current = lambda: reader.read(lambda s: s.model_override(agent))  # noqa: E731
         if action == "set":
             try:
-                chain = _chain_field(fields, list(cfg.settings.analyst_models))
+                chain = _chain_field(fields, _panel_allowed(cfg, panel), panel)
             except ActionError as exc:
                 if not request.headers.get("hx-request"):
                     raise
@@ -1216,15 +1299,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 return partial(request, "partials/_models_panel.html",
                                flash={"text": exc.message, "err": True},
                                back=_back_to(request, fields),
-                               **_models_ctx(cfg, reader.read(
-                                   lambda s: s.model_override(OVERRIDE_AGENT))))
-            reader.write(lambda s: s.set_model_override(OVERRIDE_AGENT, chain))
-            flash = {"text": MODELS_SAVED}
+                               **_models_ctx(cfg, current(), agent))
+            reader.write(lambda s: s.set_model_override(agent, chain))
+            flash = {"text": panel.saved}
         else:
-            reader.write(lambda s: s.clear_model_override(OVERRIDE_AGENT))
-            flash = {"text": MODELS_RESET}
+            reader.write(lambda s: s.clear_model_override(agent))
+            flash = {"text": panel.reset}
         return respond(request, fields, "partials/_models_panel.html", flash,
-                       **_models_ctx(cfg, reader.read(lambda s: s.model_override(OVERRIDE_AGENT))))
+                       **_models_ctx(cfg, current(), agent))
 
     return app
 

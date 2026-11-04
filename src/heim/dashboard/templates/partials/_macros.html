@@ -86,7 +86,7 @@
 {% macro modelselect() -%}
 {%- if models %}
   <select class="mselect mono" name="model" aria-label="Model for this run">
-    <option value="">default ({{ default_model }})</option>
+    <option value="">default ({{ default_model() }})</option>
     {%- for ref in models %}
     <option value="{{ ref.key }}">{{ ref.model }}{% if ref.provider != 'anthropic' %} · {{ ref.provider }}{% endif %}</option>
     {%- endfor %}
