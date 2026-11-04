@@ -1031,7 +1031,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         for t in cfg.tools:
             n = sum(1 for c in calls if c["tool"] == t)
             statuses[t] = {"state": "healthy" if n else "unknown",
-                           "word": f"{n} call{'' if n == 1 else 's'}" if n else "Idle",
+                           "word": "Used" if n else "Idle",
                            "last": next((c["at"] for c in calls if c["tool"] == t), ""),
                            "fact": f"{n} call{'' if n == 1 else 's'} in the window"}
         return page(request, "activity.html", page_title="activity", window=window,
