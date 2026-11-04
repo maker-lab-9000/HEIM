@@ -114,7 +114,9 @@ queries:
   dir: low
   warn: 99
   crit: 95
-  promql: min by (instance) (hass_sensor_unit_percent{entity=~".+_uptime_1_day"})
+  # k8s lab VMs (cp1, k8s-w1, k8s-w2, the API server) are allowed to be powered off,
+  # so their Uptime Kuma monitors are excluded from this minimum (operator, 2026-11-02).
+  promql: min by (instance) (hass_sensor_unit_percent{entity=~".+_uptime_1_day", entity!~"sensor\\.(k8s|cp[0-9]+)_.+"})
 - qid: ha_unavail
   category: Host
   label: HA unavailable entities

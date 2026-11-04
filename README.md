@@ -36,13 +36,13 @@ Optional (each one adds a capability, and HEIM runs without it):
 
 ## Screenshots
 
-<img src="docs/screenshots/overview.png" alt="The overview in the light theme: infrastructure condition, agent coverage, time since the last sync and tasks for the operator, then the Needs attention table and the Needs you list of approvals" width="900">
+<img src="docs/screenshots/overview-light.png" alt="The overview in the light theme: infrastructure condition, agent coverage, time since the last sync and tasks for the operator, then the Needs attention table and the Needs you list of approvals" width="900">
 
-<img src="docs/screenshots/agents.png" alt="The Agents page: each agent's scope, execution state, last success, tool calls and last 24 runs, the colour key, and the Tooling feedback panel listing each suggestion with its tool, agent and investigation" width="900">
+<img src="docs/screenshots/agents-light.png" alt="The Agents page: each agent's scope, execution state, last success, tool calls and last 24 runs, the colour key, and the Tooling feedback panel listing each suggestion with its tool, agent and investigation" width="900">
 
-<img src="docs/screenshots/investigations.png" alt="The investigations list: id, status, trigger, host, fingerprint, steps, tokens, cost, duration and start time, with runs waiting on the operator flagged" width="900">
+<img src="docs/screenshots/investigations-light.png" alt="The investigations list: id, status, trigger, host, fingerprint, steps, tokens, cost, duration and start time, with runs waiting on the operator flagged" width="900">
 
-<img src="docs/screenshots/costs.png" alt="The Costs page: spend, calls and tokens for the selected window, a breakdown by model and role, and spend by day" width="900">
+<img src="docs/screenshots/costs-light.png" alt="The Costs page: spend, calls and tokens for the selected window, a breakdown by model and role, and spend by day" width="900">
 
 ## The agents
 
