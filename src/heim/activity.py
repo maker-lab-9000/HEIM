@@ -117,7 +117,9 @@ def _beat_node(beat: dict, run: dict | None, invs: list[dict], events: list[dict
                tools_by_inv: dict[int, dict[str, int]]) -> dict:
     key = str(beat.get("agent") or "")
     detail = beat.get("detail") or {}
-    if detail.get("paused"):
+    if not beat.get("finished_at"):
+        lamp, word, summary = "running", "Running", "in progress"
+    elif detail.get("paused"):
         lamp, word = "paused", "Paused"
         until = str(detail.get("until") or "")
         summary = f"paused until {until[11:16]}" if len(until) >= 16 else "paused"
@@ -158,7 +160,9 @@ def _agents_in(node: dict) -> list[dict]:
 
 
 def _quiet(node: dict) -> bool:
-    return node["kind"] == "job" and not node["children"] and node["lamp"] == "healthy"
+    """A run with nothing to say: done fine, or skipped by a pause."""
+    return (node["kind"] == "job" and not node["children"]
+            and node["lamp"] in ("healthy", "paused"))
 
 
 def _collapse(nodes: list[dict]) -> list[dict]:
@@ -167,15 +171,19 @@ def _collapse(nodes: list[dict]) -> list[dict]:
     out: list[dict] = []
     open_groups: dict[str, dict] = {}
     for n in nodes:
+        gkey = (n["key"], n["lamp"])
         if not _quiet(n):
             if n["kind"] == "job":
-                open_groups.pop(n["key"], None)
+                for lamp in ("healthy", "paused"):
+                    open_groups.pop((n["key"], lamp), None)
             out.append(n)
             continue
-        group = open_groups.get(n["key"])
+        other = (n["key"], "paused" if n["lamp"] == "healthy" else "healthy")
+        open_groups.pop(other, None)           # a pause boundary ends the other group
+        group = open_groups.get(gkey)
         if group is None:
             group = {**n, "count": 1, "from": n["at"]}
-            open_groups[n["key"]] = group
+            open_groups[gkey] = group
             out.append(group)
         else:
             group["count"] += 1
@@ -183,7 +191,9 @@ def _collapse(nodes: list[dict]) -> list[dict]:
     for g in out:
         if g.get("count", 1) > 1:
             name = AGENT_LABELS.get(g["key"], g["key"])
-            g["text"] = f"{name} · {g['count']} quiet runs {g['from'][11:16]}–{g['at'][11:16]}"
+            what = "paused · {} runs" if g["lamp"] == "paused" else "{} quiet runs"
+            g["text"] = (f"{name} · {what.format(g['count'])} "
+                         f"{g['from'][11:16]}–{g['at'][11:16]}")
     return out
 
 

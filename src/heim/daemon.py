@@ -125,7 +125,12 @@ async def _announce_pauses(rt: Runtime) -> None:
                 f"({row.get('set_by') or 'dashboard'})" if which == "start"
                 else f"▶ HEIM: {name} resumed")
         try:
-            await rt.notify(text)
+            # Telegram.notify swallows its own errors; send() does not, so a
+            # line Telegram did not take stays owed and is retried next cycle
+            if rt.telegram is not None and not rt.dry_run:
+                await rt.telegram.send(text)
+            else:
+                await rt.notify(text)
             rt.store.mark_pause_announced(job, which)
         except Exception:
             log.exception("announcing the %s of the %s pause failed", which, job)
@@ -149,6 +154,14 @@ def _job_runs(rt: Runtime, started_at: str, *agents: str):
         yield ids
     finally:
         run_ids.reset(token)
+        # a run that never reached its heartbeat (cancelled by a shutdown) is
+        # a failure, never a success left open forever
+        for rid in ids.values():
+            try:
+                rt.store.close_agent_run_if_open(rid, rt.now_iso(),
+                                                 "cancelled before it finished")
+            except Exception:
+                log.exception("closing heartbeat #%s failed", rid)
 
 
 def _exc_text(exc: BaseException) -> str:
@@ -391,6 +404,12 @@ def _backup_body(rt: Runtime, started: str) -> None:
 async def _sweep_and_notify(rt: Runtime) -> int:
     """Crash recovery at startup, and one failure notice per investigation the
     restart cut short (spec 2026-11-04-investigator-openrouter). Never raises."""
+    try:
+        closed = rt.store.close_open_agent_runs(rt.now_iso(), "interrupted by daemon restart")
+        if closed:
+            log.warning("crash recovery: %d open heartbeat(s) closed as failed", closed)
+    except Exception:
+        log.exception("closing open heartbeats failed")
     try:
         cut_short = rt.store.running_investigations()
         swept = rt.store.sweep_interrupted()

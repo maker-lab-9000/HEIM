@@ -252,5 +252,6 @@ def test_off_vs_paused_status(tmp_path):
                             stale_after_s=900, paused=False, scope="")
     beat = {"started_at": T0, "finished_at": T0, "ok": True,
             "detail": {"paused": True, "until": "2026-11-04T11:00:00+01:00"}}
-    st = agents.status_of(live, [beat], T0)
+    # "Paused" follows the pause row in effect, not a skipped run's heartbeat
+    st = agents.status_of(live, [beat], T0, paused_until="2026-11-04T11:00:00+01:00")
     assert (st.state, st.word) == ("paused", "Paused")

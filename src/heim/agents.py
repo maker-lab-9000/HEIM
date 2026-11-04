@@ -245,34 +245,55 @@ def _status(key: str, state: str, *, last_run_at="", last_ok_at="", last_error="
                        last_error_at=last_error_at, current=current)
 
 
-def status_of(spec: AgentSpec, runs: list[dict], now_iso: str) -> AgentStatus:
-    """Status from heartbeat runs, newest first."""
+def _in_progress(run: dict) -> bool:
+    """A heartbeat opened when its job started and not yet closed."""
+    return "finished_at" in run and not run["finished_at"]
+
+
+def status_of(spec: AgentSpec, runs: list[dict], now_iso: str,
+              paused_until: str = "") -> AgentStatus:
+    """Status from heartbeat runs, newest first.
+
+    Spec 2026-11-04-activity-jobs-tools: ``paused_until`` is the job's
+    dashboard pause; while it is in effect the job reads "Paused" whatever its
+    runs say. A heartbeat the daemon wrote for a *skipped* (paused) run proves
+    the scheduler is alive — it counts for staleness — but says nothing about
+    whether the job works, so the state comes from the newest real run. An
+    open heartbeat (no ``finished_at``) is a run in progress.
+    """
     if spec.paused:
-        # switched off in config (spec 2026-11-04-activity-jobs-tools: "Off",
-        # kept apart from a dashboard pause, which ends by itself)
+        # switched off in config ("Off", kept apart from a dashboard pause,
+        # which ends by itself)
         return _status(spec.key, "off")
-    if not runs:
-        return _status(spec.key, "unknown")
-    last = runs[0]
-    last_ok = next((r for r in runs if r.get("ok")), None)
-    last_bad = next((r for r in runs if not r.get("ok")), None)
+    until, now = _parse(paused_until) if paused_until else None, _parse(now_iso)
+    real = [r for r in runs if not (r.get("detail") or {}).get("paused")]
+    last_ok = next((r for r in real if r.get("ok") and not _in_progress(r)), None)
+    last_bad = next((r for r in real if not r.get("ok")), None)
     info = dict(
-        last_run_at=str(last.get("started_at") or ""),
+        last_run_at=str(runs[0].get("started_at") or "") if runs else "",
         last_ok_at=str(last_ok.get("started_at") or "") if last_ok else "",
         last_error=str(last_bad.get("error") or "") if last_bad else "",
         last_error_at=str(last_bad.get("started_at") or "") if last_bad else "",
     )
-    if (last.get("detail") or {}).get("paused"):
+    if until and now and now < until:
         return _status(spec.key, "paused", **info)
+    if not runs:
+        return _status(spec.key, "unknown")
+    last = runs[0]
+    if _in_progress(last):
+        return _status(spec.key, "running", **info)
     age = _age_s(str(last.get("finished_at") or last.get("started_at") or ""), now_iso)
     if spec.stale_after_s is not None and age is not None and age > spec.stale_after_s:
         return _status(spec.key, "stale", **info)
+    if not real:
+        return _status(spec.key, "unknown", **info)
+    last = real[0]
     if not last.get("ok"):
         return _status(spec.key, "failed", **info)
     if (last.get("detail") or {}).get("fallback"):
         # the run worked, but not on the first model it was meant to use
         return _status(spec.key, "degraded", **info)
-    if len(runs) > 1 and not runs[1].get("ok"):
+    if len(real) > 1 and not real[1].get("ok"):
         return _status(spec.key, "degraded", **info)
     return _status(spec.key, "healthy", **info)
 
@@ -310,6 +331,7 @@ def run_strip(runs: list[dict], cadence_s: int | None, now_iso: str, n: int = 24
     when the newest run is older than one cadence."""
     ticks: list[Tick] = []
     prev: dict | None = None
+    runs = [r for r in runs if not _in_progress(r)]      # a run in progress is no tick yet
     for r in reversed(runs):
         if prev is not None and cadence_s:
             gap = _age_s(str(prev.get("started_at")), str(r.get("started_at")))
@@ -336,6 +358,7 @@ def bucket_runs(runs: list[dict], cadence_s: int | None, window_s: int, now_iso:
     of an agent with no cadence. ``at`` is the slot's start. Runs outside the
     window are ignored.
     """
+    runs = [r for r in runs if not _in_progress(r)]      # in progress: no tick yet
     now = _parse(now_iso)
     if now is None or n < 1 or window_s <= 0:
         return []

@@ -51,6 +51,8 @@ def announcements(pauses: dict[str, dict], now_iso: str
     """The pause starts and ends not yet told to the operator, start first."""
     out: list[tuple[str, Literal["start", "end"]]] = []
     for job, row in sorted(pauses.items()):
+        if int(row.get("pending_end") or 0):
+            out.append((job, "end"))           # the previous pause's, still owed
         if not int(row.get("announced_start") or 0):
             out.append((job, "start"))
         if not pause_active(row, now_iso) and not int(row.get("announced_end") or 0):

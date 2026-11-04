@@ -61,6 +61,19 @@ AGENT_RUNS_RETENTION_DAYS = 14
 VACUUM_AFTER_DELETIONS = 500
 
 
+def _before_or_at(a: str, b: str) -> bool:
+    """``a <= b`` as instants (offsets honoured); unreadable reads as False."""
+    try:
+        da, db = datetime.fromisoformat(a), datetime.fromisoformat(b)
+    except (TypeError, ValueError):
+        return False
+    if da.tzinfo is None:
+        da = da.replace(tzinfo=timezone.utc)
+    if db.tzinfo is None:
+        db = db.replace(tzinfo=timezone.utc)
+    return da <= db
+
+
 def _shift_iso(now_iso: str, days: int) -> str:
     """``now_iso`` minus ``days``, rendered for lexical comparison.
 
@@ -235,7 +248,10 @@ CREATE TABLE IF NOT EXISTS job_pauses (
     set_at          TEXT NOT NULL DEFAULT '',
     set_by          TEXT NOT NULL DEFAULT '',
     announced_start INTEGER NOT NULL DEFAULT 0,
-    announced_end   INTEGER NOT NULL DEFAULT 0
+    announced_end   INTEGER NOT NULL DEFAULT 0,
+    -- a pause ended by "Resume now" and replaced before its end was announced:
+    -- the "resumed" line is still owed, ahead of the new pause's start
+    pending_end     INTEGER NOT NULL DEFAULT 0
 );
 
 -- Uptime Kuma source: per-monitor hysteresis/flap state, and the count of
@@ -308,6 +324,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # siblings carry 0, so the column SUMs to the run's real usage.
         ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
         ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "job_pauses": [
+        ("pending_end", "INTEGER NOT NULL DEFAULT 0"),
     ],
     "runs": [
         # §5.6: the analyst completion's usage and cost, same semantics as
@@ -1235,13 +1254,22 @@ class IncidentStore:
 
     def pause_job(self, job: str, until: str, set_by: str = "dashboard",
                   set_at: str = "") -> None:
+        set_at = str(set_at or self._now())
+        old = self._db.execute("SELECT * FROM job_pauses WHERE job = ?", (str(job),)).fetchone()
+        pending = 0
+        if old is not None:
+            pending = int(old["pending_end"] or 0)
+            ended = _before_or_at(str(old["until"] or ""), set_at)
+            if int(old["announced_start"] or 0) and not int(old["announced_end"] or 0) and ended:
+                pending = 1             # its "resumed" line was never sent
         self._db.execute(
-            """INSERT INTO job_pauses (job, until, set_at, set_by, announced_start, announced_end)
-               VALUES (?, ?, ?, ?, 0, 0)
+            """INSERT INTO job_pauses (job, until, set_at, set_by, announced_start,
+                                       announced_end, pending_end)
+               VALUES (?, ?, ?, ?, 0, 0, ?)
                ON CONFLICT(job) DO UPDATE SET until = excluded.until,
                  set_at = excluded.set_at, set_by = excluded.set_by,
-                 announced_start = 0, announced_end = 0""",
-            (str(job), str(until), str(set_at or self._now()), str(set_by)))
+                 announced_start = 0, announced_end = 0, pending_end = excluded.pending_end""",
+            (str(job), str(until), set_at, str(set_by), pending))
         self._db.commit()
 
     def resume_job(self, job: str, now: str) -> bool:
@@ -1255,9 +1283,33 @@ class IncidentStore:
         return {str(r["job"]): dict(r) for r in self._db.execute("SELECT * FROM job_pauses")}
 
     def mark_pause_announced(self, job: str, which: str) -> None:
-        col = {"start": "announced_start", "end": "announced_end"}[which]
-        self._db.execute(f"UPDATE job_pauses SET {col} = 1 WHERE job = ?", (str(job),))
+        """Record a sent line. An owed end (``pending_end``) is the one an
+        "end" settles first — it belongs to the pause before this one."""
+        if which == "end":
+            n = self._db.execute("UPDATE job_pauses SET pending_end = 0 "
+                                 "WHERE job = ? AND pending_end = 1", (str(job),)).rowcount
+            if not n:
+                self._db.execute("UPDATE job_pauses SET announced_end = 1 WHERE job = ?",
+                                 (str(job),))
+        else:
+            self._db.execute("UPDATE job_pauses SET announced_start = 1 WHERE job = ?",
+                             (str(job),))
         self._db.commit()
+
+    def close_open_agent_runs(self, now: str, error: str) -> int:
+        """Crash recovery: a heartbeat still open at daemon start belongs to a
+        run that died with the process — it failed, it did not succeed."""
+        n = self._db.execute("UPDATE agent_runs SET finished_at = ?, ok = 0, error = ? "
+                             "WHERE finished_at = ''", (str(now), str(error))).rowcount
+        self._db.commit()
+        return int(n)
+
+    def close_agent_run_if_open(self, run_id: int, now: str, error: str) -> bool:
+        n = self._db.execute("UPDATE agent_runs SET finished_at = ?, ok = 0, error = ? "
+                             "WHERE id = ? AND finished_at = ''",
+                             (str(now), str(error), int(run_id))).rowcount
+        self._db.commit()
+        return n > 0
 
     @staticmethod
     def _agent_run_row(r) -> dict:

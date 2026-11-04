@@ -813,7 +813,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         window_runs = _window_runs(reader, window_s, now_iso)
         first_seen = _first_seen(reader, window_s)
         agent_rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s, window_runs,
-                                 first_seen)
+                                 first_seen, pauses=_pauses())
         _add_tool_counts(reader, agent_rows, window_s, now_iso)
         needs_you = _needs_you(pending, troubled)
         attention_rows = _attention_rows(open_incidents, troubled, invs,
@@ -864,6 +864,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             version=VERSION,
         )
 
+    def _pauses() -> dict[str, dict]:
+        """The dashboard pauses, so a job's status says Paused while one runs."""
+        try:
+            return reader.read(lambda s: s.job_pauses())
+        except sqlite3.Error:
+            return {}
+
     def _agent_inputs() -> tuple[dict, list[dict], list[dict], str]:
         by_agent = reader.read(lambda s: s.agent_runs_by_agent())
         invs = reader.read(lambda s: s.investigations(limit=60))
@@ -873,7 +880,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     def _detail_ctx(key: str) -> dict:
         """What a job or agent page shows about the runs behind ``key``."""
         by_agent, invs, running, now_iso = _agent_inputs()
-        row = next(r for r in _agent_rows(cfg, by_agent, invs, running, now_iso)
+        row = next(r for r in _agent_rows(cfg, by_agent, invs, running, now_iso,
+                                       pauses=_pauses())
                    if r["key"] == key)
         calls = (reader.read(lambda s: s.tool_calls(TOOL_AGENTS[key], TOOL_HISTORY_LIMIT))
                  if key in TOOL_AGENTS else None)
@@ -899,7 +907,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/jobs", response_class=HTMLResponse)
     async def jobs_page(request: Request):
         by_agent, invs, running, now_iso = _agent_inputs()
-        rows = [r for r in _agent_rows(cfg, by_agent, invs, running, now_iso)
+        rows = [r for r in _agent_rows(cfg, by_agent, invs, running, now_iso,
+                                       pauses=_pauses())
                 if r["key"] in JOB_KEYS]
         rows.sort(key=lambda r: JOB_KEYS.index(r["key"]))
         ctls = _jobs_ctls(rows)
@@ -970,7 +979,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         window, window_s = _window(request)
         rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s,
                            _window_runs(reader, window_s, now_iso),
-                           _first_seen(reader, window_s))
+                           _first_seen(reader, window_s), pauses=_pauses())
         _add_tool_counts(reader, rows, window_s, now_iso)
         by_key = {r["key"]: r for r in rows}
         rows = [{**by_key[hb], "name": name, "href": f"/agents/{pk}"}
@@ -1011,7 +1020,8 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         # the map's lamps: the same statuses the Jobs and Agents pages show
         by_agent, all_invs, running, _now = _agent_inputs()
-        rows = {r["key"]: r for r in _agent_rows(cfg, by_agent, all_invs, running, now_iso)}
+        rows = {r["key"]: r for r in _agent_rows(cfg, by_agent, all_invs, running, now_iso,
+                                                  pauses=_pauses())}
         statuses = {}
         for key, r in rows.items():
             st = r["status"]
@@ -2234,7 +2244,8 @@ def _prompt_ctx(cfg: Config, page_key: str, host: str, reader) -> dict:
 def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
                 running: list[dict], now_iso: str, window_s: int | None = None,
                 window_runs: dict[str, list[dict]] | None = None,
-                first_seen: dict[str, str] | None = None) -> list[dict]:
+                first_seen: dict[str, str] | None = None,
+                pauses: dict[str, dict] | None = None) -> list[dict]:
     """One row per agent, in ``AGENT_KEYS`` order: spec, status and run strip.
 
     The investigator records no heartbeats; its runs are its investigations
@@ -2262,7 +2273,8 @@ def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
                      else run_strip(finished, None, now_iso))
         else:
             runs = by_agent.get(spec.key, [])
-            status = status_of(spec, runs, now_iso)
+            pause = (pauses or {}).get(spec.key) or {}
+            status = status_of(spec, runs, now_iso, paused_until=str(pause.get("until") or ""))
             cadence = None if spec.paused else spec.cadence_s
             strip = (bucket_runs((window_runs or {}).get(spec.key, []), cadence, window_s,
                                  now_iso, first_seen_iso=(first_seen or {}).get(spec.key))
