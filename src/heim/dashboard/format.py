@@ -885,3 +885,21 @@ def evidence_links(finding: dict, investigation: dict | None,
         n = investigation["id"]
         links.append({"label": f"investigation {n}", "href": f"/investigations/{n}"})
     return links
+
+
+def fallback_of(run) -> str:
+    """For a daily run answered by a fallback model: the failed attempts as one
+    line ("anthropic claude-opus-5-5 — usage limits; …"). "" otherwise — a
+    first-try answer, a run from before the chain, or unreadable attempts.
+    """
+    try:
+        attempts = json.loads((run or {}).get("attempts_json") or "[]")
+    except (TypeError, ValueError, AttributeError):
+        return ""
+    if not isinstance(attempts, list) or not attempts or not isinstance(attempts[0], dict):
+        return ""
+    if attempts[0].get("ok"):
+        return ""
+    failed = [a for a in attempts if isinstance(a, dict) and not a.get("ok")]
+    return "; ".join(f"{a.get('provider', '')} {a.get('model', '')} — {a.get('error', '')}"
+                     for a in failed)

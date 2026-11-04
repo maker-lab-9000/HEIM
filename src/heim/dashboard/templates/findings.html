@@ -9,7 +9,7 @@
 {%- for g in groups %}
 <section class="card"{% if g.run %} id="run-{{ g.run.id }}"{% endif %}>
   <h2 class="runline mono">{{ g.source or 'run' }} · {{ g.run_at|day }} {{ g.run_at|clock }}
-    {%- if g.run %} · {{ g.run.model_used or DASH }} · overall {{ m.pill(g.run.overall) }}
+    {%- if g.run %} · {{ g.run.model_used or DASH }}{% if g.run|fallback_of %} <span class="word warn" title="{{ g.run|fallback_of }}">fallback</span>{% endif %} · overall {{ m.pill(g.run.overall) }}
     {%- if g.run.cost %} · {{ g.run.cost|money }}{% endif %}{% endif %}</h2>
   <table class="tbl dense ftbl">
     <thead><tr>

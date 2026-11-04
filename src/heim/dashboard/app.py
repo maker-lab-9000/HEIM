@@ -71,6 +71,7 @@ from heim.agents import (
 )
 from heim.config import Config, load_config
 from heim.costing import cost_of
+from heim.model_chain import OVERRIDE_AGENT, resolve_chain
 from heim.dashboard import format as fmt
 from heim.dashboard.recommendations import collect as collect_recommendations
 from heim.incidents.store import IncidentStore
@@ -168,6 +169,9 @@ _ACTION_HELPERS = (
     "set_recommendation_state",
     # its reversal on the same table: reopening an item drops its mark
     "clear_recommendation_state",
+    # spec 2026-11-04: the daily analyst's model chain override; the daemon
+    # reads it at the start of the next run and nothing else writes it.
+    "set_model_override", "clear_model_override",
 )
 
 
@@ -329,6 +333,64 @@ def _default_model(cfg: Config) -> str:
     return agent.model if agent is not None else ""
 
 
+#: the agent page that carries the Models panel (spec 2026-11-04 §4)
+MODELS_AGENT_KEY = "daily"
+MODELS_SAVED = "Saved. The next daily run uses this order."
+MODELS_RESET = "Reset. The next daily run uses the default order."
+
+
+def _chain_field(fields: dict, allowed: list) -> list[dict]:
+    """The ordered chain a Models form posted: ``slot_1..slot_N`` (one field
+    per slot — repeated keys would collapse), each blank or an allowed key.
+
+    Filled slots must come first, without gaps or repeats, and at least one is
+    needed; anything else is a form the panel never renders, so it is refused.
+    """
+    if not allowed:
+        raise ActionError("No models can be chosen here.",
+                          "settings.analyst_models is empty, so only "
+                          "config/agents/daily_analyst.yaml sets the chain.", 400)
+    by_key = {ref.key: ref for ref in allowed}
+    extra = [k for k in fields if k.startswith("slot_")
+             and k not in {f"slot_{i}" for i in range(1, len(allowed) + 1)}]
+    if extra:
+        raise ActionError(f"{extra[0]} is not a slot on this form.",
+                          f"There are {len(allowed)} slots.", 400)
+    picked = [str(fields.get(f"slot_{i}") or "").strip() for i in range(1, len(allowed) + 1)]
+    while picked and not picked[-1]:
+        picked.pop()
+    if not picked:
+        raise ActionError("Pick at least one model.",
+                          "Reset to default returns to the YAML order.", 400)
+    if "" in picked:
+        raise ActionError("Fill the slots in order, without gaps.",
+                          "Slot 1 is tried first; leave only the last slots empty.", 400)
+    if len(set(picked)) != len(picked):
+        raise ActionError("Each model can appear once.", "Remove the repeated model.", 400)
+    unknown = [k for k in picked if k not in by_key]
+    if unknown:
+        raise ActionError(f"{unknown[0]} is not a model this deployment offers.",
+                          "Pick one of the models in settings.analyst_models.", 400)
+    return [by_key[k].model_dump() for k in picked]
+
+
+def _models_ctx(cfg, override: dict | None) -> dict:
+    """What the Models panel shows: the chain in effect, where it came from,
+    and the form's slots preselected from it."""
+    allowed = list(cfg.settings.analyst_models)
+    eff = resolve_chain(cfg.analyst.chain if cfg.analyst else [], override, allowed)
+    prices = cfg.settings.model_prices or {}
+    chain = [{"model": r.model, "provider": r.provider, "priced": r.model in prices}
+             for r in eff.chain]
+    keys = [r.key for r in eff.chain]
+    slots = [keys[i] if i < len(keys) and keys[i] in {a.key for a in allowed} else ""
+             for i in range(len(allowed))]
+    options = [{"key": a.key, "label": f"{a.model} ({a.provider})",
+                "priced": a.model in prices} for a in allowed]
+    return {"models": {"chain": chain, "source": eff.source, "stale": eff.stale,
+                       "updated_at": eff.updated_at, "options": options, "slots": slots}}
+
+
 def _model_field(fields: dict, allowed: list[str]) -> str:
     """The model an investigate form chose (§5.1). "" = the configured default.
 
@@ -423,6 +485,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     # money needs the deployment's currency, so it is bound here too (§5.6)
     currency = cfg.settings.currency
     templates.env.filters["money"] = lambda v: fmt.money(v, currency)
+    templates.env.filters["fallback_of"] = fmt.fallback_of
     # §5.1: the investigate forms need the offered models everywhere they are
     # rendered — page and htmx fragment alike — so they are globals rather than
     # a context key every action response would have to remember to pass.
@@ -763,7 +826,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                     if key == "backup" else "",
                     runs=(_investigator_runs(_own_runs(invs)) if key == "investigator"
                           else _agent_run_table(by_agent.get(key, []), row["cadence_s"], now_iso)),
-                    has_invs=key == "investigator")
+                    has_invs=key == "investigator",
+                    **(_models_ctx(cfg, reader.read(lambda s: s.model_override(OVERRIDE_AGENT)))
+                       if key == MODELS_AGENT_KEY else {}))
 
     @app.get("/investigations", response_class=HTMLResponse)
     async def investigations(request: Request, status: str = "", host: str = "",
@@ -1124,6 +1189,25 @@ def create_app(config: Config | None = None) -> FastAPI:
             flash = {"text": MARKED_DONE if state == "done" else DISMISSED}
         return respond(request, fields, "partials/_rec_acts.html", flash,
                        r={"key": key, "state": "" if state == "open" else state})
+
+    @app.post("/actions/models")
+    async def action_models(request: Request):
+        """Set or reset the daily analyst's model chain (spec 2026-11-04 §4).
+
+        Validated against ``settings.analyst_models`` only; the daemon picks
+        the new order up at the next daily run, with no restart.
+        """
+        fields = await _fields(request)
+        action = _choice_field(fields, "action", ("set", "reset"))
+        if action == "set":
+            chain = _chain_field(fields, list(cfg.settings.analyst_models))
+            reader.write(lambda s: s.set_model_override(OVERRIDE_AGENT, chain))
+            flash = {"text": MODELS_SAVED}
+        else:
+            reader.write(lambda s: s.clear_model_override(OVERRIDE_AGENT))
+            flash = {"text": MODELS_RESET}
+        return respond(request, fields, "partials/_models_panel.html", flash,
+                       **_models_ctx(cfg, reader.read(lambda s: s.model_override(OVERRIDE_AGENT))))
 
     return app
 
