@@ -131,3 +131,126 @@ def test_incident_changes_filters_statuses():
         {"fingerprint": "h|q|n", "event": "new", "severity": "warning", "host": "h"},
         {"fingerprint": "x", "event": "escalated", "severity": "warning", "host": "h"},
         {"fingerprint": "y", "event": "resolved", "severity": "warning", "host": "h"}]
+
+
+# ================================================== the daemon obeys (Task 3)
+
+from test_tracking import rt  # noqa: E402,F401  (fixture)
+
+from heim import agents, daemon  # noqa: E402
+
+
+class Clock:
+    def __init__(self, rt_, monkeypatch, iso):
+        self.iso = iso
+        monkeypatch.setattr(rt_, "now_iso", lambda: self.iso)
+
+
+def _quiet(rt_, monkeypatch):
+    notes, pings, polls = [], [], []
+
+    async def notify(text):
+        notes.append(text)
+
+    async def ping(url):
+        pings.append(url)
+
+    async def fake_poll(r, dispatch_concurrently=True, skip=frozenset()):
+        polls.append(set(skip))
+        return {}
+
+    monkeypatch.setattr(rt_, "notify", notify)
+    monkeypatch.setattr(daemon.deadman, "ping", ping)
+    monkeypatch.setattr(daemon, "run_poll", fake_poll)
+    return notes, pings, polls
+
+
+async def test_paused_half_skips_work_but_ping_still_runs(rt, monkeypatch):  # noqa: F811
+    Clock(rt, monkeypatch, T0)
+    notes, pings, polls = _quiet(rt, monkeypatch)
+    rt.store.pause_job("alert_poller", "2026-11-04T11:00:00+01:00", set_at=T0)
+    await daemon._poll_job(rt)
+    assert polls == [{"alert_poller"}] and len(pings) == 1
+    beat = rt.store.agent_runs("alert_poller")[0]
+    assert beat["ok"] and beat["detail"]["paused"] is True
+    assert beat["detail"]["until"] == "2026-11-04T11:00:00+01:00"
+
+
+async def test_poller_skip_really_skips_the_half(rt, monkeypatch):  # noqa: F811
+    from heim.pipelines import poller
+    called = []
+
+    async def alerts(*a, **k):
+        called.append("alerts")
+        return {}
+    monkeypatch.setattr(poller, "_run_alerts", alerts)
+    await poller.run_poll(rt, dispatch_concurrently=False, skip=frozenset({"alert_poller"}))
+    assert called == []
+    await poller.run_poll(rt, dispatch_concurrently=False)
+    assert called == ["alerts"]
+
+
+async def test_paused_daily_does_not_run(rt, monkeypatch):  # noqa: F811
+    Clock(rt, monkeypatch, T0)
+    ran = []
+
+    async def fake_daily(r, dispatch_concurrently=True):
+        ran.append(1)
+        return {}
+    monkeypatch.setattr(daemon, "run_daily", fake_daily)
+    rt.store.pause_job("daily", "2026-11-04T11:00:00+01:00", set_at=T0)
+    await daemon._daily_job(rt)
+    assert ran == [] and rt.store.agent_runs("daily")[0]["detail"]["paused"] is True
+
+
+async def test_announce_start_then_end_once(rt, monkeypatch):  # noqa: F811
+    clock = Clock(rt, monkeypatch, T0)
+    notes, _pings, _polls = _quiet(rt, monkeypatch)
+    rt.store.pause_job("backup", "2026-11-04T11:00:00+01:00", set_at=T0)
+    await daemon._poll_job(rt)
+    assert notes == ["⏸ HEIM: Backup verifier paused until 11:00 (dashboard)"]
+    await daemon._poll_job(rt)
+    assert len(notes) == 1
+    clock.iso = "2026-11-04T11:05:00+01:00"
+    await daemon._poll_job(rt)
+    assert notes[-1] == "▶ HEIM: Backup verifier resumed" and len(notes) == 2
+    await daemon._poll_job(rt)
+    assert len(notes) == 2
+
+
+async def test_resume_now_and_repause(rt, monkeypatch):  # noqa: F811
+    clock = Clock(rt, monkeypatch, T0)
+    notes, _p, _q = _quiet(rt, monkeypatch)
+    rt.store.pause_job("uptime", "2026-11-04T14:00:00+01:00", set_at=T0)
+    await daemon._poll_job(rt)
+    clock.iso = "2026-11-04T10:10:00+01:00"
+    rt.store.resume_job("uptime", clock.iso)
+    await daemon._poll_job(rt)
+    rt.store.pause_job("uptime", "2026-11-04T11:10:00+01:00", set_at=clock.iso)
+    await daemon._poll_job(rt)
+    assert [n.split(" ")[0] for n in notes] == ["⏸", "▶", "⏸"]
+
+
+async def test_an_announce_failure_never_breaks_the_poll(rt, monkeypatch):  # noqa: F811
+    Clock(rt, monkeypatch, T0)
+    _notes, pings, _polls = _quiet(rt, monkeypatch)
+
+    async def broken(text):
+        raise RuntimeError("telegram down")
+    monkeypatch.setattr(rt, "notify", broken)
+    rt.store.pause_job("backup", "2026-11-04T11:00:00+01:00", set_at=T0)
+    await daemon._poll_job(rt)
+    assert len(pings) == 1
+
+
+def test_off_vs_paused_status(tmp_path):
+    spec = agents.AgentSpec(key="uptime", name="Uptime monitor", cadence_s=300,
+                            stale_after_s=900, paused=True, scope="")
+    st = agents.status_of(spec, [], T0)
+    assert (st.state, st.word) == ("off", "Off")
+    live = agents.AgentSpec(key="uptime", name="Uptime monitor", cadence_s=300,
+                            stale_after_s=900, paused=False, scope="")
+    beat = {"started_at": T0, "finished_at": T0, "ok": True,
+            "detail": {"paused": True, "until": "2026-11-04T11:00:00+01:00"}}
+    st = agents.status_of(live, [beat], T0)
+    assert (st.state, st.word) == ("paused", "Paused")

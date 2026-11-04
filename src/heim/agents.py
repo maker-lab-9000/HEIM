@@ -98,7 +98,8 @@ _STATES = {
     "healthy": "Healthy",
     "degraded": "Degraded",
     "failed": "Failed",
-    "paused": "Paused",
+    "paused": "Paused",          # paused from the dashboard, until a time
+    "off": "Off",                # switched off in config
     "unknown": "No data yet",
     "stale": "Overdue",
     "running": "Running",
@@ -247,7 +248,9 @@ def _status(key: str, state: str, *, last_run_at="", last_ok_at="", last_error="
 def status_of(spec: AgentSpec, runs: list[dict], now_iso: str) -> AgentStatus:
     """Status from heartbeat runs, newest first."""
     if spec.paused:
-        return _status(spec.key, "paused")
+        # switched off in config (spec 2026-11-04-activity-jobs-tools: "Off",
+        # kept apart from a dashboard pause, which ends by itself)
+        return _status(spec.key, "off")
     if not runs:
         return _status(spec.key, "unknown")
     last = runs[0]
@@ -259,6 +262,8 @@ def status_of(spec: AgentSpec, runs: list[dict], now_iso: str) -> AgentStatus:
         last_error=str(last_bad.get("error") or "") if last_bad else "",
         last_error_at=str(last_bad.get("started_at") or "") if last_bad else "",
     )
+    if (last.get("detail") or {}).get("paused"):
+        return _status(spec.key, "paused", **info)
     age = _age_s(str(last.get("finished_at") or last.get("started_at") or ""), now_iso)
     if spec.stale_after_s is not None and age is not None and age > spec.stale_after_s:
         return _status(spec.key, "stale", **info)

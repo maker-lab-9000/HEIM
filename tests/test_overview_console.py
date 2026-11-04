@@ -180,17 +180,17 @@ def test_no_heartbeats_reads_unknown_not_normal(tmp_path, monkeypatch):
     assert 'class="lamp lg"' in infra and "Unknown" in infra
     assert "Normal" not in html
     cover = cards["Agent coverage"]
-    # Uptime Kuma is off: a paused agent leaves the count and is named apart
+    # Uptime Kuma is off in config: it leaves the count and is named apart
     assert '<span class="big num">0 / 6</span>' in cover
     assert _section(cover, 'class="discs"', "</div>").count('class="open"') == 6
     assert "Not reporting: Alert poller" in cover and "Uptime monitor" not in cover.split("·")[0]
-    assert "1 paused: Uptime monitor" in cover
+    assert "1 off: Uptime monitor" in cover
     obs = cards["Observations"]
     assert "No sync yet" in obs and "Prometheus" in obs and "Uptime Kuma" not in obs
     rows = _rows(_agents(html))
     assert len(rows) == 7
-    paused = [r for r in rows if "Uptime monitor" in r]
-    assert "Paused" in paused[0]
+    off = [r for r in rows if "Uptime monitor" in r]
+    assert "Off" in off[0]
     assert sum("No data yet" in r for r in rows) == 6
 
 
@@ -202,7 +202,7 @@ def test_paused_agent_leaves_the_coverage_count(tmp_path, monkeypatch):
         cover = _cards(c.get("/").text)["Agent coverage"]
     assert '<span class="big num">6 / 6</span>' in cover
     assert 'aria-label="6 agents, 6 reporting"' in cover
-    assert "Every agent reporting · 1 paused: Uptime monitor" in cover
+    assert "Every agent reporting · 1 off: Uptime monitor" in cover
     assert "Not reporting" not in cover
 
 

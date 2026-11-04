@@ -821,6 +821,7 @@ _STATUS = {
     # agents (heim.agents) and their runs, and the daemon's heartbeat
     "idle": ("✓", "idle", "ok"),
     "paused": ("○", "paused", "other"),
+    "off": ("○", "off", "other"),
     "stale": ("⚠", "overdue", "warn"),
     "overdue": ("⚠", "overdue", "warn"),
     "missed": ("⚠", "missed", "warn"),

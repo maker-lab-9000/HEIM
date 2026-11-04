@@ -2087,13 +2087,16 @@ def _agents_panel(rows: list[dict], wanted: str) -> dict:
 
 def _coverage(rows: list[dict]) -> dict:
     """The Agent coverage card: one disc per expected agent, hollow when it
-    is silent. A paused agent is switched off, not silent: it leaves the
-    count and is named on its own foot line."""
-    expected = [r for r in rows if r["status"].state != "paused"]
+    is silent. An agent switched off in config ("off") or paused from the
+    dashboard ("paused") is set aside, not silent: it leaves the count and is
+    named on its own foot line."""
+    aside = ("paused", "off")
+    expected = [r for r in rows if r["status"].state not in aside]
     discs = [r["status"].state not in SILENT_STATES for r in expected]
     return {"reporting": sum(discs), "total": len(expected), "discs": discs,
             "missing": [r["name"] for r, on in zip(expected, discs) if not on],
-            "paused": [r["name"] for r in rows if r["status"].state == "paused"]}
+            "paused": [r["name"] for r in rows if r["status"].state == "paused"],
+            "off": [r["name"] for r in rows if r["status"].state == "off"]}
 
 
 def _observations(rows: list[dict], by_agent: dict[str, list[dict]], now_iso: str,
@@ -2106,7 +2109,7 @@ def _observations(rows: list[dict], by_agent: dict[str, list[dict]], now_iso: st
     window the ruler is that window's slots, red where any poll failed or
     was missed."""
     polling = [r["key"] for r in rows
-               if r["key"] in POLL_AGENTS and r["status"].state != "paused"]
+               if r["key"] in POLL_AGENTS and r["status"].state not in ("paused", "off")]
     cycles: dict[str, bool] = {}
     for key in polling:
         for run in (window_runs if window_s else by_agent).get(key, []):
