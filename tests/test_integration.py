@@ -63,7 +63,7 @@ def test_config_loads_and_routes(cfg):
     assert set(cfg.hosts) == {"ubuntu-server", "homelab", "home-assistant", "heim"}
     assert set(cfg.tools) == {"ssh_diagnostic", "prometheus_query", "discover_metrics", "loki_query", "ha_api", "proxmox_api"}
     assert "investigator" in cfg.agents
-    assert cfg.analyst is not None and cfg.analyst.fallback is not None
+    assert cfg.analyst is not None and len(cfg.analyst.chain) >= 2
     r = cfg.routing()
     # 'heim' is a guest with NO ssh block, so it must not appear here — that is
     # what keeps the pipeline from planning shell commands it cannot run.

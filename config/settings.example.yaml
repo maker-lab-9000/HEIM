@@ -87,6 +87,8 @@ model_prices:
   claude-sonnet-4-6:   { input:  3.00, output: 15.00 }
   claude-haiku-4-5:    { input:  1.00, output:  5.00 }
   # OpenRouter models: put the provider's rate here; free tiers are 0.
+  # (OpenRouter /api/v1/models, checked 2026-11-04.)
+  deepseek/deepseek-v4.1-flash-1017: { input: 0.15, output: 0.60 }
   google/gemma-4-31b-it:free: { input: 0, output: 0 }
 currency: USD                 # "$" for USD, otherwise the bare code ("EUR 0.42")
 
@@ -102,6 +104,18 @@ store_transcripts: false
 # chosen model is still priced. Example:
 #   investigator_models: [claude-opus-5-5, claude-haiku-4-5]
 investigator_models: []
+
+# The models the dashboard may put in the daily analyst's chain, on
+# /agents/daily (pick and order them; "Reset to default" returns to
+# config/agents/daily_analyst.yaml). Empty = the chain is shown read-only.
+# Give each entry a `model_prices` row, or its runs render "—" for cost.
+# Example:
+#   analyst_models:
+#     - {provider: anthropic, model: claude-opus-5-5}
+#     - {provider: openrouter, model: deepseek/deepseek-v4.1-flash-1017}
+#     # a local llama.cpp server (OpenAI-compatible API):
+#     # - {provider: openai_compat, model: local, base_url: "${HEIM_LLAMACPP_URL:-}"}
+analyst_models: []
 
 # Maps Prometheus `instance` label address prefixes to host names — used by the
 # alert poller and the daily aggregation to attribute metrics/alerts to hosts.
