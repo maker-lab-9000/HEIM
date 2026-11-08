@@ -46,9 +46,21 @@ def chunk_text(text: str, limit: int = CHUNK_LIMIT) -> list[str]:
     return out if out else [text[:limit]]
 
 
+#: seconds Telegram holds a getUpdates call open waiting for a tap (long poll)
+LONG_POLL_S = 50
+#: HTTP read timeout for that call: the long poll plus slack for the network
+LONG_POLL_HTTP_S = LONG_POLL_S + 15
+#: getUpdates failure backoff: 5 s doubling to at most 60 s
+RETRY_FIRST_S, RETRY_MAX_S = 5, 60
+
+
 class Telegram:
-    def __init__(self, token: str, chat_id: int):
+    def __init__(self, token: str, chat_id: int,
+                 transport: httpx.AsyncBaseTransport | None = None):
         self._base = f"https://api.telegram.org/bot{token}"
+        self._transport = transport
+        self._client: httpx.AsyncClient | None = None
+        self._client_loop: asyncio.AbstractEventLoop | None = None
         self.chat_id = chat_id
         self._offset: int | None = None
         self._pending: dict[str, asyncio.Future] = {}
@@ -60,13 +72,25 @@ class Telegram:
         #: the buttons. Left None, approvals are in-memory only.
         self.on_decision: Callable[[str, bool], bool] | None = None
 
-    async def _api(self, method: str, *, timeout: float = 35.0, **params) -> dict | list:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.post(f"{self._base}/{method}", json=params)
-            data = r.json()
-            if not data.get("ok"):
-                raise RuntimeError(f"telegram {method} failed: {data}")
-            return data["result"]
+    def _http(self) -> httpx.AsyncClient:
+        """One client per event loop, kept open: the connection (and its DNS
+        lookup and TLS handshake) is reused instead of redone per call."""
+        loop = asyncio.get_running_loop()
+        if self._client is None or self._client_loop is not loop:
+            self._client = httpx.AsyncClient(timeout=35.0, transport=self._transport)
+            self._client_loop = loop
+        return self._client
+
+    async def _api(self, method: str, *, http_timeout: float = 35.0,
+                   **params) -> dict | list:
+        """Call a Bot API method. ``params`` go to Telegram as-is — including
+        ``timeout``, which for getUpdates is Telegram's long-poll length;
+        ``http_timeout`` is ours."""
+        r = await self._http().post(f"{self._base}/{method}", json=params, timeout=http_timeout)
+        data = r.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"telegram {method} failed: {data}")
+        return data["result"]
 
     # ------------------------------------------------------------- sending
 
@@ -172,18 +196,22 @@ class Telegram:
         Runs while something is pending, or forever once ``start_consumer``
         has been called.
         """
+        retry_s = RETRY_FIRST_S
         while self._persistent or self._pending:
             try:
                 updates = await self._api(
                     "getUpdates",
-                    timeout=40.0,
+                    http_timeout=LONG_POLL_HTTP_S,
+                    timeout=LONG_POLL_S,
                     offset=self._offset,
                     allowed_updates=["callback_query"],
                 )
             except Exception:
-                log.exception("telegram getUpdates failed; retrying in 5s")
-                await asyncio.sleep(5)
+                log.exception("telegram getUpdates failed; retrying in %ss", retry_s)
+                await asyncio.sleep(retry_s)
+                retry_s = min(retry_s * 2, RETRY_MAX_S)
                 continue
+            retry_s = RETRY_FIRST_S
             for u in updates:
                 self._offset = u["update_id"] + 1
                 cq = u.get("callback_query")
