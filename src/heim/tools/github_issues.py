@@ -21,6 +21,14 @@ LIST_LIMIT = 20
 LAST_COMMENTS = 5
 COMMENT_CHARS = 1000
 STATES = ("open", "closed")
+#: whose words reach the agent: an issue on a public repo can be commented on
+#: by anyone, and a comment is text the model reads — so only the repo's own
+#: people (and HEIM's poster, which is one of them) are passed through
+TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+
+def _trusted(item: dict) -> bool:
+    return str(item.get("author_association") or "").upper() in TRUSTED
 
 
 class GitHubIssuesTool(Tool):
@@ -50,10 +58,14 @@ class GitHubIssuesTool(Tool):
             if number not in (None, ""):
                 issue = await self._get(c, f"/issues/{int(number)}")
                 comments = await self._get(c, f"/issues/{int(number)}/comments", per_page=100)
-                out = {**_summary(issue), "body": str(issue.get("body") or "")[:COMMENT_CHARS],
+                kept = [cm for cm in comments if _trusted(cm)]
+                hidden = len(comments) - len(kept) + (0 if _trusted(issue) else 1)
+                out = {**_summary(issue),
+                       "body": str(issue.get("body") or "")[:COMMENT_CHARS] if _trusted(issue) else "",
                        "comments": [{"at": cm.get("created_at"),
                                      "body": str(cm.get("body") or "")[:COMMENT_CHARS]}
-                                    for cm in comments[-LAST_COMMENTS:]]}
+                                    for cm in kept[-LAST_COMMENTS:]],
+                       "hidden": hidden}
                 await self.ctx.emit(f"🐙 GitHub issue #{int(number)}")
             else:
                 labels = LABEL + (f",tool:{tool}" if tool else "")

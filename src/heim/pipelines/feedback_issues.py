@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 import os
 
+import httpx
+
 from heim.channels.github import GitHub
 from heim.feedback_issues import (DRAIN_BATCH, MAX_ATTEMPTS, identity_values, issue_labels,
                                   issue_title, scrub)
@@ -18,12 +20,22 @@ from heim.runtime import Runtime
 
 log = logging.getLogger(__name__)
 ERROR_CLIP = 300
+#: a stored issue that answers with one of these is gone: open a new one
+GONE = frozenset({301, 404, 410})
 
 
 async def _post(rt: Runtime, gh: GitHub, row: dict, secrets: list[str]) -> int:
     target, body = row["target"], scrub(row["body"], secrets)
     known = rt.store.feedback_issue(target)
-    issue = await gh.get_issue(known["number"]) if known else None
+    issue = None
+    if known:
+        try:
+            issue = await gh.get_issue(known["number"])
+        except httpx.HTTPStatusError as exc:
+            # deleted (404/410) or transferred / repo renamed (301): treat it
+            # as no issue at all, or the target would fail for good
+            if exc.response.status_code not in GONE:
+                raise
     if issue is not None and issue.get("state") == "open":
         await gh.comment(issue["number"], body)
         issue = {**issue, "comments": int(issue.get("comments") or 0) + 1}
@@ -48,6 +60,14 @@ async def drain_outbox(rt: Runtime, client: GitHub | None = None) -> dict:
     for row in rows:
         try:
             number = await _post(rt, gh, row, secrets)
+        except httpx.TransportError as exc:
+            # the network, not this row: no attempt is spent (a reboot's DNS
+            # race or a GitHub outage must not use up the rows' tries), and the
+            # rest of the batch would only wait out the same timeout
+            failed += 1
+            log.warning("GitHub unreachable, feedback stays queued: %s", exc)
+            rt.store.note_feedback_error(row["id"], f"{type(exc).__name__}: {exc}"[:ERROR_CLIP])
+            break
         except Exception as exc:
             failed += 1
             log.warning("posting tooling feedback #%s to GitHub failed: %s", row["id"], exc)

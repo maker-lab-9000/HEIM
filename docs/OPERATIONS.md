@@ -53,9 +53,12 @@ runs on.
 
 Set `HEIM_GITHUB_REPO`, `HEIM_GITHUB_READ_TOKEN` and `HEIM_GITHUB_TOKEN` in `.env` (see
 `docs/CONFIGURATION.md`) and restart. Suggestions are posted after each poll cycle, a few
-at a time. A failure (bad token, GitHub down) is one warning log line and a "Retrying"
-row on the tool's page; after 10 tries the row reads "Failed" and stays until retention
-prunes it. To turn it off, empty `HEIM_GITHUB_REPO`: suggestions are still stored and
+at a time. When GitHub can't be reached (outage, DNS after a reboot) the rows wait
+without using up tries. When GitHub refuses a post (bad token, missing permission) it
+is one warning log line and a "Retrying" row on the tool's page; after 10 refusals the
+row reads "Failed". A deleted or transferred issue is replaced by a new one. The agents
+only see issue text written by the repo's owner, members and collaborators, but a
+private repo is still the safer choice, because the issues describe your homelab. To turn it off, empty `HEIM_GITHUB_REPO`: suggestions are still stored and
 shown on the Tools page, just not queued.
 
 ## Pausing a job for maintenance

@@ -129,3 +129,39 @@ async def test_poll_job_drains_after_the_ping(live, monkeypatch):
     monkeypatch.setattr(daemon, "drain_outbox", drain)
     await daemon._poll_job(live)
     assert order == ["ping", "drain"]
+
+
+@pytest.mark.parametrize("status", [404, 410, 301])
+async def test_gone_issue_opens_a_new_one(live, status):
+    gh = FakeGitHub()
+    live.store.set_feedback_issue("loki_query", 7, "open", "u", 0, T0)
+    live.store.queue_feedback("loki_query", 1, "add X", created_at=T0)
+    real = gh.handler
+
+    def handler(req):
+        if req.method == "GET":
+            gh.requests.append((req.method, req.url.path, None))
+            return httpx.Response(status, json={"message": "gone"})
+        return real(req)
+
+    client = GitHub("o/r", "w", transport=httpx.MockTransport(handler))
+    assert await fi.drain_outbox(live, client) == {"posted": 1, "failed": 0}
+    assert live.store.feedback_issue("loki_query")["number"] == 41
+
+
+async def test_network_outage_neither_counts_nor_continues(live):
+    for i in range(3):
+        live.store.queue_feedback("loki_query", i, f"s{i}", created_at=T0)
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        raise httpx.ConnectError("Name or service not known")
+
+    client = GitHub("o/r", "w", transport=httpx.MockTransport(handler))
+    for _ in range(20):
+        assert await fi.drain_outbox(live, client) == {"posted": 0, "failed": 1}
+    assert len(calls) == 20                                  # one try per cycle, batch stops
+    rows = live.store.outbox_rows()
+    assert len(rows) == 3 and all(r["attempts"] == 0 for r in rows)
+    assert "ConnectError" in rows[0]["error"]

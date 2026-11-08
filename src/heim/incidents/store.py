@@ -1622,6 +1622,13 @@ class IncidentStore:
             (str(error), int(row_id)))
         self._db.commit()
 
+    def note_feedback_error(self, row_id: int, error: str) -> None:
+        """Record why a row could not be sent without spending an attempt
+        (the network was down, not the row at fault)."""
+        self._db.execute("UPDATE feedback_outbox SET error = ? WHERE id = ?",
+                         (str(error), int(row_id)))
+        self._db.commit()
+
     def feedback_issue(self, target: str) -> dict | None:
         row = self._db.execute("SELECT * FROM feedback_issues WHERE target = ?",
                                (str(target),)).fetchone()
