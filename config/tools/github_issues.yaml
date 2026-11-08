@@ -1,0 +1,23 @@
+name: github_issues
+module: heim.tools.github_issues:GitHubIssuesTool
+description: >-
+  Read-only look at the HEIM repository's tooling-feedback issues on GitHub — one open
+  issue per tool, where earlier runs' '## Tooling feedback' suggestions are collected as
+  comments. Call it at most once or twice, just before writing your own feedback, to see
+  what is already filed. With 'tool' it lists that tool's feedback issues; with 'number'
+  it returns one issue with its latest comments. state=closed shows what was already
+  fixed. It cannot write anything: HEIM files your feedback lines itself.
+args:
+  tool:
+    type: string
+    description: Tool name to filter by, e.g. loki_query, or security_audit for the audit's own feedback.
+  state:
+    type: string
+    enum: [open, closed]
+    description: Issue state (default open).
+  number:
+    type: integer
+    description: Read this one issue and its latest comments instead of listing.
+required: []
+options:
+  clip_bytes: 8192

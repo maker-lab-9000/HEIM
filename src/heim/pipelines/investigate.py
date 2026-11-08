@@ -210,6 +210,7 @@ def build_system_prompt(rt: Runtime, jenv: Environment, host: str, *,
             facts=facts,
             privileges=privileges or "(no SSH privileges configured)",
             soft_step_budget=agent.soft_step_budget,
+            github_issues=cfg.settings.github.can_read,
         ),
         source=source,
     )

@@ -100,5 +100,9 @@ def load_tools(names: list[str], config: Config, ctx: ToolContext) -> list[Tool]
             raise KeyError(f"tool '{name}' not found in config/tools/")
         mod_name, _, cls_name = cfg.module.partition(":")
         cls = getattr(importlib.import_module(mod_name), cls_name)
+        # a tool whose backend is not configured is simply not offered
+        available = getattr(cls, "available", None)
+        if available is not None and not available(config):
+            continue
         tools.append(cls(cfg, ctx))
     return tools

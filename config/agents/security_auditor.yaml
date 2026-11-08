@@ -9,6 +9,7 @@ tools:
   - discover_metrics
   - loki_query
   - proxmox_api
+  - github_issues   # offered only when settings.github + HEIM_GITHUB_READ_TOKEN are set
 # Deliberately NO ssh_diagnostic: the model never chooses a shell command in
 # the audit. Every SSH read is a fixed, guard-validated line in
 # config/security/checks.yaml executed by HEIM code, not by the model.

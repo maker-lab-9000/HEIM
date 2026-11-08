@@ -79,6 +79,7 @@ def build_audit_system_prompt(rt: Runtime, jenv: Environment) -> str:
     )
     return _expanded_template(jenv, agent.prompt).render(
         now=rt.now_iso(), facts=facts, soft_step_budget=agent.soft_step_budget,
+        github_issues=cfg.settings.github.can_read,
     )
 
 

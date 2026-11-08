@@ -2141,6 +2141,9 @@ ACTIVITY_LIMIT = 200
 #: what keeps each tool read-only, in one sentence (spec 2026-11-04-activity-
 #: jobs-tools). A test pins one entry per configured tool.
 TOOL_GUARDS = {
+    "github_issues": "GET-only GitHub issues API, fixed to the configured repo's "
+                     "heim-feedback issues (the model passes no URL), with a token that "
+                     "can only read issues. HEIM itself posts the feedback.",
     "ssh_diagnostic": "Read-only SSH: every command passes guards/command_guard.py "
                       "(default-deny for destructive, network and interpreter binaries, "
                       "no shell escapes or redirection), and runs as a dedicated user "
