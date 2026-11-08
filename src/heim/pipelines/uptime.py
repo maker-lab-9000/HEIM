@@ -39,7 +39,8 @@ from heim.incidents.uptime_logic import (
     parse_metrics,
     unmapped_monitors,
 )
-from heim.pipelines.investigate import dispatch_all, extend_pending_investigation
+from heim.pipelines.investigate import (dispatch_all, extend_pending_investigation,
+                                       record_incident_changes)
 from heim.runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -218,6 +219,7 @@ async def run_uptime(rt: Runtime, run_at: str, *, dispatch_concurrently: bool) -
             await rt.notify(m)
         except Exception:
             log.exception("uptime: notify failed")
+    record_incident_changes(rt, "uptime", run_at, dec.loki_events)
     try:
         if dec.loki_events:
             await rt.emit_loki(dec.loki_events)

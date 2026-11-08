@@ -49,11 +49,11 @@ def test_counts_follow_the_window(tmp_path, monkeypatch):
 
 def test_non_tool_agents_show_a_dash(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch, _seed)
-    panel = _agents(client.get("/agents").text)
+    panel = _agents(client.get("/").text)       # the overview keeps all seven rows
     for name in ("Alert poller", "Threshold watch", "Uptime monitor", "Daily analysis",
                  "Backup verifier"):
         assert 'title="this agent does not call tools">—</td>' in _row(
-            client.get("/agents").text, name)
+            client.get("/").text, name)
     assert panel.count('title="this agent does not call tools"') == 5
 
 
@@ -80,11 +80,12 @@ def test_history_is_capped_at_fifty_newest_first(tmp_path, monkeypatch):
     assert "20" in stats[1] and "ssh_diagnostic" in stats[1]
 
 
-def test_non_tool_agent_page_says_so(tmp_path, monkeypatch):
+def test_job_pages_carry_no_tool_history(tmp_path, monkeypatch):
+    # since 2026-11-04 a job page has no tool section at all; the agents do
     client = _client(tmp_path, monkeypatch, _seed)
-    assert "This agent does not call tools." in client.get("/agents/alert_poller").text
+    assert 'id="h-tools"' not in client.get("/jobs/alert_poller").text
     assert "This agent does not call tools." not in client.get("/agents/investigator").text
-    assert "Tool history" in client.get("/agents/security").text
+    assert "Tool history" in client.get("/agents/auditor").text
 
 
 def test_short_args():

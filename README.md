@@ -48,8 +48,10 @@ Optional (each one adds a capability, and HEIM runs without it):
 
 ## The agents
 
-HEIM runs seven agents. Each one has a single job, and the dashboard's Agents page shows
-whether each one is reporting.
+HEIM runs seven parts, each with a single job. Three call a model (the daily analyst,
+the investigator and the security auditor) and live on the dashboard's Agents page; the
+others are scheduled jobs on the Jobs page, where each can be paused for maintenance. The
+Activity page shows what ran, when, and what it started.
 
 - **Alert poller**: every 5 minutes, reads the firing Prometheus alerts and opens,
   escalates or resolves incidents.

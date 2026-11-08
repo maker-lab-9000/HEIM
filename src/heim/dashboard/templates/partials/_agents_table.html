@@ -10,7 +10,9 @@
 {% import "partials/_macros.html" as m %}
 <section class="panel agents" id="agents" aria-labelledby="h-ag">
   <div class="panel-head">
-    <h2 id="h-ag">Agents</h2>
+    {#- on the overview the table holds jobs and agents alike (spec 2026-11-04-
+        activity-jobs-tools); the /agents page shows only the three agents -#}
+    <h2 id="h-ag">{{ 'Jobs and agents' if base_href == '/' else 'Agents' }}</h2>
     {%- set items = [] %}
     {%- for key, label in (('all', 'All'), ('running', 'Running'), ('attention', 'Attention')) %}
     {%- set qs = qs_with(agents=None if key == 'all' else key) %}
@@ -59,6 +61,12 @@
         <a class="more" href="{{ g.href }}">{{ g.label }}<span class="arr" aria-hidden="true">→</span></a></li>
       {%- endfor %}
     </ul>
+    {%- endif %}
+    {%- if base_href == '/' %}
+    <p class="ink3">Open <a href="/jobs">Jobs</a> (pause one for maintenance) ·
+      <a href="/agents">Agents</a> (models and prompts) · <a href="/tools">Tools</a>
+      (definitions and feedback) ·
+      <a class="more" href="/activity">See what ran<span class="arr" aria-hidden="true">→</span></a></p>
     {%- endif %}
     <p class="key"><span><i></i>Success</span><span><i class="fail"></i>Failed</span><span><i class="miss"></i>Missed</span></p>
     {{ m.legend() }}

@@ -18,15 +18,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from heim.agents import BACKUP_TIME
+from heim.agents import AGENT_LABELS, BACKUP_TIME
+from heim.jobs import announcements, pause_active
 from heim.channels import deadman
 from heim.llm import AnalystChainFailed
+from heim.runctx import current_run, run_ids, set_runs
 from heim.pipelines.daily import run_daily
 from heim.pipelines.investigate import (model_label, notify_investigation_failed,
                                        rearm_pending_approvals, run_investigation)
@@ -65,11 +69,99 @@ BACKUP_STEM = "heim-%Y%m%d"
 
 def _record_agent_run(rt: Runtime, agent: str, started_at: str, ok: bool,
                       error: str = "", detail: dict | None = None) -> None:
-    """Heartbeat for the dashboard. A side channel: never breaks a job."""
+    """Heartbeat for the dashboard. A side channel: never breaks a job.
+
+    Closes the row :func:`_job_runs` opened for ``agent`` in this run, when
+    there is one (spec 2026-11-04-activity-jobs-tools); otherwise writes a
+    finished row, as before.
+    """
     try:
-        rt.store.record_agent_run(agent, started_at, rt.now_iso(), ok, error, detail)
+        run_id = current_run(agent)
+        if run_id:
+            rt.store.finish_agent_run(run_id, rt.now_iso(), ok, error, detail)
+        else:
+            rt.store.record_agent_run(agent, started_at, rt.now_iso(), ok, error, detail)
     except Exception:
         log.exception("recording the %s heartbeat failed", agent)
+
+
+def _active_pause(rt: Runtime, job: str) -> dict | None:
+    """The dashboard pause in effect for ``job`` now, if any (never raises)."""
+    try:
+        row = rt.store.job_pauses().get(job)
+    except Exception:
+        log.exception("reading the pause of %s failed — running it", job)
+        return None
+    return row if pause_active(row, rt.now_iso()) else None
+
+
+def _record_paused(rt: Runtime, job: str, started: str, row: dict) -> None:
+    """A skipped run is still a heartbeat, so a paused job never reads Overdue."""
+    _record_agent_run(rt, job, started, True, detail={"paused": True,
+                                                     "until": str(row.get("until") or "")})
+
+
+def _hhmm(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso).strftime("%H:%M")
+    except (TypeError, ValueError):
+        return iso
+
+
+async def _announce_pauses(rt: Runtime) -> None:
+    """Tell Telegram each pause start and end once (spec 2026-11-04-activity-
+    jobs-tools). Run from every poll cycle, so a line arrives within one poll
+    interval; one not sent is retried on the next cycle. Never raises."""
+    try:
+        pauses = rt.store.job_pauses()
+        due = announcements(pauses, rt.now_iso())
+    except Exception:
+        log.exception("reading job pauses failed")
+        return
+    for job, which in due:
+        row = pauses.get(job) or {}
+        name = AGENT_LABELS.get(job, job)
+        text = (f"⏸ HEIM: {name} paused until {_hhmm(str(row.get('until') or ''))} "
+                f"({row.get('set_by') or 'dashboard'})" if which == "start"
+                else f"▶ HEIM: {name} resumed")
+        try:
+            # Telegram.notify swallows its own errors; send() does not, so a
+            # line Telegram did not take stays owed and is retried next cycle
+            if rt.telegram is not None and not rt.dry_run:
+                await rt.telegram.send(text)
+            else:
+                await rt.notify(text)
+            rt.store.mark_pause_announced(job, which)
+        except Exception:
+            log.exception("announcing the %s of the %s pause failed", which, job)
+            return
+
+
+@contextmanager
+def _job_runs(rt: Runtime, started_at: str, *agents: str):
+    """Open one heartbeat per job when it starts and make the ids the run
+    context, so everything the run creates records it (spec 2026-11-04-
+    activity-jobs-tools). An id that cannot be opened is simply absent; the
+    job then records its heartbeat at the end, as before."""
+    ids: dict[str, int] = {}
+    for agent in agents:
+        try:
+            ids[agent] = rt.store.start_agent_run(agent, started_at)
+        except Exception:
+            log.exception("opening the %s heartbeat failed", agent)
+    token = set_runs(ids)
+    try:
+        yield ids
+    finally:
+        run_ids.reset(token)
+        # a run that never reached its heartbeat (cancelled by a shutdown) is
+        # a failure, never a success left open forever
+        for rid in ids.values():
+            try:
+                rt.store.close_agent_run_if_open(rid, rt.now_iso(),
+                                                 "cancelled before it finished")
+            except Exception:
+                log.exception("closing heartbeat #%s failed", rid)
 
 
 def _exc_text(exc: BaseException) -> str:
@@ -88,6 +180,14 @@ def _query_count(rt: Runtime) -> int | None:
 
 async def _daily_job(rt: Runtime) -> None:
     started = rt.now_iso()
+    with _job_runs(rt, started, "daily"):
+        if (row := _active_pause(rt, "daily")) is not None:
+            _record_paused(rt, "daily", started, row)
+            return
+        await _daily_job_body(rt, started)
+
+
+async def _daily_job_body(rt: Runtime, started: str) -> None:
     try:
         result = await run_daily(rt, dispatch_concurrently=True)
         log.info("daily run complete: %s", result)
@@ -104,8 +204,10 @@ async def _daily_job(rt: Runtime) -> None:
         await rt.notify(f"🔴 HEIM daily run FAILED: {type(exc).__name__}: {exc}")
 
 
-def _record_poll_agents(rt: Runtime, started: str, summary: dict) -> None:
-    """One heartbeat per poll half; a half that is switched off gets none."""
+def _record_poll_agents(rt: Runtime, started: str, summary: dict,
+                        skip: frozenset[str] = frozenset()) -> None:
+    """One heartbeat per poll half; a half that is switched off gets none, and
+    a paused one (``skip``) already has its "paused" heartbeat."""
     cfg = rt.config
     aborted = summary.get("aborted")
     # poller_logic aborts with "prometheus unreachable"; anything else (the
@@ -116,9 +218,11 @@ def _record_poll_agents(rt: Runtime, started: str, summary: dict) -> None:
         reason = "Prometheus unreachable"
     else:
         reason = str(aborted)
-    _record_agent_run(rt, "alert_poller", started, not aborted, reason,
-                      {"hosts": len(cfg.hosts), **({"aborted": str(aborted)} if aborted else {})})
-    if cfg.settings.threshold_detection:
+    if "alert_poller" not in skip:
+        _record_agent_run(rt, "alert_poller", started, not aborted, reason,
+                          {"hosts": len(cfg.hosts),
+                           **({"aborted": str(aborted)} if aborted else {})})
+    if cfg.settings.threshold_detection and "thresholds" not in skip:
         if summary.get("threshold_failed"):
             err = "threshold half raised"
         elif summary.get("threshold_samples") == 0:
@@ -128,7 +232,7 @@ def _record_poll_agents(rt: Runtime, started: str, summary: dict) -> None:
         _record_agent_run(rt, "thresholds", started, not err, err,
                           {"queries": _query_count(rt),
                            "samples": summary.get("threshold_samples")})
-    if cfg.settings.uptime_kuma.url:
+    if cfg.settings.uptime_kuma.url and "uptime" not in skip:
         if summary.get("uptime_failed"):
             err = "uptime half raised"
         elif summary.get("uptime_unreachable"):
@@ -140,18 +244,37 @@ def _record_poll_agents(rt: Runtime, started: str, summary: dict) -> None:
                            "report_only": summary.get("uptime_report_only")})
 
 
+def _poll_halves(rt: Runtime) -> list[str]:
+    """The poll halves that run at all (a half switched off in config has none)."""
+    st = rt.config.settings
+    return (["alert_poller"] + (["thresholds"] if st.threshold_detection else [])
+            + (["uptime"] if st.uptime_kuma.url else []))
+
+
 async def _poll_job(rt: Runtime) -> None:
     started = rt.now_iso()
-    try:
-        summary = await run_poll(rt, dispatch_concurrently=True)
-    except Exception as exc:
-        log.exception("alert poll failed")  # next poll retries in a few minutes
-        _record_agent_run(rt, "alert_poller", started, False, _exc_text(exc))
-        return
-    try:
-        _record_poll_agents(rt, started, summary or {})
-    except Exception:  # a heartbeat must never cost the dead-man ping
-        log.exception("recording the poll heartbeats failed")
+    await _announce_pauses(rt)
+    halves = _poll_halves(rt)
+    paused = {h: row for h in halves if (row := _active_pause(rt, h)) is not None}
+    with _job_runs(rt, started, *halves) as opened:
+        for half, row in paused.items():
+            _record_paused(rt, half, started, row)
+        try:
+            # ``skip`` only when something is paused: the call is otherwise
+            # exactly what it was
+            summary = await (run_poll(rt, dispatch_concurrently=True, skip=frozenset(paused))
+                             if paused else run_poll(rt, dispatch_concurrently=True))
+        except Exception as exc:
+            log.exception("alert poll failed")  # next poll retries in a few minutes
+            # every half opened for this cycle is closed, none left "running"
+            for half in opened:
+                if half not in paused:
+                    _record_agent_run(rt, half, started, False, _exc_text(exc))
+            return
+        try:
+            _record_poll_agents(rt, started, summary or {}, skip=frozenset(paused))
+        except Exception:  # a heartbeat must never cost the dead-man ping
+            log.exception("recording the poll heartbeats failed")
     # Every *completed* cycle pings, including the no-op ones: the switch
     # asserts "the scheduler is alive", not "an incident happened". A poll
     # that raised deliberately stays silent — that is the outage to report.
@@ -163,6 +286,14 @@ async def _security_audit_job(rt: Runtime) -> None:
     raise into the scheduler; a failure is one Telegram line. Success is
     silent here because the pipeline delivers its own digest."""
     started = rt.now_iso()
+    with _job_runs(rt, started, "security"):
+        if (row := _active_pause(rt, "security")) is not None:
+            _record_paused(rt, "security", started, row)
+            return
+        await _security_audit_body(rt, started)
+
+
+async def _security_audit_body(rt: Runtime, started: str) -> None:
     try:
         result = await run_security_audit(rt)
         log.info("security audit complete: %s", result)
@@ -243,6 +374,14 @@ async def _backup_job(rt: Runtime) -> None:
     store keeps growing), while ``backup_file`` still names the file written.
     """
     started = rt.now_iso()
+    with _job_runs(rt, started, "backup"):
+        if (row := _active_pause(rt, "backup")) is not None:
+            _record_paused(rt, "backup", started, row)
+            return
+        _backup_body(rt, started)
+
+
+def _backup_body(rt: Runtime, started: str) -> None:
     try:
         dest = run_backup(rt)
     except Exception as exc:
@@ -265,6 +404,12 @@ async def _backup_job(rt: Runtime) -> None:
 async def _sweep_and_notify(rt: Runtime) -> int:
     """Crash recovery at startup, and one failure notice per investigation the
     restart cut short (spec 2026-11-04-investigator-openrouter). Never raises."""
+    try:
+        closed = rt.store.close_open_agent_runs(rt.now_iso(), "interrupted by daemon restart")
+        if closed:
+            log.warning("crash recovery: %d open heartbeat(s) closed as failed", closed)
+    except Exception:
+        log.exception("closing open heartbeats failed")
     try:
         cut_short = rt.store.running_investigations()
         swept = rt.store.sweep_interrupted()

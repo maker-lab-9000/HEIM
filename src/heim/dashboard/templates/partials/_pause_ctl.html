@@ -1,0 +1,29 @@
+{#- a job's pause control (spec 2026-11-04-activity-jobs-tools): Off when the
+    job is switched off in config, "Paused until HH:MM · Resume now" while a
+    dashboard pause runs, else a length and Pause. Every pause ends by itself.
+    Re-rendered alone after an htmx POST. -#}
+{% import "partials/_macros.html" as m with context %}
+<div class="pausectl" id="pause-{{ j.key }}">
+  {%- if j.off %}
+  <span class="ink3">Off · switched off in config</span>
+  {%- elif j.pause %}
+  <span class="ihost">{{ m.lamp('paused'|lamp) }}Paused until {{ j.until }}</span>
+  <form class="act" method="post" action="/actions/resume" hx-post="/actions/resume"
+        hx-target="closest .pausectl" hx-swap="outerHTML">
+    <input type="hidden" name="job" value="{{ j.key }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    <button class="btn" type="submit">Resume now</button>
+  </form>
+  {%- else %}
+  <form class="act" method="post" action="/actions/pause" hx-post="/actions/pause"
+        hx-target="closest .pausectl" hx-swap="outerHTML">
+    <input type="hidden" name="job" value="{{ j.key }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    <select class="mselect mono" name="for" aria-label="Pause {{ j.name }} for">
+      {%- for c in choices %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+    </select>
+    <button class="btn" type="submit">Pause</button>
+  </form>
+  {%- endif %}
+  {% include "partials/_flash.html" %}
+</div>

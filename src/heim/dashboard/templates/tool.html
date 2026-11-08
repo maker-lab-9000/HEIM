@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m %}
+{% block content %}
+<nav class="crumb" aria-label="Breadcrumb">
+  <a href="/tools">tools</a> <span aria-hidden="true">/</span>
+  <span>{{ tool.name }}</span>
+</nav>
+
+<section class="card head" aria-labelledby="h-tool">
+  <h2 class="ihost" id="h-tool">{{ m.tool(tool.name) }}</h2>
+  <table class="tbl dense">
+    <tbody>
+      <tr><th scope="row">What it does</th><td>{{ tool.description }}</td></tr>
+      <tr><th scope="row">Guard</th><td>{{ guard or DASH }}</td></tr>
+      <tr><th scope="row">Used by</th>
+        <td>{% for key, name in users %}<a href="/agents/{{ key }}">{{ name }}</a>{% if not loop.last %}, {% endif %}{% else %}{{ DASH }}{% endfor %}</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="panel" aria-labelledby="h-def">
+  <div class="panel-head">
+    <h2 id="h-def">Definition</h2>
+    <span class="label mono">config/tools/{{ tool.name }}.yaml · as the model sees it</span>
+  </div>
+  <pre class="mono prompt">{{ definition }}</pre>
+</section>
+
+<section class="panel" aria-labelledby="h-calls">
+  <div class="panel-head"><h2 id="h-calls">Recent calls</h2></div>
+  {%- if history %}
+  <div class="inc"><table class="tbl dense">
+    <thead><tr>
+      <th scope="col">Time</th><th scope="col">Agent</th><th scope="col">Args</th>
+      <th scope="col" class="num">Duration</th><th scope="col">Blocked</th><th scope="col">Investigation</th>
+    </tr></thead>
+    <tbody>
+      {%- for c in history %}
+      <tr>
+        <td>{{ m.when(c.at) }}</td>
+        <td>{{ c.agent or DASH }}</td>
+        <td class="mono" title="{{ c.full }}">{{ c.short }}</td>
+        <td class="num">{{ c.duration_ms }} ms</td>
+        <td>{% if c.blocked %}<span class="word crit">blocked</span>{% else %}{{ DASH }}{% endif %}</td>
+        <td><a href="/investigations/{{ c.investigation_id }}">#{{ c.investigation_id }}</a></td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table></div>
+  {%- else %}
+  <p class="empty">No calls recorded yet.</p>
+  {%- endif %}
+</section>
+
+<section class="panel" aria-labelledby="h-fb">
+  <div class="panel-head">
+    <h2 id="h-fb">Tooling feedback</h2>
+    <span class="label">{{ feedback|length }} suggestion{{ '' if feedback|length == 1 else 's' }}</span>
+  </div>
+  {%- if feedback %}
+  <div class="inc"><table class="tbl dense">
+    <thead><tr>
+      <th scope="col" class="label">Suggestion</th><th scope="col" class="label">Agent</th>
+      <th scope="col" class="label">Investigation</th><th scope="col" class="label">Age</th>
+    </tr></thead>
+    <tbody>
+      {%- for f in feedback %}
+      <tr>
+        <td>{{ f.suggestion }}</td>
+        <td>{% if f.agent_key %}<a href="/agents/{{ f.agent_key }}">{{ f.agent_label }}</a>{% else %}{{ f.agent_label or DASH }}{% endif %}</td>
+        <td><a href="/investigations/{{ f.investigation_id }}">investigation {{ f.investigation_id }}</a></td>
+        <td>{{ m.when(f.created_at) }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table></div>
+  {%- else %}
+  <p class="empty">No feedback on this tool yet.</p>
+  {%- endif %}
+</section>
+{% endblock %}

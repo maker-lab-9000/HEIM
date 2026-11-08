@@ -24,4 +24,7 @@
   {%- else %}
   <p class="empty">Nothing needs you. The agents are handling it.</p>
   {%- endfor %}
+  {%- if needs_you_more %}
+  <p class="over"><a class="more" href="{{ needs_you_more }}">all ({{ needs_you_total }})<span class="arr" aria-hidden="true">→</span></a></p>
+  {%- endif %}
 </section>

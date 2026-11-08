@@ -137,9 +137,11 @@ def test_old_ok_run_is_overdue():
     assert agents.status_of(spec(), [run(900)], NOW_ISO).state == "healthy"
 
 
-def test_paused_spec_is_paused_whatever_the_runs():
+def test_paused_spec_is_off_whatever_the_runs():
+    # switched off in config reads "Off" since 2026-11-04 (activity-jobs-tools);
+    # "Paused" now means a dashboard pause that ends by itself
     st = agents.status_of(spec(paused=True), [run(60, ok=False, error="x")], NOW_ISO)
-    assert (st.state, st.word, lamp(st.state)) == ("paused", "Paused", "")
+    assert (st.state, st.word, lamp(st.state)) == ("off", "Off", "")
 
 
 def test_run_strip_marks_misses_and_the_open_slot():

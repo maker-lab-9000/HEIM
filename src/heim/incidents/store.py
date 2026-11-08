@@ -61,6 +61,19 @@ AGENT_RUNS_RETENTION_DAYS = 14
 VACUUM_AFTER_DELETIONS = 500
 
 
+def _before_or_at(a: str, b: str) -> bool:
+    """``a <= b`` as instants (offsets honoured); unreadable reads as False."""
+    try:
+        da, db = datetime.fromisoformat(a), datetime.fromisoformat(b)
+    except (TypeError, ValueError):
+        return False
+    if da.tzinfo is None:
+        da = da.replace(tzinfo=timezone.utc)
+    if db.tzinfo is None:
+        db = db.replace(tzinfo=timezone.utc)
+    return da <= db
+
+
 def _shift_iso(now_iso: str, days: int) -> str:
     """``now_iso`` minus ``days``, rendered for lexical comparison.
 
@@ -212,6 +225,35 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     detail_json TEXT NOT NULL DEFAULT '{}'
 );
 
+-- Every incident change a run caused — open, escalate, resolve — keyed by the
+-- heartbeat (agent_runs.id) of the run that caused it (spec 2026-11-04-
+-- activity-jobs-tools). An incident row is reopened and escalated many times,
+-- so one parent column on it could not say which run did what.
+CREATE TABLE IF NOT EXISTS incident_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id      INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL,
+    event       TEXT NOT NULL,
+    severity    TEXT NOT NULL DEFAULT '',
+    host        TEXT NOT NULL DEFAULT '',
+    at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS incident_events_run ON incident_events(run_id);
+
+-- A job paused from the dashboard until a time (spec 2026-11-04-activity-jobs-
+-- tools). The daemon obeys it and announces its start and end once each.
+CREATE TABLE IF NOT EXISTS job_pauses (
+    job             TEXT PRIMARY KEY,
+    until           TEXT NOT NULL,
+    set_at          TEXT NOT NULL DEFAULT '',
+    set_by          TEXT NOT NULL DEFAULT '',
+    announced_start INTEGER NOT NULL DEFAULT 0,
+    announced_end   INTEGER NOT NULL DEFAULT 0,
+    -- a pause ended by "Resume now" and replaced before its end was announced:
+    -- the "resumed" line is still owed, ahead of the new pause's start
+    pending_end     INTEGER NOT NULL DEFAULT 0
+);
+
 -- Uptime Kuma source: per-monitor hysteresis/flap state, and the count of
 -- consecutive failed polls of Kuma itself. Persisted so a daemon restart
 -- cannot reset a recovery streak, a flap window or the unreachable counter.
@@ -272,6 +314,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # the operator's current choice (0) — re-arm reads both.
         ("provider", "TEXT NOT NULL DEFAULT 'anthropic'"),
         ("model_pinned", "INTEGER NOT NULL DEFAULT 0"),
+        # spec 2026-11-04-activity-jobs-tools: the heartbeat of the job run
+        # that dispatched it (0 = manual, dashboard, retry, or older row)
+        ("parent_run_id", "INTEGER NOT NULL DEFAULT 0"),
     ],
     "investigation_steps": [
         # §5.6: usage of the assistant turn that requested this call. When one
@@ -279,6 +324,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # siblings carry 0, so the column SUMs to the run's real usage.
         ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
         ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "job_pauses": [
+        ("pending_end", "INTEGER NOT NULL DEFAULT 0"),
     ],
     "runs": [
         # §5.6: the analyst completion's usage and cost, same semantics as
@@ -294,6 +342,10 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # Every model the analyst chain tried, in order, with ok/error/usage
         # (spec 2026-11-04). A failed first attempt marks a fallback run.
         ("attempts_json", "TEXT NOT NULL DEFAULT '[]'"),
+        # spec 2026-11-04-activity-jobs-tools: the heartbeat of the job that
+        # made this run, and what the analyst was given (its user message)
+        ("agent_run_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("input_text", "TEXT NOT NULL DEFAULT ''"),
     ],
 }
 
@@ -309,11 +361,12 @@ _INVESTIGATION_COLS = [
     "started_at", "finished_at", "input_tokens", "output_tokens", "n_steps",
     "brief_md", "report_md", "incomplete_reason", "outcome", "retry_of",
     "approval_decision", "findings_json", "cost", "transcript_json", "replay_of",
-    "provider", "model_pinned",
+    "provider", "model_pinned", "parent_run_id",
 ]
 
 _RUN_COLS = ["run_at", "kind", "overall", "model_used", "duration_s", "counts_json",
-             "input_tokens", "output_tokens", "cost", "headline", "summary", "attempts_json"]
+             "input_tokens", "output_tokens", "cost", "headline", "summary", "attempts_json",
+             "agent_run_id", "input_text"]
 
 _FINDING_FIELDS = ["host", "metric", "severity", "trend", "summary", "detail", "recommendation"]
 
@@ -728,6 +781,19 @@ class IncidentStore:
                  "duration_ms": int(r["duration_ms"] or 0), "at": str(r["at"] or ""),
                  "agent_name": str(r["agent_name"] or "")}
                 for r in self._db.execute(sql, params).fetchall()]
+
+    def tools_by_investigation(self, inv_ids: list[int]) -> dict[int, dict[str, int]]:
+        """``investigation id -> {tool: calls}`` (spec 2026-11-04-activity-jobs-tools)."""
+        ids = [int(i) for i in inv_ids or [] if int(i)]
+        if not ids:
+            return {}
+        out: dict[int, dict[str, int]] = {}
+        for r in self._db.execute(
+                f"SELECT investigation_id AS i, tool, COUNT(*) AS n FROM investigation_steps "
+                f"WHERE investigation_id IN ({','.join('?' * len(ids))}) "
+                f"GROUP BY investigation_id, tool", ids):
+            out.setdefault(int(r["i"]), {})[str(r["tool"])] = int(r["n"])
+        return out
 
     def tool_call_counts(self, agent_names: list[str], since: str | None = None) -> dict:
         """``{"calls": n, "blocked": n}`` over the same rows ``tool_calls``
@@ -1147,13 +1213,112 @@ class IncidentStore:
         self._db.commit()
         return int(cur.lastrowid or 0)
 
+    def start_agent_run(self, agent: str, started_at: str) -> int:
+        """Open a heartbeat when a job starts; its id links what the run creates."""
+        return self.record_agent_run(agent, started_at, "", True)
+
+    def finish_agent_run(self, run_id: int, finished_at: str, ok: bool, error: str = "",
+                         detail: dict | None = None) -> None:
+        self._db.execute(
+            "UPDATE agent_runs SET finished_at = ?, ok = ?, error = ?, detail_json = ? "
+            "WHERE id = ?",
+            (str(finished_at), 1 if ok else 0, str(error or ""),
+             json.dumps(detail or {}, ensure_ascii=False, default=str), int(run_id)))
+        self._db.commit()
+
+    # ------------------------------------------- incident events (activity)
+
+    def add_incident_events(self, run_id: int, at: str, events: list[dict]) -> int:
+        rows = [(int(run_id), str(e.get("fingerprint") or ""), str(e.get("event") or ""),
+                 str(e.get("severity") or ""), str(e.get("host") or ""), str(at))
+                for e in events or [] if e.get("fingerprint") and e.get("event")]
+        if rows:
+            self._db.executemany(
+                "INSERT INTO incident_events (run_id, fingerprint, event, severity, host, at) "
+                "VALUES (?, ?, ?, ?, ?, ?)", rows)
+            self._db.commit()
+        return len(rows)
+
+    def incident_events_for(self, run_ids: list[int]) -> dict[int, list[dict]]:
+        ids = [int(i) for i in run_ids or [] if int(i)]
+        if not ids:
+            return {}
+        out: dict[int, list[dict]] = {}
+        for r in self._db.execute(
+                f"SELECT * FROM incident_events WHERE run_id IN ({','.join('?' * len(ids))}) "
+                "ORDER BY id", ids):
+            out.setdefault(int(r["run_id"]), []).append(dict(r))
+        return out
+
+    # ------------------------------------------------- job pauses (activity)
+
+    def pause_job(self, job: str, until: str, set_by: str = "dashboard",
+                  set_at: str = "") -> None:
+        set_at = str(set_at or self._now())
+        old = self._db.execute("SELECT * FROM job_pauses WHERE job = ?", (str(job),)).fetchone()
+        pending = 0
+        if old is not None:
+            pending = int(old["pending_end"] or 0)
+            ended = _before_or_at(str(old["until"] or ""), set_at)
+            if int(old["announced_start"] or 0) and not int(old["announced_end"] or 0) and ended:
+                pending = 1             # its "resumed" line was never sent
+        self._db.execute(
+            """INSERT INTO job_pauses (job, until, set_at, set_by, announced_start,
+                                       announced_end, pending_end)
+               VALUES (?, ?, ?, ?, 0, 0, ?)
+               ON CONFLICT(job) DO UPDATE SET until = excluded.until,
+                 set_at = excluded.set_at, set_by = excluded.set_by,
+                 announced_start = 0, announced_end = 0, pending_end = excluded.pending_end""",
+            (str(job), str(until), set_at, str(set_by), pending))
+        self._db.commit()
+
+    def resume_job(self, job: str, now: str) -> bool:
+        """End a pause now; the row stays so the daemon can announce the end."""
+        n = self._db.execute("UPDATE job_pauses SET until = ? WHERE job = ?",
+                             (str(now), str(job))).rowcount
+        self._db.commit()
+        return n > 0
+
+    def job_pauses(self) -> dict[str, dict]:
+        return {str(r["job"]): dict(r) for r in self._db.execute("SELECT * FROM job_pauses")}
+
+    def mark_pause_announced(self, job: str, which: str) -> None:
+        """Record a sent line. An owed end (``pending_end``) is the one an
+        "end" settles first — it belongs to the pause before this one."""
+        if which == "end":
+            n = self._db.execute("UPDATE job_pauses SET pending_end = 0 "
+                                 "WHERE job = ? AND pending_end = 1", (str(job),)).rowcount
+            if not n:
+                self._db.execute("UPDATE job_pauses SET announced_end = 1 WHERE job = ?",
+                                 (str(job),))
+        else:
+            self._db.execute("UPDATE job_pauses SET announced_start = 1 WHERE job = ?",
+                             (str(job),))
+        self._db.commit()
+
+    def close_open_agent_runs(self, now: str, error: str) -> int:
+        """Crash recovery: a heartbeat still open at daemon start belongs to a
+        run that died with the process — it failed, it did not succeed."""
+        n = self._db.execute("UPDATE agent_runs SET finished_at = ?, ok = 0, error = ? "
+                             "WHERE finished_at = ''", (str(now), str(error))).rowcount
+        self._db.commit()
+        return int(n)
+
+    def close_agent_run_if_open(self, run_id: int, now: str, error: str) -> bool:
+        n = self._db.execute("UPDATE agent_runs SET finished_at = ?, ok = 0, error = ? "
+                             "WHERE id = ? AND finished_at = ''",
+                             (str(now), str(error), int(run_id))).rowcount
+        self._db.commit()
+        return n > 0
+
     @staticmethod
     def _agent_run_row(r) -> dict:
         try:
             detail = json.loads(r["detail_json"] or "{}")
         except (TypeError, ValueError):
             detail = {}
-        return {"agent": str(r["agent"]), "started_at": str(r["started_at"] or ""),
+        return {"id": int(r["id"]), "agent": str(r["agent"]),
+                "started_at": str(r["started_at"] or ""),
                 "finished_at": str(r["finished_at"] or ""), "ok": bool(r["ok"]),
                 "error": str(r["error"] or ""),
                 "detail": detail if isinstance(detail, dict) else {}}
@@ -1354,6 +1519,11 @@ class IncidentStore:
         # ``retention_days`` (even "keep forever" must not grow this table).
         _delete("agent_runs", "started_at != '' AND started_at < ?",
                 (_shift_iso(now_iso, AGENT_RUNS_RETENTION_DAYS),))
+        # what the runs caused lives as long as the runs; a pause whose end
+        # was announced is spent
+        _delete("incident_events", "at != '' AND at < ?",
+                (_shift_iso(now_iso, AGENT_RUNS_RETENTION_DAYS),))
+        _delete("job_pauses", "announced_end = 1", ())
 
         days = int(retention_days or 0)
         if days <= 0:

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% import "partials/_macros.html" as m %}
+{% block switch %}{% include "partials/_window_switch.html" %}{% endblock %}
+{%- macro tree(nodes) -%}
+<ol class="tl">
+  {%- for n in nodes %}
+  <li class="tl-{{ n.kind }}">
+    <span class="tl-row">
+      {%- if n.kind != 'tool' %}<time class="mono ink3" datetime="{{ n.at }}" title="{{ n.at }}">{{ n.at[11:16] }}</time>
+      <span class="label">{{ n.kind }}</span>
+      <span class="ihost">{{ m.lamp(n.lamp|lamp) }}{{ n.word }}</span>{% endif %}
+      <a href="{{ n.href }}">{{ n.text }}</a>
+    </span>
+    {%- set tools = n.children|selectattr('kind', 'equalto', 'tool')|list %}
+    {%- set rest = n.children|rejectattr('kind', 'equalto', 'tool')|list %}
+    {%- if rest %}{{ tree(rest) }}{% endif %}
+    {%- if tools %}
+    <details><summary class="ink3">tool calls</summary>{{ tree(tools) }}</details>
+    {%- endif %}
+  </li>
+  {%- endfor %}
+</ol>
+{%- endmacro %}
+{% block content %}
+{#- what ran, when, and what it started (spec 2026-11-04-activity-jobs-tools).
+    The map is the legend: its edges are config; a box filters the timeline
+    below, and the box in effect clears it. -#}
+<section class="panel" aria-labelledby="h-map">
+  <div class="panel-head">
+    <h2 id="h-map">How it is wired</h2>
+    <span class="label">jobs start agents · agents call tools</span>
+  </div>
+  <div class="amap">
+    {%- for col, boxes in (('Jobs', amap.jobs), ('Agents', amap.agents), ('Tools', amap.tools)) %}
+    <div class="amap-col">
+      <p class="label">{{ col }}</p>
+      {%- for b in boxes %}
+      <a class="amap-box{% if part == b.key %} on{% endif %}"
+         href="/activity{% if part != b.key %}?{{ qs_with(part=b.key) }}{% elif qs_with(part=None) %}?{{ qs_with(part=None) }}{% endif %}"
+         {% if part == b.key %}aria-current="true"{% endif %}>
+        <span class="ihost">{{ m.lamp(b.state|lamp) }}{{ b.name }}</span>
+        <span class="ink3 mono">{{ b.word }}{% if b.fact %} · {{ b.fact }}{% endif %}</span>
+        {%- if b.feeds %}<span class="ink3">→ {{ b.feeds|join(', ') }}</span>{% endif %}
+      </a>
+      {%- endfor %}
+    </div>
+    {%- endfor %}
+  </div>
+</section>
+
+<section class="panel" aria-labelledby="h-timeline">
+  <div class="panel-head">
+    <h2 id="h-timeline">What ran</h2>
+    {{ m.seg([
+      {'href': '?' ~ qs_with(kind=None), 'label': 'All', 'on': kind == 'all'},
+      {'href': '?' ~ qs_with(kind='jobs'), 'label': 'Jobs', 'on': kind == 'jobs'},
+      {'href': '?' ~ qs_with(kind='agents'), 'label': 'Agents', 'on': kind == 'agents'},
+      {'href': '?' ~ qs_with(kind='triggered'), 'label': 'Triggered something', 'on': kind == 'triggered'},
+    ], 'Filter activity') }}
+  </div>
+  {%- if part %}<p class="ink3">Showing only what involves <b class="mono">{{ part }}</b> · <a href="/activity?{{ qs_with(part=None) }}">show everything</a></p>{% endif %}
+  {%- if nodes %}
+  {{ tree(nodes) }}
+  {%- if capped %}<p class="ink3">Showing the newest {{ nodes|length }} rows; narrow the window or filter for older ones.</p>{% endif %}
+  {%- else %}
+  <p class="empty">Nothing ran in this window{% if part %} that involves {{ part }}{% endif %}.</p>
+  {%- endif %}
+</section>
+{% endblock %}

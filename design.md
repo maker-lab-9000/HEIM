@@ -58,6 +58,9 @@ Contrast: red, orange, amber and green hold 3:1 on both panels (green 4.4 dark /
 - **Tables** (`.tbl`): label heads, 12 px rows, hairlines. A flagged row (`tr.flag`) is `--flag-bg` with a 4 px `--signal` bar.
 - **Run strip** (`.runs`): 10 px dots, 8 px apart: `--ink` success, `--crit` failed, `--warn` missed, a hollow ring for the slot not yet received. `.gap` names a monitoring gap with its `.bang`; `.key` explains the dots.
 - **Selects** (`.filters select`, `.mselect`): a 1 px `--ink-3` border, not `--line`, so the control's edge holds 3:1 against the panel.
+- **Activity map** (`.amap`, 2026-11-04): three columns, Jobs · Agents · Tools, each a stack of `.amap-box` links (hairline `--line`, radius 6 px) carrying a lamp + name, the state word and one fact in mono `--ink-3`, and a `→ feeds` line naming what it starts or calls. The edges are words, not drawn lines. The box in effect (`.on`, `aria-current="true"`) takes an `--ink` border and clears the filter when pressed again. Under 40 rem the three columns stack.
+- **Timeline** (`ol.tl`): one row per run (`.tl-row`: mono time, kind label, lamp + word, the summary as a link); what the run started is a nested `ol.tl`, indented 1.4 rem behind a `--line` rule. Tool calls fold into a `<details>`. A job's consecutive quiet runs merge into one row; nothing is nested that was not recorded as started by its parent.
+- **Pause control** (`.pausectl`): a length select (1 h · 4 h · 24 h) and a secondary key; while paused, the lamp + "Paused until HH:MM" and "Resume now". "Paused" is a dashboard pause that ends by itself; "Off" is switched off in config and offers no control.
 - **Focus:** `outline: 2px solid var(--ink); outline-offset: 2px`, instant, on everything interactive.
 
 ## Brand

@@ -8,6 +8,7 @@ clock because the app reads it.
 """
 import json
 import re
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import version
 
@@ -180,17 +181,17 @@ def test_no_heartbeats_reads_unknown_not_normal(tmp_path, monkeypatch):
     assert 'class="lamp lg"' in infra and "Unknown" in infra
     assert "Normal" not in html
     cover = cards["Agent coverage"]
-    # Uptime Kuma is off: a paused agent leaves the count and is named apart
+    # Uptime Kuma is off in config: it leaves the count and is named apart
     assert '<span class="big num">0 / 6</span>' in cover
     assert _section(cover, 'class="discs"', "</div>").count('class="open"') == 6
     assert "Not reporting: Alert poller" in cover and "Uptime monitor" not in cover.split("·")[0]
-    assert "1 paused: Uptime monitor" in cover
+    assert "1 off: Uptime monitor" in cover
     obs = cards["Observations"]
     assert "No sync yet" in obs and "Prometheus" in obs and "Uptime Kuma" not in obs
     rows = _rows(_agents(html))
     assert len(rows) == 7
-    paused = [r for r in rows if "Uptime monitor" in r]
-    assert "Paused" in paused[0]
+    off = [r for r in rows if "Uptime monitor" in r]
+    assert "Off" in off[0]
     assert sum("No data yet" in r for r in rows) == 6
 
 
@@ -202,7 +203,7 @@ def test_paused_agent_leaves_the_coverage_count(tmp_path, monkeypatch):
         cover = _cards(c.get("/").text)["Agent coverage"]
     assert '<span class="big num">6 / 6</span>' in cover
     assert 'aria-label="6 agents, 6 reporting"' in cover
-    assert "Every agent reporting · 1 paused: Uptime monitor" in cover
+    assert "Every agent reporting · 1 off: Uptime monitor" in cover
     assert "Not reporting" not in cover
 
 
@@ -463,13 +464,14 @@ def test_agents_panel_has_seven_rows_filter_and_flag(tmp_path, monkeypatch):
         running = c.get("/?agents=running").text
 
     panel = _agents(html)
-    assert '<h2 id="h-ag">Agents</h2>' in panel
+    assert '<h2 id="h-ag">Jobs and agents</h2>' in panel
     rows = _rows(panel)
     assert [re.search(r'class="name"><a href="([^"]+)">(.*?)</a>', r).groups() for r in rows] == [
-        ("/agents/alert_poller", "Alert poller"), ("/agents/thresholds", "Threshold watch"),
-        ("/agents/uptime", "Uptime monitor"), ("/agents/investigator", "Investigator"),
-        ("/agents/daily", "Daily analysis"), ("/agents/security", "Security audit"),
-        ("/agents/backup", "Backup verifier")]
+        # since 2026-11-04 the model-free rows link to their job page
+        ("/jobs/alert_poller", "Alert poller"), ("/jobs/thresholds", "Threshold watch"),
+        ("/jobs/uptime", "Uptime monitor"), ("/agents/investigator", "Investigator"),
+        ("/jobs/daily", "Daily analysis"), ("/jobs/security", "Security audit"),
+        ("/jobs/backup", "Backup verifier")]
     for row in rows:                                 # the chevron opens the agent too
         href, name = re.search(r'class="name"><a href="([^"]+)">(.*?)</a>', row).groups()
         assert f'<td class="go"><a href="{href}" aria-label="Open {name}">›</a></td>' in row
@@ -486,7 +488,7 @@ def test_agents_panel_has_seven_rows_filter_and_flag(tmp_path, monkeypatch):
     assert strip.rstrip().endswith('<i class="open"></i>')
     # one monitoring-gap line per flagged agent, linking its runs
     assert "Monitoring gap: latest backup verifier result not received." in panel
-    assert re.search(r'href="/agents/backup">Review backup verifier runs', panel)
+    assert re.search(r'href="/jobs/backup">Review backup verifier runs', panel)
     # the switch: counts from the same list, All engaged
     switch = _section(panel, 'aria-label="Filter agents"', "</div>")
     assert re.search(r'aria-current="true">.*?All<span class="n">7</span>', switch, re.S)
@@ -514,7 +516,7 @@ def test_failed_agent_gap_names_the_error(tmp_path, monkeypatch):
     flagged = [r for r in _rows(panel) if r.startswith('<tr class="flag"')]
     assert len(flagged) == 1 and "Uptime monitor" in flagged[0] and "Failed" in flagged[0]
     assert "Monitoring gap: uptime monitor failed: Uptime Kuma unreachable." in panel
-    assert re.search(r'href="/agents/uptime">Review uptime monitor runs', panel)
+    assert re.search(r'href="/jobs/uptime">Review uptime monitor runs', panel)
 
 
 # ----------------------------------------------------------- honest counts
@@ -550,7 +552,9 @@ def test_counts_agree_with_rows(tmp_path, monkeypatch):
     assert rail("/incidents") == len(incident_rows) == 3
     assert f"{len(attention)} findings" in _attention(html)
     agents = _rows(_agents(html))
-    assert rail("/agents") == len(agents) == 7
+    # the overview panel still shows all seven; the Agents rail counts the
+    # three that call a model (spec 2026-11-04-activity-jobs-tools)
+    assert len(agents) == 7 and rail("/agents") == 3
 
     cards = _cards(html)
     crit_rows = [r for r in incident_rows if 'class="lamp red"' in r]
@@ -594,3 +598,43 @@ def test_needs_human_status_pill_reads_needs_you(tmp_path, monkeypatch):
         html = c.get("/investigations").text
     assert "needs you" in html
     assert "needs human" not in html.lower() and "needs a human" not in html.lower()
+
+
+def test_overview_groups_jobs_agents_tools(tmp_path, monkeypatch):
+    # spec 2026-11-04-activity-jobs-tools: the overview's panel points into
+    # the three sections and the Activity page; it is still one table.
+    with _client(tmp_path, monkeypatch, _healthy_agents) as c:
+        panel = _agents(c.get("/").text)
+        assert '<h2 id="h-ag">Jobs and agents</h2>' in panel
+        for href, word in (("/jobs", "Jobs"), ("/agents", "Agents"), ("/tools", "Tools"),
+                           ("/activity", "See what ran")):
+            assert f'href="{href}"' in panel and word in panel, href
+        # the /agents page's own copy of the panel keeps its plain title
+        assert '<h2 id="h-ag">Agents</h2>' in c.get("/agents").text
+
+
+def test_needs_you_is_capped_like_needs_attention(tmp_path, monkeypatch):
+    # a long approval backlog must not stretch the overview (2026-11-04)
+    def seed(s):
+        _healthy_agents(s)
+        for n in range(9):
+            s.create_investigation(
+                fingerprint=f"homelab|drive_temp|d{n}", host="homelab",
+                agent_name="investigator", status="pending_approval", started_at=_iso(30 + n),
+                findings_json=json.dumps([{"metric": f"DriveTempWarning d{n}"}]))
+
+    with _client(tmp_path, monkeypatch, seed) as c:
+        html = c.get("/").text
+    you = _section(html, 'aria-labelledby="h-you"', "</section>")
+    assert len(re.findall(r"<article", you)) == 6
+    assert re.search(r'href="/investigations\?status=pending_approval">all \(9\)', you)
+    # the Requires-you card still counts every one
+    assert "9 approvals" in _cards(html)["Requires you"]
+
+
+def test_layout_hooks_for_alignment(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch, _healthy_agents) as c:
+        assert '<table class="tbl dense jobs">' in c.get("/jobs").text
+        assert 'class="act prompt-host"' in c.get("/agents/investigator").text
+    css = (Path(__file__).resolve().parent.parent / "src/heim/dashboard/static/heim.css").read_text()
+    assert ".tbl tbody tr:last-child th" in css and ".tbl.jobs td" in css

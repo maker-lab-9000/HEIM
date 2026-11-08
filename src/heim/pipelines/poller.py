@@ -32,7 +32,7 @@ from heim.incidents.poller_logic import diff_and_decide
 from heim.incidents.state import compute_state
 from heim.metrics.queries import load_queries
 from heim.pipelines import thresholds, uptime
-from heim.pipelines.investigate import dispatch_all
+from heim.pipelines.investigate import dispatch_all, record_incident_changes
 from heim.pipelines.suppression import filter_decision, filter_threshold
 from heim.runtime import Runtime
 
@@ -115,6 +115,7 @@ async def _run_alerts(rt: Runtime, run_at: str, *, dispatch_concurrently: bool) 
                     f"{str(n.get('description') or '').replace('[alert] ', '')}\n\n"
                     "(Not auto-investigable — check manually.)")
         await rt.notify(text)
+    record_incident_changes(rt, "alert_poller", run_at, dec.loki_events)
     if dec.loki_events:
         await rt.emit_loki(dec.loki_events)
     if dec.state_changed:
@@ -174,6 +175,7 @@ async def _run_thresholds(rt: Runtime, run_at: str, *,
             f"🚨 CRITICAL metric on {n.get('host')}: {n.get('metric')}\n\n"
             f"{str(n.get('description') or '').replace(thresholds.PREFIX, '')}\n\n"
             "(Not auto-investigable — check manually.)")
+    record_incident_changes(rt, "thresholds", run_at, dec.loki_events)
     if dec.loki_events:
         await rt.emit_loki(dec.loki_events)
     if dec.state_changed:
@@ -206,21 +208,26 @@ _RECORDABLE = ("upserts", "dispatches", "notifications", "state_changed",
                "uptime_state_changed")
 
 
-async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
+async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True,
+                   skip: frozenset[str] = frozenset()) -> dict:
+    """One poll cycle. ``skip`` names halves paused from the dashboard
+    (``alert_poller`` / ``thresholds`` / ``uptime``, spec 2026-11-04-activity-
+    jobs-tools): their work is skipped, the cycle itself still completes."""
     cfg = rt.config
     t0 = time.time()
     run_at = rt.now_iso()
 
     summary: dict = {}
-    try:
-        summary.update(await _run_alerts(
-            rt, run_at, dispatch_concurrently=dispatch_concurrently))
-    except Exception:
-        # One half must never take the other down with it.
-        log.exception("the alert half of the poll failed")
-        summary["aborted"] = "alert half failed"
+    if "alert_poller" not in skip:
+        try:
+            summary.update(await _run_alerts(
+                rt, run_at, dispatch_concurrently=dispatch_concurrently))
+        except Exception:
+            # One half must never take the other down with it.
+            log.exception("the alert half of the poll failed")
+            summary["aborted"] = "alert half failed"
 
-    if cfg.settings.threshold_detection:
+    if cfg.settings.threshold_detection and "thresholds" not in skip:
         try:
             summary.update(await _run_thresholds(
                 rt, run_at, dispatch_concurrently=dispatch_concurrently))
@@ -228,7 +235,7 @@ async def run_poll(rt: Runtime, *, dispatch_concurrently: bool = True) -> dict:
             log.exception("the threshold half of the poll failed")
             summary["threshold_failed"] = True
 
-    if cfg.settings.uptime_kuma.url:
+    if cfg.settings.uptime_kuma.url and "uptime" not in skip:
         try:
             summary.update(await uptime.run_uptime(
                 rt, run_at, dispatch_concurrently=dispatch_concurrently))

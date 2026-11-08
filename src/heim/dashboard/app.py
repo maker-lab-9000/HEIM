@@ -38,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
@@ -50,6 +51,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from jinja2 import Environment, FileSystemLoader
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from heim.agents import (
@@ -70,8 +72,12 @@ from heim.agents import (
     run_strip,
     status_of,
 )
-from heim.config import Config, load_config
+from heim.config import Config, expand_env, load_config
 from heim.costing import cost_of
+from heim.activity import KINDS as ACTIVITY_KINDS
+from heim.activity import map_model as activity_map
+from heim.activity import timeline as activity_timeline
+from heim.jobs import JOB_KEYS, PAUSE_CHOICES, pause_active, pause_until
 from heim.model_chain import (INVESTIGATOR_AGENT, OVERRIDE_AGENT, find_model,
                                resolve_chain, resolve_model)
 from heim.dashboard import format as fmt
@@ -82,9 +88,10 @@ from heim.metrics.queries import build_window, load_queries
 # the daily pipeline's own fetcher: the metrics page must read Prometheus
 # through the exact code path the email did, or the numbers would drift
 from heim.pipelines.daily import _fetch_query_ranges
+from heim.pipelines.investigate import build_system_prompt
 from heim.pipelines.queue import enqueue_investigation, enqueue_retry
 from heim.pipelines.security_audit import AGENT_NAME as AUDIT_AGENT
-from heim.pipelines.security_audit import AUDIT_HOST, AUDIT_KIND
+from heim.pipelines.security_audit import AUDIT_HOST, AUDIT_KIND, build_audit_system_prompt
 from heim.pipelines.suppression import mark_false_positive, suppress_fingerprint
 from heim.reports.render import _md_to_html
 from heim.security.report import extract_audit_feedback
@@ -174,6 +181,9 @@ _ACTION_HELPERS = (
     # spec 2026-11-04: the daily analyst's model chain override; the daemon
     # reads it at the start of the next run and nothing else writes it.
     "set_model_override", "clear_model_override",
+    # spec 2026-11-04-activity-jobs-tools: a timed pause of a job, and its
+    # early end; the daemon obeys the row and announces both
+    "pause_job", "resume_job",
 )
 
 
@@ -361,7 +371,7 @@ class _ModelsPanel:
 
 #: by model_overrides key (spec 2026-11-04-investigator-openrouter)
 MODELS_PANELS = {
-    OVERRIDE_AGENT: _ModelsPanel(OVERRIDE_AGENT, "daily", "settings.analyst_models",
+    OVERRIDE_AGENT: _ModelsPanel(OVERRIDE_AGENT, "analyst", "settings.analyst_models",
                                  "config/agents/daily_analyst.yaml", False,
                                  MODELS_SAVED, MODELS_RESET),
     INVESTIGATOR_AGENT: _ModelsPanel(INVESTIGATOR_AGENT, "investigator",
@@ -803,7 +813,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         window_runs = _window_runs(reader, window_s, now_iso)
         first_seen = _first_seen(reader, window_s)
         agent_rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s, window_runs,
-                                 first_seen)
+                                 first_seen, pauses=_pauses())
         _add_tool_counts(reader, agent_rows, window_s, now_iso)
         needs_you = _needs_you(pending, troubled)
         attention_rows = _attention_rows(open_incidents, troubled, invs,
@@ -847,12 +857,19 @@ def create_app(config: Config | None = None) -> FastAPI:
             # one "all (n)" line is what reaches them
             **_attention_view(attention_rows,
                               max(0, attention_count - len(troubled))),
-            needs_you=needs_you,
+            **_needs_you_view(needs_you),
             **_agents_panel(agent_rows, request.query_params.get("agents", "")),
             base_href="/",
             window=window,
             version=VERSION,
         )
+
+    def _pauses() -> dict[str, dict]:
+        """The dashboard pauses, so a job's status says Paused while one runs."""
+        try:
+            return reader.read(lambda s: s.job_pauses())
+        except sqlite3.Error:
+            return {}
 
     def _agent_inputs() -> tuple[dict, list[dict], list[dict], str]:
         by_agent = reader.read(lambda s: s.agent_runs_by_agent())
@@ -860,55 +877,244 @@ def create_app(config: Config | None = None) -> FastAPI:
         running = reader.read(lambda s: s.investigations(limit=5, status="running"))
         return by_agent, invs, running, datetime.now(timezone.utc).isoformat()
 
-    @app.get("/agents", response_class=HTMLResponse)
-    async def agents_page(request: Request):
+    def _detail_ctx(key: str) -> dict:
+        """What a job or agent page shows about the runs behind ``key``."""
         by_agent, invs, running, now_iso = _agent_inputs()
-        window, window_s = _window(request)
-        rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s,
-                           _window_runs(reader, window_s, now_iso),
-                           _first_seen(reader, window_s))
-        _add_tool_counts(reader, rows, window_s, now_iso)
-        every = reader.read(lambda s: s.tool_feedback_rows(limit=None))
-        shown = every if request.query_params.get("feedback") == "all" else every[:FEEDBACK_LIMIT]
-        return page(request, "agents.html", page_title="agents", window=window,
-                    feedback=[_feedback_row(f) for f in shown],
-                    feedback_total=len(every), feedback_capped=len(every) > len(shown),
-                    **_agents_panel(rows, request.query_params.get("agents", "")),
-                    base_href="/agents")
-
-    @app.get("/agents/{key}", response_class=HTMLResponse)
-    async def agent_detail(request: Request, key: str):
-        if key not in AGENT_KEYS:
-            return page(request, "error.html", status=404, page_title="not found",
-                        message=f"No agent called {key!r}.",
-                        detail="The seven agents are listed on the Agents page.")
-        by_agent, invs, running, now_iso = _agent_inputs()
-        row = next(r for r in _agent_rows(cfg, by_agent, invs, running, now_iso)
+        row = next(r for r in _agent_rows(cfg, by_agent, invs, running, now_iso,
+                                       pauses=_pauses())
                    if r["key"] == key)
         calls = (reader.read(lambda s: s.tool_calls(TOOL_AGENTS[key], TOOL_HISTORY_LIMIT))
                  if key in TOOL_AGENTS else None)
         history = None if calls is None else [
             {**c, "short": (a := short_args(c["tool"], c["args_json"]))[0], "full": a[1]}
             for c in calls]
-        stats = tool_summary(calls or [])
-        fb = ([_feedback_row(f) for f in reader.read(
-            lambda s: s.tool_feedback_rows(limit=None, agent_names=TOOL_AGENTS[key]))]
-            if key in TOOL_AGENTS else [])
-        return page(request, "agent.html", page_title=f"agents / {row['name']}",
-                    tool_feedback=fb[:AGENT_FEEDBACK_LIMIT],
-                    **_agent_feedback(fb, stats, set(cfg.tools)),
-                    tool_history=history, tool_stats=tool_summary(calls or []),
+        # the agents' feedback on their tools lives on /tools since 2026-11-04
+        return dict(tool_history=history, tool_stats=tool_summary(calls or []),
                     agent=row, cadence=_cadence_text(cfg, key),
                     evidence=_AGENT_EVIDENCE.get(key),
                     backup_file=_last_backup_file(by_agent.get("backup", []))
                     if key == "backup" else "",
                     runs=(_investigator_runs(_own_runs(invs)) if key == "investigator"
-                          else _agent_run_table(by_agent.get(key, []), row["cadence_s"], now_iso)),
-                    has_invs=key == "investigator",
-                    **(_models_ctx(cfg, reader.read(
-                        lambda s: s.model_override(_PANEL_BY_PAGE[key].agent)),
-                        _PANEL_BY_PAGE[key].agent)
-                       if key in _PANEL_BY_PAGE else {}))
+                          else _agent_run_table(by_agent.get(key, []), row["cadence_s"],
+                                                now_iso)),
+                    has_invs=key == "investigator")
+
+    def _jobs_ctls(rows: list[dict]) -> dict[str, dict]:
+        pauses = reader.read(lambda s: s.job_pauses())
+        now_iso = datetime.now(timezone.utc).isoformat()
+        return {r["key"]: _job_ctl(r, pauses, now_iso, tz) for r in rows}
+
+    @app.get("/jobs", response_class=HTMLResponse)
+    async def jobs_page(request: Request):
+        by_agent, invs, running, now_iso = _agent_inputs()
+        rows = [r for r in _agent_rows(cfg, by_agent, invs, running, now_iso,
+                                       pauses=_pauses())
+                if r["key"] in JOB_KEYS]
+        rows.sort(key=lambda r: JOB_KEYS.index(r["key"]))
+        ctls = _jobs_ctls(rows)
+        for r in rows:
+            r["cadence"] = _cadence_text(cfg, r["key"])
+            r["ctl"] = ctls[r["key"]]
+        return page(request, "jobs.html", page_title="jobs", rows=rows,
+                    choices=list(PAUSE_CHOICES))
+
+    @app.get("/jobs/{key}", response_class=HTMLResponse)
+    async def job_detail(request: Request, key: str):
+        if key not in JOB_KEYS:
+            return page(request, "error.html", status=404, page_title="not found",
+                        message=f"No job called {key!r}.",
+                        detail="The jobs are listed on the Jobs page.")
+        ctx = _detail_ctx(key)
+        return page(request, "agent.html", page_title=f"jobs / {ctx['agent']['name']}",
+                    section="jobs", ctl=_jobs_ctls([ctx["agent"]])[key],
+                    choices=list(PAUSE_CHOICES),
+                    twin=(f"/agents/{_PAGE_OF_JOB[key]}", AGENT_PAGES[_PAGE_OF_JOB[key]][1])
+                    if key in _PAGE_OF_JOB else None,
+                    **ctx)
+
+    def _job_from(fields: dict) -> dict:
+        job = _choice_field(fields, "job", JOB_KEYS)
+        spec = next(sp for sp in agent_specs(cfg, {}) if sp.key == job)
+        if spec.paused:
+            raise ActionError(f"{spec.name} is switched off in config.",
+                              "Turn it on in config/settings.yaml; it cannot be paused "
+                              "or resumed from here.", 400)
+        return {"key": job, "name": spec.name}
+
+    def _ctl_now(job: dict) -> dict:
+        row = {"key": job["key"], "name": job["name"],
+               "status": SimpleNamespace(state="")}
+        return _jobs_ctls([row])[job["key"]]
+
+    @app.post("/actions/pause")
+    async def action_pause(request: Request):
+        """Pause a job for 1 h, 4 h or 24 h (spec 2026-11-04-activity-jobs-tools).
+        The daemon skips its work until then and announces start and end."""
+        fields = await _fields(request)
+        job = _job_from(fields)
+        choice = str(fields.get("for") or "").strip()
+        if choice not in PAUSE_CHOICES:
+            raise ActionError(f"{choice or '(nothing)'} is not a pause length.",
+                              f"Pick one of {', '.join(PAUSE_CHOICES)}.", 400)
+        now = datetime.now(tz).isoformat()
+        until = pause_until(now, choice)
+        reader.write(lambda s: s.pause_job(job["key"], until, "dashboard", now))
+        ctl = _ctl_now(job)
+        return respond(request, fields, "partials/_pause_ctl.html",
+                       {"text": f"Paused until {ctl['until']}."}, j=ctl,
+                       choices=list(PAUSE_CHOICES))
+
+    @app.post("/actions/resume")
+    async def action_resume(request: Request):
+        fields = await _fields(request)
+        job = _job_from(fields)
+        now = datetime.now(tz).isoformat()
+        reader.write(lambda s: s.resume_job(job["key"], now))
+        return respond(request, fields, "partials/_pause_ctl.html",
+                       {"text": "Resumed."}, j=_ctl_now(job), choices=list(PAUSE_CHOICES))
+
+    @app.get("/agents", response_class=HTMLResponse)
+    async def agents_page(request: Request):
+        by_agent, invs, running, now_iso = _agent_inputs()
+        window, window_s = _window(request)
+        rows = _agent_rows(cfg, by_agent, invs, running, now_iso, window_s,
+                           _window_runs(reader, window_s, now_iso),
+                           _first_seen(reader, window_s), pauses=_pauses())
+        _add_tool_counts(reader, rows, window_s, now_iso)
+        by_key = {r["key"]: r for r in rows}
+        rows = [{**by_key[hb], "name": name, "href": f"/agents/{pk}"}
+                for pk, (hb, name) in AGENT_PAGES.items() if hb in by_key]
+        return page(request, "agents.html", page_title="agents", window=window,
+                    **_agents_panel(rows, request.query_params.get("agents", "")),
+                    base_href="/agents")
+
+    @app.get("/activity", response_class=HTMLResponse)
+    async def activity_page(request: Request):
+        """What ran, when, and what it started (spec 2026-11-04-activity-jobs-
+        tools): the map on top, the causal timeline below. The timeline nests
+        only by recorded ids; a box on the map filters it."""
+        window, window_s = _window(request)
+        part = str(request.query_params.get("part") or "")
+        kind = str(request.query_params.get("kind") or "all")
+        kind = kind if kind in ACTIVITY_KINDS else "all"
+        now_iso = datetime.now(timezone.utc).isoformat()
+        since_dt = datetime.fromisoformat(now_iso) - timedelta(
+            seconds=window_s or WINDOWS["24h"])
+        since = since_dt.isoformat()
+
+        def recent(at: str) -> bool:
+            dt = fmt.parse_dt(at)
+            return bool(dt and dt >= since_dt)
+
+        beats = [b for rows in reader.read(
+            lambda s: s.agent_runs_by_agent(limit_per_agent=3000, since=since)).values()
+            for b in rows if recent(b.get("started_at") or "")]
+        invs = [i for i in reader.read(lambda s: s.investigations(limit=500))
+                if recent(i.get("started_at") or "")]
+        daily_runs = {int(r.get("agent_run_id") or 0): r
+                      for r in reader.read(lambda s: s.runs(limit=100, kind="daily"))
+                      if int(r.get("agent_run_id") or 0)}
+        events = reader.read(lambda s: s.incident_events_for([b["id"] for b in beats]))
+        tools = reader.read(lambda s: s.tools_by_investigation([i["id"] for i in invs]))
+        nodes = activity_timeline(beats, daily_runs, invs, events, tools, part=part, kind=kind)
+
+        # the map's lamps: the same statuses the Jobs and Agents pages show
+        by_agent, all_invs, running, _now = _agent_inputs()
+        rows = {r["key"]: r for r in _agent_rows(cfg, by_agent, all_invs, running, now_iso,
+                                                  pauses=_pauses())}
+        statuses = {}
+        for key, r in rows.items():
+            st = r["status"]
+            statuses[key] = {"state": st.state, "word": st.word, "last": st.last_run_at,
+                             "fact": _cadence_text(cfg, key)}
+        for page_key, (hb, _name) in AGENT_PAGES.items():
+            if hb in statuses:
+                statuses[page_key] = dict(statuses[hb])
+        latest_daily = next(iter(reader.read(lambda s: s.runs(limit=1, kind="daily"))), None)
+        if latest_daily and "analyst" in statuses:
+            statuses["analyst"]["fact"] = str(latest_daily.get("model_used") or "")
+        waiting = sum(1 for i in _own_runs(all_invs) if i.get("status") == "pending_approval")
+        if "investigator" in statuses:
+            statuses["investigator"]["fact"] = (f"{waiting} waiting for you" if waiting
+                                                else statuses["investigator"]["fact"])
+        calls = reader.read(lambda s: s.tool_calls(list(_PAGE_OF_AGENT_CFG), 100_000, since))
+        for t in cfg.tools:
+            n = sum(1 for c in calls if c["tool"] == t)
+            statuses[t] = {"state": "healthy" if n else "unknown",
+                           "word": "Used" if n else "Idle",
+                           "last": next((c["at"] for c in calls if c["tool"] == t), ""),
+                           "fact": f"{n} call{'' if n == 1 else 's'} in the window"}
+        return page(request, "activity.html", page_title="activity", window=window,
+                    amap=activity_map(cfg, statuses), nodes=nodes[:ACTIVITY_LIMIT],
+                    capped=len(nodes) > ACTIVITY_LIMIT, part=part, kind=kind,
+                    kinds=ACTIVITY_KINDS)
+
+    @app.get("/tools", response_class=HTMLResponse)
+    async def tools_page(request: Request):
+        """Every tool: what it is, who uses it, how much, and the agents'
+        feedback on it (moved here from the Agents page)."""
+        window, window_s = _window(request)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        since = (datetime.fromisoformat(now_iso)
+                 - timedelta(seconds=window_s or WINDOWS["24h"])).isoformat()
+        calls = reader.read(lambda s: s.tool_calls(list(_PAGE_OF_AGENT_CFG), 100_000, since))
+        every = [_feedback_row(f) for f in reader.read(lambda s: s.tool_feedback_rows(limit=None))]
+        latest: dict[str, dict] = {}
+        for f in every:
+            latest.setdefault(f["tool"], f)
+        users = _tool_users(cfg)
+        rows = []
+        for name, tcfg in cfg.tools.items():
+            mine = [c for c in calls if c["tool"] == name]
+            rows.append({"name": name, "description": tcfg.description,
+                         "users": users.get(name, []), "calls": len(mine),
+                         "blocked": sum(1 for c in mine if c.get("blocked")),
+                         "feedback": latest.get(name)})
+        shown = every if request.query_params.get("feedback") == "all" else every[:FEEDBACK_LIMIT]
+        return page(request, "tools.html", page_title="tools", window=window, rows=rows,
+                    feedback=shown, feedback_total=len(every),
+                    feedback_capped=len(every) > len(shown),
+                    feedback_general=[v for k, v in sorted(latest.items()) if k not in cfg.tools])
+
+    @app.get("/tools/{name}", response_class=HTMLResponse)
+    async def tool_detail(request: Request, name: str):
+        tcfg = cfg.tools.get(name)
+        if tcfg is None:
+            return page(request, "error.html", status=404, page_title="not found",
+                        message=f"No tool called {name!r}.",
+                        detail="The tools are listed on the Tools page.")
+        calls = [c for c in reader.read(
+            lambda s: s.tool_calls(list(_PAGE_OF_AGENT_CFG), 2_000)) if c["tool"] == name]
+        history = [{**c, "short": (a := short_args(c["tool"], c["args_json"]))[0], "full": a[1],
+                    "agent": AGENT_PAGES.get(_PAGE_OF_AGENT_CFG.get(c.get("agent_name"), ""),
+                                             ("", c.get("agent_name") or ""))[1]}
+                   for c in calls[:TOOL_HISTORY_LIMIT]]
+        fb = [_feedback_row(f) for f in reader.read(lambda s: s.tool_feedback_rows(limit=None))
+              if f["tool"] == name]
+        return page(request, "tool.html", page_title=f"tools / {name}", tool=tcfg,
+                    definition=json.dumps(_tool_definition(tcfg), indent=2, ensure_ascii=False),
+                    guard=TOOL_GUARDS.get(name, ""), users=_tool_users(cfg).get(name, []),
+                    history=history, feedback=fb)
+
+    @app.get("/agents/{key}", response_class=HTMLResponse)
+    async def agent_detail(request: Request, key: str):
+        if key in OLD_AGENT_URLS:
+            return RedirectResponse(OLD_AGENT_URLS[key], status_code=302)
+        if key not in AGENT_PAGES:
+            return page(request, "error.html", status=404, page_title="not found",
+                        message=f"No agent called {key!r}.",
+                        detail="The three agents are listed on the Agents page.")
+        hb, name = AGENT_PAGES[key]
+        ctx = _detail_ctx(hb)
+        ctx["agent"] = {**ctx["agent"], "name": name}
+        panel = _PANEL_BY_PAGE.get(key)
+        return page(request, "agent.html", page_title=f"agents / {name}", section="agents",
+                    twin=(f"/jobs/{hb}", AGENT_LABELS[hb]) if hb in JOB_KEYS else None,
+                    **_prompt_ctx(cfg, key, str(request.query_params.get("host") or ""),
+                                  reader),
+                    **(_models_ctx(cfg, reader.read(lambda s: s.model_override(panel.agent)),
+                                   panel.agent) if panel else {}),
+                    **ctx)
 
     @app.get("/investigations", response_class=HTMLResponse)
     async def investigations(request: Request, status: str = "", host: str = "",
@@ -1390,7 +1596,10 @@ def exposition(stats: dict) -> str:
 NAV_GROUPS = [
     ("Workspace", [
         {"href": "/", "label": "Overview"},
+        {"href": "/activity", "label": "Activity"},
+        {"href": "/jobs", "label": "Jobs"},
         {"href": "/agents", "label": "Agents"},
+        {"href": "/tools", "label": "Tools"},
         {"href": "/investigations", "label": "Investigations"},
         {"href": "/incidents", "label": "Incidents"},
     ]),
@@ -1613,7 +1822,15 @@ def _env_chip(cfg: Config) -> str:
 def _rail_counts(reader: StoreReader, cfg: Config) -> dict[str, int]:
     """The rail's counts, keyed by href. Each is a plain store read, so it
     agrees with the list it summarises; one that fails is simply omitted."""
-    counts = {"/agents": len(AGENT_KEYS), "/hosts": len(cfg.hosts)}
+    counts = {"/agents": len(AGENT_PAGES), "/hosts": len(cfg.hosts)}
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        paused = sum(pause_active(r, now_iso)
+                     for r in reader.read(lambda s: s.job_pauses()).values())
+        if paused:                     # only when one is paused (spec)
+            counts["/jobs"] = paused
+    except sqlite3.Error:
+        pass
     try:
         by_status = reader.read(lambda s: s.counts_by_status())
         counts["/investigations"] = (by_status.get("running", 0)
@@ -1784,27 +2001,15 @@ def _tool_usage(rows: list[dict], feedback: dict[str, dict] | None = None) -> li
 
 #: rows on the Agents page's feedback panel, and on one agent's list
 FEEDBACK_LIMIT = 50
-AGENT_FEEDBACK_LIMIT = 20
 
 
 def _feedback_row(f: dict) -> dict:
-    """A feedback row plus the agent key and display name its investigation maps to."""
+    """A feedback row plus the agent page and name its investigation maps to."""
     key = agent_key_for(f.get("agent_name", ""))
-    return {**f, "agent_key": key, "agent_label": AGENT_LABELS.get(key, f.get("agent_name", ""))}
-
-
-def _agent_feedback(rows: list[dict], stats: list[dict], configured: set[str]) -> dict:
-    """One agent's newest-first feedback split for its tool summary: the
-    latest note per tool in the summary (shown under that tool's row) and the
-    'general' footnotes, which are only notes naming NO configured tool. A
-    note for a real tool the agent did not call recently is still about that
-    tool: it appears in the Tooling feedback list, not as general."""
-    latest: dict[str, dict] = {}
-    for r in rows:
-        latest.setdefault(r["tool"], r)
-    known = {t["tool"] for t in stats}
-    return {"feedback_by_tool": {k: v for k, v in latest.items() if k in known},
-            "feedback_general": [v for k, v in sorted(latest.items()) if k not in configured]}
+    page_key = _PAGE_OF_JOB.get(key, key) if key else ""
+    label = (AGENT_PAGES[page_key][1] if page_key in AGENT_PAGES
+             else AGENT_LABELS.get(key, f.get("agent_name", "")))
+    return {**f, "agent_key": page_key, "agent_label": label}
 
 
 def _general_feedback(feedback: dict[str, dict], rows: list[dict]) -> list[dict]:
@@ -1930,10 +2135,117 @@ def _add_tool_counts(reader, rows: list[dict], window_s: int | None, now_iso: st
                       if names else None)
 
 
+#: top-level rows the Activity timeline shows at most (quiet runs are merged)
+ACTIVITY_LIMIT = 200
+
+#: what keeps each tool read-only, in one sentence (spec 2026-11-04-activity-
+#: jobs-tools). A test pins one entry per configured tool.
+TOOL_GUARDS = {
+    "ssh_diagnostic": "Read-only SSH: every command passes guards/command_guard.py "
+                      "(default-deny for destructive, network and interpreter binaries, "
+                      "no shell escapes or redirection), and runs as a dedicated user "
+                      "whose sudoers grants only read commands.",
+    "prometheus_query": "Read-only PromQL against Prometheus' query API (instant and "
+                        "range); there is no write path in the client.",
+    "discover_metrics": "Read-only metric-catalog lookups against Prometheus' "
+                        "label and series API.",
+    "loki_query": "Read-only LogQL against Loki's query API, bounded in lookback "
+                  "and line count.",
+    "ha_api": "GET-only Home Assistant API: paths pass guards/ha_guard.py's allowlist "
+              "of read endpoints, with a non-admin long-lived token.",
+    "proxmox_api": "GET-only Proxmox API: paths pass guards/proxmox_guard.py's "
+                   "allowlist of read endpoints, with an auditor-role token.",
+}
+
+#: which agent YAML is which agent page
+_PAGE_OF_AGENT_CFG = {"investigator": "investigator", "security_auditor": "auditor"}
+
+
+def _tool_definition(tcfg) -> dict:
+    """A tool exactly as both loops describe it to the model."""
+    return {"name": tcfg.name, "description": tcfg.description,
+            "parameters": tcfg.input_schema()}
+
+
+def _tool_users(cfg: Config) -> dict[str, list[tuple[str, str]]]:
+    """tool name -> [(agent page key, agent name)] from the agents' YAML."""
+    users: dict[str, list[tuple[str, str]]] = {}
+    for agent_name, page_key in _PAGE_OF_AGENT_CFG.items():
+        agent = cfg.agents.get(agent_name)
+        for t in (agent.tools if agent else []):
+            users.setdefault(t, []).append((page_key, AGENT_PAGES[page_key][1]))
+    return users
+
+
+#: the three that call a model (spec 2026-11-04-activity-jobs-tools):
+#: page key -> (heartbeat / agent_runs key, name)
+AGENT_PAGES = {"analyst": ("daily", "Daily analyst"),
+               "investigator": ("investigator", "Investigator"),
+               "auditor": ("security", "Security auditor")}
+#: the job that runs an agent, and back (the daily run and the weekly audit
+#: are both: a schedule and a model)
+_PAGE_OF_JOB = {"daily": "analyst", "security": "auditor"}
+#: old /agents/<key> URLs -> their new home (302: a target may still change)
+OLD_AGENT_URLS = {"daily": "/agents/analyst", "security": "/agents/auditor",
+                  **{k: f"/jobs/{k}" for k in ("alert_poller", "thresholds", "uptime",
+                                               "backup")}}
+
+
+def _job_ctl(row: dict, pauses: dict[str, dict], now_iso: str, tz) -> dict:
+    """What a job's pause control shows: Off (config), Paused until, or Pause."""
+    key = row["key"]
+    pause = pauses.get(key)
+    active = pause if pause_active(pause, now_iso) else None
+    until = ""
+    if active:
+        try:
+            until = datetime.fromisoformat(active["until"]).astimezone(tz).strftime("%H:%M")
+        except (TypeError, ValueError):
+            until = str(active.get("until") or "")
+    return {"key": key, "name": row["name"], "off": row["status"].state == "off",
+            "pause": active, "until": until}
+
+
+def _prompt_ctx(cfg: Config, page_key: str, host: str, reader) -> dict:
+    """The Prompt section of an agent page: the template as written, the
+    prompt as it is sent (rendered now; for the investigator, for one host),
+    and for the analyst the input of its latest run."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    shim = SimpleNamespace(config=cfg, now_iso=lambda: now_iso)
+    jenv = Environment(loader=FileSystemLoader(cfg.prompts_dir))
+    ctx: dict = {"hosts": [], "host": "", "last_input": "", "last_input_at": ""}
+    if page_key == "analyst":
+        name = cfg.analyst.prompt if cfg.analyst else ""
+        render = lambda: expand_env((cfg.prompts_dir / name).read_text(),  # noqa: E731
+                                    source=name)
+        latest = next((r for r in reader.read(lambda s: s.runs(limit=10, kind="daily"))
+                       if r.get("input_text")), None)
+        if latest:
+            ctx.update(last_input=latest["input_text"], last_input_at=latest["run_at"])
+    elif page_key == "investigator":
+        name = cfg.agents["investigator"].prompt
+        ctx["hosts"] = sorted(cfg.hosts)
+        ctx["host"] = host if host in cfg.hosts else (ctx["hosts"][0] if ctx["hosts"] else "")
+        render = lambda: build_system_prompt(shim, jenv, ctx["host"])  # noqa: E731
+    else:
+        name = cfg.agents["security_auditor"].prompt
+        render = lambda: build_audit_system_prompt(shim, jenv)  # noqa: E731
+    try:
+        template = (cfg.prompts_dir / name).read_text()
+    except OSError as exc:
+        template = f"(could not read {name}: {exc})"
+    try:
+        rendered = render()
+    except Exception as exc:  # a prompt that will not render is shown as such
+        rendered = f"(could not render {name}: {type(exc).__name__}: {exc})"
+    return {"prompt": {"file": name, "template": template, "rendered": rendered, **ctx}}
+
+
 def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
                 running: list[dict], now_iso: str, window_s: int | None = None,
                 window_runs: dict[str, list[dict]] | None = None,
-                first_seen: dict[str, str] | None = None) -> list[dict]:
+                first_seen: dict[str, str] | None = None,
+                pauses: dict[str, dict] | None = None) -> list[dict]:
     """One row per agent, in ``AGENT_KEYS`` order: spec, status and run strip.
 
     The investigator records no heartbeats; its runs are its investigations
@@ -1961,7 +2273,8 @@ def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
                      else run_strip(finished, None, now_iso))
         else:
             runs = by_agent.get(spec.key, [])
-            status = status_of(spec, runs, now_iso)
+            pause = (pauses or {}).get(spec.key) or {}
+            status = status_of(spec, runs, now_iso, paused_until=str(pause.get("until") or ""))
             cadence = None if spec.paused else spec.cadence_s
             strip = (bucket_runs((window_runs or {}).get(spec.key, []), cadence, window_s,
                                  now_iso, first_seen_iso=(first_seen or {}).get(spec.key))
@@ -1972,7 +2285,8 @@ def _agent_rows(cfg: Config, by_agent: dict[str, list[dict]], invs: list[dict],
                      "strip_label": _strip_label(strip),
                      "flag": status.state in FLAGGED_STATES,
                      "cadence_s": None if spec.paused else spec.cadence_s,
-                     "href": f"/agents/{spec.key}"})
+                     "href": (f"/jobs/{spec.key}" if spec.key in JOB_KEYS
+                              else f"/agents/{spec.key}")})
     return rows
 
 
@@ -2087,13 +2401,16 @@ def _agents_panel(rows: list[dict], wanted: str) -> dict:
 
 def _coverage(rows: list[dict]) -> dict:
     """The Agent coverage card: one disc per expected agent, hollow when it
-    is silent. A paused agent is switched off, not silent: it leaves the
-    count and is named on its own foot line."""
-    expected = [r for r in rows if r["status"].state != "paused"]
+    is silent. An agent switched off in config ("off") or paused from the
+    dashboard ("paused") is set aside, not silent: it leaves the count and is
+    named on its own foot line."""
+    aside = ("paused", "off")
+    expected = [r for r in rows if r["status"].state not in aside]
     discs = [r["status"].state not in SILENT_STATES for r in expected]
     return {"reporting": sum(discs), "total": len(expected), "discs": discs,
             "missing": [r["name"] for r, on in zip(expected, discs) if not on],
-            "paused": [r["name"] for r in rows if r["status"].state == "paused"]}
+            "paused": [r["name"] for r in rows if r["status"].state == "paused"],
+            "off": [r["name"] for r in rows if r["status"].state == "off"]}
 
 
 def _observations(rows: list[dict], by_agent: dict[str, list[dict]], now_iso: str,
@@ -2106,7 +2423,7 @@ def _observations(rows: list[dict], by_agent: dict[str, list[dict]], now_iso: st
     window the ruler is that window's slots, red where any poll failed or
     was missed."""
     polling = [r["key"] for r in rows
-               if r["key"] in POLL_AGENTS and r["status"].state != "paused"]
+               if r["key"] in POLL_AGENTS and r["status"].state not in ("paused", "off")]
     cycles: dict[str, bool] = {}
     for key in polling:
         for run in (window_runs if window_s else by_agent).get(key, []):
@@ -2221,6 +2538,20 @@ def _attention_rows(open_incidents: list[dict], attention: list[dict],
     crit = [incident(i, "critical") for i in open_incidents if rank(i) == 0]
     warn = [incident(i, "warning") for i in open_incidents if rank(i) == 1]
     return crit + [run(i) for i in reversed(attention)] + warn
+
+
+def _needs_you_view(tasks: list[dict]) -> dict:
+    """Needs you, capped like Needs attention (``ATTENTION_CAP``): a long
+    approval backlog must not stretch the overview. One "all (n)" line links
+    the investigations that hold the rest — the pending approvals when every
+    hidden task is one."""
+    shown = tasks[:ATTENTION_CAP]
+    hidden = tasks[len(shown):]
+    more = ""
+    if hidden:
+        more = ("/investigations?status=pending_approval"
+                if all(t.get("kind") == "approval" for t in hidden) else "/investigations")
+    return {"needs_you": shown, "needs_you_total": len(tasks), "needs_you_more": more}
 
 
 def _attention_view(rows: list[dict], unread_runs: int = 0) -> dict:
