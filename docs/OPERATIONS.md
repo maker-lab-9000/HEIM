@@ -49,6 +49,15 @@ completed poll cycle, including cycles that found nothing, so silence means HEIM
 A failed ping is one warning line. This is the only cover for the loss of the host HEIM
 runs on.
 
+## Tooling feedback issues
+
+Set `HEIM_GITHUB_REPO`, `HEIM_GITHUB_READ_TOKEN` and `HEIM_GITHUB_TOKEN` in `.env` (see
+`docs/CONFIGURATION.md`) and restart. Suggestions are posted after each poll cycle, a few
+at a time. A failure (bad token, GitHub down) is one warning log line and a "Retrying"
+row on the tool's page; after 10 tries the row reads "Failed" and stays until retention
+prunes it. To turn it off, empty `HEIM_GITHUB_REPO`: suggestions are still stored and
+shown on the Tools page, just not queued.
+
 ## Pausing a job for maintenance
 
 On the dashboard's **Jobs** page, pick 1 h, 4 h or 24 h next to a job and press Pause.

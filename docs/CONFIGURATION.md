@@ -26,13 +26,16 @@ Deployment identity:
 | `HEIM_UPTIME_KUMA_URL` | Uptime Kuma base URL; empty turns the source off |
 | `HEIM_DEADMAN_URL` | dead-man's switch ping URL; empty turns it off |
 | `HEIM_AUDIT_EXPECTED_PORTS` | reviewed listening ports for the security audit, `port[:label]` comma-separated |
+| `HEIM_GITHUB_REPO` | repository (`owner/name`) for tooling-feedback issues; empty turns it off |
 | `HEIM_DASHBOARD_TOKEN` | password for the dashboard's HTTP basic auth; empty means no auth |
 | `HEIM_SSH_KEY_FILE` | compose only: host path of the agent's SSH key |
 | `HEIM_SSH_KEY`, `HEIM_CONFIG` | override the SSH key path and the config directory |
 
 Secrets: `ANTHROPIC_API_KEY` (required), `OPENROUTER_API_KEY`, `UPTIME_KUMA`,
 `TELEGRAM_BOT_TOKEN`, `SMTP_USER`, `SMTP_PASSWORD`, `HA_TOKEN`, `HA_PUSH_TOKEN`,
-`PROXMOX_TOKEN`. Secrets never go in YAML.
+`PROXMOX_TOKEN`, `HEIM_GITHUB_READ_TOKEN` (Issues: read, for the agents' tool) and
+`HEIM_GITHUB_TOKEN` (Issues: read and write, for the daemon's poster), each a
+fine-grained token limited to that one repository. Secrets never go in YAML.
 
 ## `config/settings.yaml`
 

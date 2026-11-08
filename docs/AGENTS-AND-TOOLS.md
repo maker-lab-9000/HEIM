@@ -134,6 +134,7 @@ the investigation simply stays complete.
 | `loki_query` | LogQL over the journal of `homelab`, `ubuntu-server` and Home Assistant OS, and `ubuntu-server` container logs | Loki's query API is GET-only; lookback capped at 7 days |
 | `ha_api` | Home Assistant REST | `guards/ha_guard.py` GET path allowlist; non-admin token |
 | `proxmox_api` | Proxmox VE API | `guards/proxmox_guard.py` GET path allowlist; auditor-role token |
+| `github_issues` | the repo's open (or closed) `heim-feedback` issues and their latest comments | GET-only, fixed URLs built from `settings.github.repo` (the model passes no path); `HEIM_GITHUB_READ_TOKEN` can only read issues. Not offered when unconfigured. |
 
 Every call is appended to the local `audit.jsonl` and, with Telegram configured, sent to
 the live feed. Tool output is clipped (8 KB). No tool can change anything, by guard and
@@ -151,6 +152,20 @@ or more certain. The section stays in the report. HEIM also extracts it into the
 shows, under each tool's row, the latest suggestion with a link to its investigation. A
 suggestion that names no known tool appears as a general note, because that usually
 means the prompt has drifted.
+
+### Feedback as GitHub issues
+
+With `settings.github.repo` and both tokens set, the feedback also becomes work items.
+Every suggestion is queued in `feedback_outbox` (never on a dry run or a replay); the
+daemon posts the queue after each poll cycle's dead-man ping. Each tool has one open
+issue, `Tooling feedback: <tool>`, labelled `heim-feedback` and `tool:<tool>`, and every
+new suggestion is a comment on it. A closed issue means done: the next suggestion opens
+a fresh one. The security audit's `## Audit feedback` goes to its own `security_audit`
+issue, and a name that matches no tool to `general`. Before writing feedback an agent
+may call `github_issues` to see what is filed; a line `tool: covered by #N` is stored
+but never posted. Every body is scrubbed first: IP addresses and the values of the
+`.env` variables become `‹redacted›`. A failed post is retried each cycle, up to 10
+times; the tool's page shows its issue and anything still waiting, retrying or failed.
 
 Each tool-calling agent's page (`/agents/investigator`, `/agents/security`) shows its
 last 50 tool calls with a per-tool summary of calls, blocked calls and average duration.

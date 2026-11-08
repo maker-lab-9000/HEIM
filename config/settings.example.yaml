@@ -59,6 +59,14 @@ suppression_days: 90          # default mute window for a false positive (0 = fo
 # HEIM itself runs on dies. Empty (the default) disables it.
 deadman_url: "${HEIM_DEADMAN_URL:-}"
 
+# Tooling feedback → GitHub issues: the agents' '## Tooling feedback' lines
+# become comments on one open issue per tool in this repo ("owner/name"),
+# filed by the daemon. Off while empty. Tokens live in .env:
+# HEIM_GITHUB_READ_TOKEN (the agents' read-only github_issues tool) and
+# HEIM_GITHUB_TOKEN (the daemon's poster).
+github:
+  repo: "${HEIM_GITHUB_REPO:-}"
+
 # Nightly housekeeping (03:30 local): a WAL-safe SQLite snapshot into
 # <db_path dir>/backups/heim-YYYYMMDD.sqlite3, then a retention prune.
 backup_keep: 14               # daily snapshots to keep (0 = never rotate)
