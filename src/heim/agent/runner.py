@@ -1,6 +1,7 @@
 """The investigation agent loop (replaces n8n's LangChain Tools Agent).
 
-Anthropic-native tool use: no scratchpad-text round-tripping, so the
+Anthropic-native tool use (an ``AgentCfg`` with another provider is handed to
+``agent/openai_loop.py``, which keeps this loop's contract): no scratchpad-text round-tripping, so the
 "model emits its tool call as plain text" failure class the n8n stack hit
 (exec 60136) cannot occur at this layer. Budget is enforced in the loop:
 past ``hard_step_cap`` no more tools are executed and the model is told to
@@ -35,6 +36,12 @@ RETRY_WAIT_S = 3.0
 #: (§5.6) serve the stored results back to another model as a cassette instead
 #: of feeding it a truncated version of the original's evidence.
 TRANSCRIPT_RESULT_CHARS = 8192
+
+#: the answer to every tool call past ``hard_step_cap`` (both loops)
+FORCED_FINAL_TEXT = (
+    "Step budget exhausted — no further tool calls will be executed. "
+    "Write the final report NOW, starting with '## Summary'."
+)
 
 
 @dataclass
@@ -107,6 +114,20 @@ async def run_agent(
     on_step: OnStep | None = None,
     collect_transcript: bool = False,
 ) -> AgentResult:
+    if cfg.provider != "anthropic":
+        # spec 2026-11-04-investigator-openrouter: same contract, other wire
+        # format. Imported here — openai_loop builds on this module's types.
+        from heim.agent import openai_loop
+        try:
+            return await openai_loop.run_openai_agent(
+                cfg, system=system, user_prompt=user_prompt, tools=tools,
+                on_step=on_step, collect_transcript=collect_transcript)
+        finally:
+            for t in tools:
+                try:
+                    await t.close()
+                except Exception:
+                    pass
     client = AsyncAnthropic()
     schemas = [t.anthropic_schema() for t in tools]
     toolmap = {t.name: t for t in tools}
@@ -151,10 +172,7 @@ async def run_agent(
                 for tu in tool_uses:
                     if len(steps) >= cfg.hard_step_cap:
                         forced = True
-                        out = (
-                            "Step budget exhausted — no further tool calls will be executed. "
-                            "Write the final report NOW, starting with '## Summary'."
-                        )
+                        out = FORCED_FINAL_TEXT
                     else:
                         args = dict(tu.input or {})
                         tool = toolmap.get(tu.name)

@@ -267,6 +267,11 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # (same brief, same recorded tool results, different model/prompt).
         # 0 = not a replay. Distinct from retry_of, which re-runs for real.
         ("replay_of", "INTEGER NOT NULL DEFAULT 0"),
+        # spec 2026-11-04-investigator-openrouter: which API ran ``model``,
+        # and whether the trigger picked it for this run (1) or it follows
+        # the operator's current choice (0) — re-arm reads both.
+        ("provider", "TEXT NOT NULL DEFAULT 'anthropic'"),
+        ("model_pinned", "INTEGER NOT NULL DEFAULT 0"),
     ],
     "investigation_steps": [
         # §5.6: usage of the assistant turn that requested this call. When one
@@ -304,6 +309,7 @@ _INVESTIGATION_COLS = [
     "started_at", "finished_at", "input_tokens", "output_tokens", "n_steps",
     "brief_md", "report_md", "incomplete_reason", "outcome", "retry_of",
     "approval_decision", "findings_json", "cost", "transcript_json", "replay_of",
+    "provider", "model_pinned",
 ]
 
 _RUN_COLS = ["run_at", "kind", "overall", "model_used", "duration_s", "counts_json",
@@ -1058,6 +1064,12 @@ class IncidentStore:
     def queued_count(self) -> int:
         row = self._db.execute("SELECT COUNT(*) AS n FROM jobs WHERE status = 'queued'").fetchone()
         return int(row["n"]) if row else 0
+
+    def running_investigations(self) -> list[dict]:
+        """Rows still marked ``running`` — read before the restart sweep fails
+        them, so the operator can be told which were cut short."""
+        return [dict(r) for r in self._db.execute(
+            "SELECT * FROM investigations WHERE status = 'running' ORDER BY id")]
 
     def sweep_interrupted(self, now: str = "") -> int:
         """Crash recovery: nothing can still be *running* right after a restart.

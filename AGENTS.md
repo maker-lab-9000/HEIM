@@ -30,7 +30,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (1386 tests). Design
+covered by golden tests against the original JavaScript behavior (1440 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -40,7 +40,7 @@ edges** (tools, channels, pipelines).
 |---|---|
 | Detection | 50-query trend catalog · per-day averages, change %, warn/crit flags · Prometheus alert rules with `qid` labels (fast path) · anti-flap hysteresis (2 clear polls / 2 missed runs) · Uptime Kuma poll half (`[uptime]` incidents, one Telegram message per host, flap-quiet reopen; report-only for non-investigable hosts) |
 | Incidents | SQLite store · deterministic fingerprints (`host\|qid\|name`) · open/clearing/resolved lifecycle · warn→crit escalation · per-fingerprint dispatch lock · poller-vs-daily ownership split (`[alert]` prefix) · false-positive verdicts + timed/forever suppression (pipeline-level, analyst hint) |
-| Agent | Anthropic-native tool loop · soft prompt budget + hard in-loop step cap · retries · real token accounting (run total **and** per-turn attribution per step) · per-run cost from a config price table · optional size-capped full transcript · output salvage (`## Summary` contract, leaked-tool-call detection) · offline replay of a stored run against another model/prompt from its recorded tool results (`heim replay`) · agent-written tooling feedback indexed per tool |
+| Agent | Anthropic-native or OpenAI-compatible (OpenRouter, llama.cpp) tool loop, model chosen on `/agents/investigator` · soft prompt budget + hard in-loop step cap · retries · real token accounting (run total **and** per-turn attribution per step) · per-run cost from a config price table · optional size-capped full transcript · output salvage (`## Summary` contract, leaked-tool-call detection) · offline replay of a stored run against another model/prompt from its recorded tool results (`heim replay`) · agent-written tooling feedback indexed per tool |
 | Tools | Guarded read-only SSH · PromQL instant/range with token-compact encoding · metric discovery · GET-allowlisted HA and Proxmox APIs · per-call Telegram live feed + local `audit.jsonl` |
 | Human loop | Telegram inline-button approvals (long-poll, no inbound ports) raced against a store-written decision (dashboard/CLI, works with no Telegram at all) · decline/timeout → re-proposed next run · outcome confirm (Resolved / Needs human) |
 | Delivery | n8n-faithful HTML dashboard email · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
@@ -54,7 +54,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 1386 tests, must stay green
+.venv/bin/pytest -q                    # 1440 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -125,7 +125,7 @@ Conventions:
 | Proxmox VE | read (agent tool) | `tools/proxmox_api` | auditor-role API token |
 | SSH (target hosts) | read-only diagnostics | `tools/ssh_diagnostic` | dedicated key + scoped sudoers |
 | Anthropic | agent loop + analyst chain (first) | `agent/runner`, `llm` | API key |
-| OpenRouter (and any OpenAI-compatible server) | analyst chain fallback | `llm` | API key (none for a LAN llama.cpp) |
+| OpenRouter (and any OpenAI-compatible server) | analyst chain fallback · investigator model (operator's choice) | `llm`, `agent/openai_loop` | API key (none for a LAN llama.cpp) |
 
 ### Adding one
 
@@ -543,10 +543,17 @@ Tests: `tests/test_durable_approvals.py`.
   priced. The dashboard's Models panel on `/agents/daily` overrides the order
   (`model_overrides` table, allow-listed by `settings.analyst_models`); a fallback
   answer tags the email, pings Telegram and marks the agent Degraded; an all-fail run
-  emails the operator. The investigator and security auditor are still Anthropic-only:
-  that is the next item.
-- **Multi-model agent loop**: an OpenAI-compatible tool-calling backend in
-  `agent/runner.py` so the investigator can run on OpenRouter models too.
+  emails the operator. The security auditor is still Anthropic-only.
+- **Multi-model agent loop** — ✅ implemented (spec
+  `docs/superpowers/specs/2026-11-04-investigator-openrouter-design.md`).
+  `run_agent` hands a non-Anthropic `AgentCfg` to `agent/openai_loop.py`, which keeps
+  the same contract (tools, guards, step cap, forced final, per-turn token attribution,
+  transcript shape) over the chat-completions API. The investigator runs on ONE model,
+  never a fallback: a per-run pick (pinned), else the `/agents/investigator` override
+  (allow-listed by `settings.investigator_models`), else the YAML — resolved when the
+  agent starts, so retries and parked approvals follow the current choice. Every failed
+  investigation (agent error, unresolvable model, restart sweep, row-less queue job)
+  sends one Telegram line naming the model. `heim replay` stays Anthropic-only.
 - **More channels**: ntfy/Matrix/Discord via the channel recipe in §3.
 - **MCP server**: expose the six guarded tools over MCP so interactive Claude sessions
   can use the same vetted, read-only toolbox as the investigator.
@@ -605,7 +612,7 @@ rollback design; multi-tenant SaaS-ification; replacing Grafana for time-series 
 ## 6. Notes for AI agents working here
 
 - Read `docs/ARCHITECTURE.md` first; it maps every module to its n8n source node.
-- Run `.venv/bin/pytest -q` before and after your change; 1386 must not regress.
+- Run `.venv/bin/pytest -q` before and after your change; 1440 must not regress.
 - Ported modules (docstring names an n8n node) are behavior-frozen — see §2.
 - Never log, commit, or email secrets; deployment identity comes from `.env` via
   `${VAR}` interpolation and must stay out of the tree.

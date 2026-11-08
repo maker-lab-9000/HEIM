@@ -62,6 +62,14 @@ class Tool:
             "input_schema": self.cfg.input_schema(),
         }
 
+    def openai_schema(self) -> dict:
+        """The same tool for the OpenAI-compatible loop (function calling)."""
+        return {"type": "function", "function": {
+            "name": self.cfg.name,
+            "description": self.cfg.description,
+            "parameters": self.cfg.input_schema(),
+        }}
+
     async def run(self, args: dict) -> str:
         raise NotImplementedError
 

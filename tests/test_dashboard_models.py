@@ -209,3 +209,110 @@ def test_slots_are_compacted_when_a_yaml_entry_is_not_offered(tmp_path):
     html = _panel(c.get("/agents/daily").text)
     first = html[html.index('name="slot_1"'):html.index("</select>", html.index('name="slot_1"'))]
     assert f'value="{DEEPSEEK.key}" selected' in first
+
+
+# ------------------------------------------- the investigator's model (spec
+# 2026-11-04-investigator-openrouter): one model, same panel, same route
+
+
+@pytest.fixture()
+def inv_client(tmp_path):
+    cfg, c = _client(tmp_path, [OPUS, DEEPSEEK])
+    cfg.settings.investigator_models = [OPUS, DEEPSEEK]
+    return cfg, TestClient(create_app(cfg))
+
+
+def test_investigator_panel_shows_yaml_default(inv_client):
+    _cfg, c = inv_client
+    panel = _panel(c.get("/agents/investigator").text)
+    assert "claude-sonnet-5-5" in panel and "default" in panel
+    assert "config/agents/investigator.yaml" in panel
+    assert panel.count("<select") == 1
+    assert 'name="agent" value="investigator"' in panel
+
+
+def test_set_investigator_override(inv_client):
+    cfg, c = inv_client
+    r = c.post("/actions/models", data={"agent": "investigator", "action": "set",
+                                        "slot_1": DEEPSEEK.key,
+                                        "back": "/agents/investigator"},
+               follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/agents/investigator"
+    got = _store(cfg).model_override("investigator")
+    assert [e["model"] for e in got["chain"]] == [DEEPSEEK.model]
+    assert _store(cfg).model_override("daily_analyst") is None
+    panel = _panel(c.get("/agents/investigator").text)
+    assert "override" in panel and DEEPSEEK.model in panel
+
+
+def test_investigator_rejects_two_models(inv_client):
+    cfg, c = inv_client
+    r = c.post("/actions/models", data={"agent": "investigator", "action": "set",
+                                        "slot_1": OPUS.key, "slot_2": DEEPSEEK.key})
+    assert r.status_code == 400 and "Pick one model." in r.text
+    assert _store(cfg).model_override("investigator") is None
+
+
+def test_rejects_unknown_agent(inv_client):
+    _cfg, c = inv_client
+    r = c.post("/actions/models", data={"agent": "security", "action": "set",
+                                        "slot_1": OPUS.key})
+    assert r.status_code == 400
+
+
+def test_reset_investigator_override(inv_client):
+    cfg, c = inv_client
+    _store(cfg).set_model_override("investigator", [DEEPSEEK.model_dump()])
+    _store(cfg).set_model_override("daily_analyst", [OPUS.model_dump()])
+    r = c.post("/actions/models", data={"agent": "investigator", "action": "reset"},
+               follow_redirects=False)
+    assert r.status_code == 303
+    assert _store(cfg).model_override("investigator") is None
+    assert _store(cfg).model_override("daily_analyst") is not None
+
+
+def test_dropdown_lists_keys_and_effective_default(inv_client):
+    cfg, c = inv_client
+    _store(cfg).set_model_override("investigator", [DEEPSEEK.model_dump()])
+    html = c.get("/hosts").text
+    sel = html[html.index('name="model"'):]
+    sel = sel[:sel.index("</select>")]
+    assert f"default ({DEEPSEEK.model})" in sel
+    assert f'value="{OPUS.key}"' in sel and f'value="{DEEPSEEK.key}"' in sel
+    assert "· openrouter" in sel
+
+
+def test_investigate_action_accepts_key_and_bare_id(inv_client):
+    cfg, c = inv_client
+    for value in (DEEPSEEK.key, DEEPSEEK.model):
+        r = c.post("/actions/investigate", data={"host": "ubuntu-server", "model": value},
+                   follow_redirects=False)
+        assert r.status_code == 303
+        assert _store(cfg).jobs(limit=1)[0]["payload"]["model"] == DEEPSEEK.key
+
+
+def test_detail_shows_provider_for_openrouter_run(inv_client):
+    cfg, c = inv_client
+    s = _store(cfg)
+    inv = s.create_investigation(host="ubuntu-server", agent_name="investigator",
+                                 model=DEEPSEEK.model, provider="openrouter",
+                                 status="complete", started_at="2026-11-04T10:00:00+01:00",
+                                 finished_at="2026-11-04T10:05:00+01:00")
+    html = c.get(f"/investigations/{inv}").text
+    assert f"{DEEPSEEK.model} (openrouter)" in html
+
+
+def test_pending_unpinned_row_shows_current_model(inv_client):
+    cfg, c = inv_client
+    s = _store(cfg)
+    unpinned = s.create_investigation(host="ubuntu-server", agent_name="investigator",
+                                      model="claude-sonnet-5-5", status="pending_approval",
+                                      started_at="2026-11-04T10:00:00+01:00")
+    pinned = s.create_investigation(host="ubuntu-server", agent_name="investigator",
+                                    model="claude-opus-5-5", model_pinned=1,
+                                    status="pending_approval",
+                                    started_at="2026-11-04T10:00:00+01:00")
+    s.set_model_override("investigator", [DEEPSEEK.model_dump()])
+    assert f"will run on {DEEPSEEK.model}" in c.get(f"/investigations/{unpinned}").text
+    html = c.get(f"/investigations/{pinned}").text
+    assert "will run on claude-opus-5-5" in html and DEEPSEEK.model not in html

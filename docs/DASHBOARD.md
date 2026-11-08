@@ -122,6 +122,7 @@ URL.
 | Mute / Unmute | incidents | a suppression and the incident's `suppressed` status |
 | Done / Dismiss | recommendations | the recommendation's state |
 | Save order / Reset to default | `/agents/daily`, Models panel | the daily analyst's model chain override (from `analyst_models`) |
+| Save / Reset to default | `/agents/investigator`, Models panel | the investigator's model override (from `investigator_models`) |
 
 Decisions are reversible: pressing a pressed verdict or recommendation key clears it,
 the other key switches it, and leaving False positive lifts the mute it set. While a run

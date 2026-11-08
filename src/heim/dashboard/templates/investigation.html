@@ -30,7 +30,9 @@
     <tbody>
       <tr>
         <td class="c-trig eyebrow">{{ inv.trigger or DASH }}</td>
-        <td class="c-agent mono">{{ inv.agent_name or 'investigator' }} · {{ inv.model or DASH }}</td>
+        <td class="c-agent mono">{{ inv.agent_name or 'investigator' }} · {{ inv.model or DASH }}
+          {%- if inv.provider and inv.provider != 'anthropic' %} ({{ inv.provider }}){% endif %}
+          {%- if will_run_on %}<br><span class="ink3">will run on {{ will_run_on }}</span>{% endif %}</td>
         <td class="c-tok mono">{{ inv.input_tokens|tokens }} in → {{ inv.output_tokens|tokens }} out</td>
         {#- an em dash means the model has no entry in settings.model_prices, not
             that the run was free (§5.6) -#}

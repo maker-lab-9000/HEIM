@@ -137,15 +137,19 @@ async def _complete_anthropic(model: str, system: str, user: str,
                   "output": int(getattr(usage, "output_tokens", 0) or 0)}
 
 
+def endpoint_for(ref: ModelRef) -> tuple[str, str | None]:
+    """The chat-completions URL and API key of an OpenAI-compatible model
+    (shared with the investigator's loop, ``agent/openai_loop.py``)."""
+    if ref.provider == "openrouter":
+        return OPENROUTER_URL, env("OPENROUTER_API_KEY", required=True)
+    key = env(ref.api_key_env, required=True) if ref.api_key_env else None
+    return ref.base_url.rstrip("/") + "/chat/completions", key
+
+
 async def _complete(ref: ModelRef, system: str, user: str, max_tokens: int) -> tuple[str, dict]:
     if ref.provider == "anthropic":
         return await _complete_anthropic(ref.model, system, user, max_tokens)
-    if ref.provider == "openrouter":
-        key = env("OPENROUTER_API_KEY", required=True)
-        return await _complete_openai_compat(OPENROUTER_URL, key, ref.model, system, user,
-                                             max_tokens)
-    key = env(ref.api_key_env, required=True) if ref.api_key_env else None
-    url = ref.base_url.rstrip("/") + "/chat/completions"
+    url, key = endpoint_for(ref)
     return await _complete_openai_compat(url, key, ref.model, system, user, max_tokens)
 
 

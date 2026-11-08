@@ -156,9 +156,14 @@ def test_request_from_investigation_round_trips(rt):
     assert req.host == "homelab" and req.host_role == "hypervisor"
     assert req.fingerprint == "homelab|pve_cpu|" and req.retry_of == 7
     assert req.findings == [{"metric": "CPU", "severity": "critical"}]
-    # the model is replayed as an override, so a re-armed run uses the model
-    # the operator was told about even if the configured default moved
-    assert req.model_override == "claude-test"
+    # spec 2026-11-04-investigator-openrouter (operator's ruling): an unpinned
+    # row follows the current model choice, so no override is replayed …
+    assert req.model_override == ""
+    # … while a model the trigger picked stays pinned through re-arm
+    pinned = rt.store.create_investigation(host="homelab", model="claude-test",
+                                           model_pinned=1, status="pending_approval")
+    assert (request_from_investigation(rt.store.investigation(pinned)).model_override
+            == "anthropic|claude-test")
 
 
 def test_request_from_investigation_survives_unreadable_findings(rt):

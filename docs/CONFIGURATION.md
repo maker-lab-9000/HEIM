@@ -60,10 +60,13 @@ deployment-specific from `.env`. Copy it when you want to change structure.
   prices against your provider before trusting them.
 - **`store_transcripts`** (false). Keeps each investigation's full message history
   (capped at 512 KB, oldest turns dropped). Needed for `heim replay`.
-- **`investigator_models`** ([]). Model ids offered next to every Investigate button
-  and accepted by `heim investigate --model`. The choice applies to that run only and is
-  recorded on it. List only priced ids. Empty means no select and the investigator's
-  own model.
+- **`investigator_models`** ([]). The models the investigator may run on: offered next
+  to every Investigate button (that run only), on `/agents/investigator` (the default
+  for every run, from the next one on) and to `heim investigate --model`. A plain id
+  means an Anthropic model; other providers take the `analyst_models` form
+  (`{provider: openrouter, model: …}`). `--model` accepts a full key
+  (`provider|model`) or an id only one entry has. List only priced models. Empty means
+  no select, a read-only panel, and the investigator's own model.
 - **`analyst_models`** ([]). The models the dashboard may put in the daily analyst's
   chain on `/agents/daily`, each `{provider, model}` (plus `base_url` /
   `api_key_env` for `openai_compat`). The chosen order applies from the next run and
