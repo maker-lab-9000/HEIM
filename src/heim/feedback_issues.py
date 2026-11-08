@@ -40,12 +40,15 @@ def is_covered_only(suggestion: str) -> bool:
 
 
 def identity_values(env_example: Path, environ: Mapping[str, str]) -> list[str]:
-    """The current values of every variable ``.env.example`` names, longest first."""
+    """The current values of every variable ``.env.example`` names, and of
+    every ``HEIM_*`` variable (so a missing example file still scrubs the
+    deployment identity), longest first."""
+    names = {n for n in environ if n.startswith("HEIM_")}
     try:
-        names = [m.group(1) for line in Path(env_example).read_text().splitlines()
-                 if (m := _ENV_LINE.match(line))]
+        names |= {m.group(1) for line in Path(env_example).read_text().splitlines()
+                  if (m := _ENV_LINE.match(line))}
     except OSError:
-        return []
+        pass
     vals = {str(environ.get(n) or "").strip() for n in names}
     return sorted((v for v in vals if len(v) >= _MIN_SECRET), key=lambda v: (-len(v), v))
 

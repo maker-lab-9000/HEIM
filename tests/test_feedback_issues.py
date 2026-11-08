@@ -31,7 +31,7 @@ def test_identity_values_from_env_example(tmp_path):
     env = {"HEIM_SSH_USER": "svcuser", "HEIM_SERVER_IP": "10.1.2.3", "SHORT": "abc",
            "OTHER": "notlisted"}
     assert identity_values(ex, env) == ["10.1.2.3", "svcuser"]
-    assert identity_values(tmp_path / "missing", env) == []
+    assert identity_values(tmp_path / "missing", {"OTHER": "notlisted"}) == []
 
 
 def test_covered_only():
@@ -81,3 +81,8 @@ async def test_github_client_raises_on_error():
     except httpx.HTTPStatusError:
         return
     raise AssertionError("expected HTTPStatusError")
+
+
+def test_identity_values_cover_heim_vars_without_the_example(tmp_path):
+    env = {"HEIM_SSH_USER": "svcuser", "HEIM_SERVER_IP": "10.1.2.3", "PATH": "/usr/bin"}
+    assert identity_values(tmp_path / "missing", env) == ["10.1.2.3", "svcuser"]
