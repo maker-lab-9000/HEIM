@@ -146,7 +146,7 @@ async def run_replay(
         return None
 
     report = salvage(result.output_text, ftext, stop_reason=getattr(result, "stop_reason", ""))
-    record_tool_feedback(rt, inv_id, report.report_md)
+    record_tool_feedback(rt, inv_id, report.report_md, file_issues=False)
     cost = cost_of(agent_cfg.model, result.input_tokens, result.output_tokens,
                    cfg.settings.model_prices)
     rt.store.update_investigation(
