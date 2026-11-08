@@ -195,3 +195,14 @@
 <span class="pill st-muted">{{ dot('muted') }}muted · until
   {{ sup.until|day if sup.until else 'further notice' }}</span>
 {%- endmacro %}
+
+{#- the GitHub issue a tool's (or the audit's) feedback is filed under
+    (spec 2026-11-08), then any suggestions still on their way there -#}
+{% macro feedback_issue(issue, outbox=[]) -%}
+{%- if issue %}<p class="fbissue"><a href="{{ issue.url }}" rel="noopener" target="_blank">Issue #{{ issue.number }}</a>
+  · {{ issue.state }} · {{ issue.comments }} comment{{ '' if issue.comments == 1 else 's' }}</p>{% endif %}
+{%- for r in outbox %}
+<p class="fbissue"><span class="ihost">{{ lamp(r.state|lamp) }}{{ r.word }}</span> · {{ r.text|truncate(90) }}
+  {%- if r.error %} · <span class="mono ink3">{{ r.error }}</span>{% endif %}</p>
+{%- endfor %}
+{%- endmacro %}

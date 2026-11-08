@@ -17,7 +17,8 @@
     <tbody>
       {%- for t in rows %}
       <tr>
-        <td class="name"><a href="/tools/{{ t.name }}">{{ m.tool(t.name) }}</a></td>
+        <td class="name"><a href="/tools/{{ t.name }}">{{ m.tool(t.name) }}</a>
+          {%- if t.issue %} <a class="mono ink3" href="{{ t.issue.url }}" rel="noopener" target="_blank">#{{ t.issue.number }}</a>{% endif %}</td>
         <td class="ink2">{{ t.description|truncate(140) }}</td>
         <td>{% for key, name in t.users %}<a href="/agents/{{ key }}">{{ name }}</a>{% if not loop.last %}, {% endif %}{% else %}{{ DASH }}{% endfor %}</td>
         <td class="num mono">{{ t.calls }}</td>

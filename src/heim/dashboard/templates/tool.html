@@ -57,6 +57,7 @@
     <h2 id="h-fb">Tooling feedback</h2>
     <span class="label">{{ feedback|length }} suggestion{{ '' if feedback|length == 1 else 's' }}</span>
   </div>
+  {{ m.feedback_issue(issue, outbox) }}
   {%- if feedback %}
   <div class="inc"><table class="tbl dense">
     <thead><tr>
