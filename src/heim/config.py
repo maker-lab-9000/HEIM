@@ -134,6 +134,33 @@ class UptimeKumaCfg(BaseModel):
     url: str = Field(default_factory=lambda: os.environ.get("HEIM_UPTIME_KUMA_URL", ""))
 
 
+class GitHubCfg(BaseModel):
+    """Tooling feedback → GitHub issues (spec 2026-11-08). Empty ``repo`` = off.
+
+    Two tokens, never in config: ``HEIM_GITHUB_READ_TOKEN`` (Issues: read) is
+    the agents' ``github_issues`` tool, so the agent stays read-only by
+    privilege; ``HEIM_GITHUB_TOKEN`` (Issues: read & write) is only the
+    daemon's outbox poster. ``repo`` ("owner/name") defaults to
+    ``HEIM_GITHUB_REPO``, read when the settings are built."""
+    repo: str = Field(default_factory=lambda: os.environ.get("HEIM_GITHUB_REPO", ""))
+
+    @staticmethod
+    def read_token() -> str:
+        return os.environ.get("HEIM_GITHUB_READ_TOKEN", "")
+
+    @staticmethod
+    def write_token() -> str:
+        return os.environ.get("HEIM_GITHUB_TOKEN", "")
+
+    @property
+    def can_read(self) -> bool:
+        return bool(self.repo and self.read_token())
+
+    @property
+    def can_write(self) -> bool:
+        return bool(self.repo and self.write_token())
+
+
 class ModelRef(BaseModel):
     """One model in a provider chain.
 
@@ -255,6 +282,8 @@ class Settings(BaseModel):
     # a factory, not a shared instance: the url's env default must be read
     # when Settings is built (after .env is loaded), not at import time
     uptime_kuma: UptimeKumaCfg = Field(default_factory=UptimeKumaCfg)
+    # Tooling feedback → GitHub issues (spec 2026-11-08); off without a repo
+    github: GitHubCfg = Field(default_factory=GitHubCfg)
 
 
 # --------------------------------------------------------------------------- hosts

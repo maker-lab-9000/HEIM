@@ -36,6 +36,9 @@
     {%- if counts.carried %} · {{ counts.carried }} carried from last week (check could not run){% endif %}</p>
 </section>
 
+{#- where the auditor's feedback is filed on GitHub (spec 2026-11-08) -#}
+{%- if audit_issue %}{{ m.feedback_issue(audit_issue) }}{% endif %}
+
 {#- the auditor's review of the audit itself (prompt: '## Audit feedback') -#}
 {%- if feedback %}
 <section class="card" id="feedback">

@@ -72,3 +72,55 @@ def test_every_tool_has_a_guard_sentence(tmp_path):
 def test_overview_tool_card_links_to_tools(tmp_path, monkeypatch):
     html = _client(tmp_path, monkeypatch, _seed).get("/").text
     assert 'href="/tools"' in html[html.index("tool"):]
+
+
+# ------------------------------------------ feedback issues (spec 2026-11-08)
+
+ISSUE_URL = "https://github.invalid/o/r/issues/42"
+
+
+def _with_issue(s):
+    _seed(s)
+    s.set_feedback_issue("loki_query", 42, "open", ISSUE_URL, 7, "2026-11-08T09:00:00+00:00")
+
+
+def test_tool_page_links_its_issue(tmp_path, monkeypatch):
+    html = _client(tmp_path, monkeypatch, _with_issue).get("/tools/loki_query").text
+    assert f'href="{ISSUE_URL}"' in html and 'rel="noopener"' in html
+    assert "Issue #42" in html and "open" in html and "7 comments" in html
+
+
+def test_tool_page_shows_waiting_and_failed_rows(tmp_path, monkeypatch):
+    def seed(s):
+        _seed(s)
+        s.queue_feedback("loki_query", 1, "add X")
+        r = s.queue_feedback("loki_query", 1, "add Y")
+        s.mark_feedback_failed(r, "HTTPStatusError: 401 Bad credentials")
+        g = s.queue_feedback("loki_query", 1, "add Z")
+        for _ in range(10):
+            s.mark_feedback_failed(g, "HTTPStatusError: 404")
+    html = _client(tmp_path, monkeypatch, seed).get("/tools/loki_query").text
+    assert "Waiting" in html and "Retrying" in html and "Failed" in html
+    assert "401 Bad credentials" in html
+
+
+def test_tools_list_shows_issue_number(tmp_path, monkeypatch):
+    html = _client(tmp_path, monkeypatch, _with_issue).get("/tools").text
+    row = html[html.index('href="/tools/loki_query"'):]
+    row = row[:row.index("</tr>")]
+    assert f'href="{ISSUE_URL}"' in row and "#42" in row
+
+
+def test_security_page_links_audit_issue(tmp_path, monkeypatch):
+    def seed(s):
+        _seed(s)
+        s.insert_run(kind="security_audit", run_at="2026-11-02T06:00:00+01:00", overall="ok")
+        s.set_feedback_issue("security_audit", 51, "open", "https://github.invalid/51", 2, "")
+    html = _client(tmp_path, monkeypatch, seed).get("/security").text
+    assert 'href="https://github.invalid/51"' in html and "Issue #51" in html
+
+
+def test_no_issue_line_when_none(tmp_path, monkeypatch):
+    html = _client(tmp_path, monkeypatch, _seed).get("/tools/loki_query").text
+    assert "Issue #" not in html and "github" not in html.lower().split("<main", 1)[-1].replace(
+        "github_issues", "")

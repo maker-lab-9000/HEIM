@@ -32,6 +32,7 @@ from heim.channels import deadman
 from heim.llm import AnalystChainFailed
 from heim.runctx import current_run, run_ids, set_runs
 from heim.pipelines.daily import run_daily
+from heim.pipelines.feedback_issues import drain_outbox
 from heim.pipelines.investigate import (model_label, notify_investigation_failed,
                                        rearm_pending_approvals, run_investigation)
 from heim.pipelines.poller import run_poll
@@ -279,6 +280,18 @@ async def _poll_job(rt: Runtime) -> None:
     # asserts "the scheduler is alive", not "an incident happened". A poll
     # that raised deliberately stays silent — that is the outage to report.
     await deadman.ping(rt.config.settings.deadman_url)
+    await _drain_feedback(rt)
+
+
+async def _drain_feedback(rt: Runtime) -> None:
+    """Post queued tooling feedback to GitHub — after the ping, so a slow or
+    broken GitHub can never delay or cost it."""
+    try:
+        result = await drain_outbox(rt)
+        if result.get("posted") or result.get("failed"):
+            log.info("tooling feedback to GitHub: %s", result)
+    except Exception:
+        log.exception("draining the tooling feedback outbox failed")
 
 
 async def _security_audit_job(rt: Runtime) -> None:

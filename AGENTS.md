@@ -30,7 +30,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (1518 tests). Design
+covered by golden tests against the original JavaScript behavior (1558 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -40,8 +40,8 @@ edges** (tools, channels, pipelines).
 |---|---|
 | Detection | 50-query trend catalog · per-day averages, change %, warn/crit flags · Prometheus alert rules with `qid` labels (fast path) · anti-flap hysteresis (2 clear polls / 2 missed runs) · Uptime Kuma poll half (`[uptime]` incidents, one Telegram message per host, flap-quiet reopen; report-only for non-investigable hosts) |
 | Incidents | SQLite store · deterministic fingerprints (`host\|qid\|name`) · open/clearing/resolved lifecycle · warn→crit escalation · per-fingerprint dispatch lock · poller-vs-daily ownership split (`[alert]` prefix) · false-positive verdicts + timed/forever suppression (pipeline-level, analyst hint) |
-| Agent | Anthropic-native or OpenAI-compatible (OpenRouter, llama.cpp) tool loop, model chosen on `/agents/investigator` · soft prompt budget + hard in-loop step cap · retries · real token accounting (run total **and** per-turn attribution per step) · per-run cost from a config price table · optional size-capped full transcript · output salvage (`## Summary` contract, leaked-tool-call detection) · offline replay of a stored run against another model/prompt from its recorded tool results (`heim replay`) · agent-written tooling feedback indexed per tool |
-| Tools | Guarded read-only SSH · PromQL instant/range with token-compact encoding · metric discovery · GET-allowlisted HA and Proxmox APIs · per-call Telegram live feed + local `audit.jsonl` |
+| Agent | Anthropic-native or OpenAI-compatible (OpenRouter, llama.cpp) tool loop, model chosen on `/agents/investigator` · soft prompt budget + hard in-loop step cap · retries · real token accounting (run total **and** per-turn attribution per step) · per-run cost from a config price table · optional size-capped full transcript · output salvage (`## Summary` contract, leaked-tool-call detection) · offline replay of a stored run against another model/prompt from its recorded tool results (`heim replay`) · agent-written tooling feedback indexed per tool and filed as one GitHub issue per tool (comments, scrubbed, posted by the daemon) |
+| Tools | Guarded read-only SSH · PromQL instant/range with token-compact encoding · metric discovery · GET-allowlisted HA and Proxmox APIs · read-only `github_issues` (the feedback issues, read token) · per-call Telegram live feed + local `audit.jsonl` |
 | Human loop | Telegram inline-button approvals (long-poll, no inbound ports) raced against a store-written decision (dashboard/CLI, works with no Telegram at all) · decline/timeout → re-proposed next run · outcome confirm (Resolved / Needs human) |
 | Delivery | n8n-faithful HTML dashboard email · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
 | Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · crash-safe investigation job queue (`heim jobs`, restart sweep, re-trigger with `retry_of`) · dead-man's switch pinged after every completed poll · nightly WAL-safe SQLite backup (rotated) + retention prune · Docker/compose deployment (outbound-only, plus the optional dashboard port) · `.env` interpolation for all deployment identity |
@@ -54,7 +54,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 1518 tests, must stay green
+.venv/bin/pytest -q                    # 1558 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -125,6 +125,7 @@ Conventions:
 | Proxmox VE | read (agent tool) | `tools/proxmox_api` | auditor-role API token |
 | SSH (target hosts) | read-only diagnostics | `tools/ssh_diagnostic` | dedicated key + scoped sudoers |
 | Anthropic | agent loop + analyst chain (first) | `agent/runner`, `llm` | API key |
+| GitHub | read (agent tool `github_issues`) + write (feedback issues, daemon only) | `tools/github_issues`, `channels/github`, `pipelines/feedback_issues` | two fine-grained tokens: Issues read / Issues read+write |
 | OpenRouter (and any OpenAI-compatible server) | analyst chain fallback · investigator model (operator's choice) | `llm`, `agent/openai_loop` | API key (none for a LAN llama.cpp) |
 
 ### Adding one
@@ -465,6 +466,14 @@ incident row, and threads `retry_of` through `InvestigationRequest` into the new
   complete **and** incomplete runs. The dashboard's tool-usage card shows the latest
   suggestion per tool under its row (and unmatched names as a `Suggestion, general:` footnote,
   because a name that matches no tool is the prompt drifting, not noise to drop).
+  Since 2026-11-08 (spec `docs/superpowers/specs/2026-11-08-tooling-feedback-issues-design.md`)
+  each suggestion is also queued in `feedback_outbox` and the daemon posts it, after the
+  dead-man ping, as a comment on the tool's one open GitHub issue (`heim-feedback`,
+  `tool:<name>`; a closed issue means done, so the next one opens fresh; the audit's
+  `## Audit feedback` goes to a `security_audit` issue). Agents read the issues through
+  the GET-only `github_issues` tool with a read-only token, and may answer with
+  `tool: covered by #N`, which is stored but never posted. Bodies are scrubbed of IPs
+  and `.env` values; nothing is queued on a dry run or a replay.
 
 ### 5.8 Durable approvals — ✅ implemented
 
@@ -621,7 +630,7 @@ rollback design; multi-tenant SaaS-ification; replacing Grafana for time-series 
 ## 6. Notes for AI agents working here
 
 - Read `docs/ARCHITECTURE.md` first; it maps every module to its n8n source node.
-- Run `.venv/bin/pytest -q` before and after your change; 1518 must not regress.
+- Run `.venv/bin/pytest -q` before and after your change; 1558 must not regress.
 - Ported modules (docstring names an n8n node) are behavior-frozen — see §2.
 - Never log, commit, or email secrets; deployment identity comes from `.env` via
   `${VAR}` interpolation and must stay out of the tree.

@@ -18,3 +18,4 @@ tools:
   - loki_query
   - ha_api
   - proxmox_api
+  - github_issues   # offered only when settings.github + HEIM_GITHUB_READ_TOKEN are set

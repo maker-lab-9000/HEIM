@@ -10,6 +10,8 @@ RUN useradd --create-home --uid 1000 heim
 WORKDIR /app
 COPY pyproject.toml ./
 COPY src ./src
+# its variable names drive the GitHub feedback scrub (heim.feedback_issues)
+COPY .env.example ./
 RUN pip install --no-cache-dir .
 
 # config/ is mounted read-only at runtime; /data holds all mutable state

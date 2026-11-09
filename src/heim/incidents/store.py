@@ -242,6 +242,29 @@ CREATE INDEX IF NOT EXISTS incident_events_run ON incident_events(run_id);
 
 -- A job paused from the dashboard until a time (spec 2026-11-04-activity-jobs-
 -- tools). The daemon obeys it and announces its start and end once each.
+-- tooling feedback waiting for (or sent to) GitHub; the daemon drains it
+CREATE TABLE IF NOT EXISTS feedback_outbox (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    target           TEXT NOT NULL,
+    investigation_id INTEGER NOT NULL DEFAULT 0,
+    body             TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL DEFAULT '',
+    posted_at        TEXT NOT NULL DEFAULT '',
+    issue_number     INTEGER NOT NULL DEFAULT 0,
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    error            TEXT NOT NULL DEFAULT ''
+);
+
+-- the one GitHub issue per feedback target (a tool, security_audit, general)
+CREATE TABLE IF NOT EXISTS feedback_issues (
+    target     TEXT PRIMARY KEY,
+    number     INTEGER NOT NULL,
+    state      TEXT NOT NULL DEFAULT 'open',
+    url        TEXT NOT NULL DEFAULT '',
+    comments   INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS job_pauses (
     job             TEXT PRIMARY KEY,
     until           TEXT NOT NULL,
@@ -1543,6 +1566,8 @@ class IncidentStore:
                 "investigation_id IN (SELECT id FROM investigations "
                 "WHERE finished_at != '' AND finished_at < ?)", (cutoff,))
         _delete("investigations", "finished_at != '' AND finished_at < ?", (cutoff,))
+        # a posted suggestion lives on in its GitHub issue; unposted rows stay
+        _delete("feedback_outbox", "posted_at != '' AND posted_at < ?", (cutoff,))
         _delete("incidents", "status = 'resolved' AND lastSeen != '' AND lastSeen < ?", (cutoff,))
         _delete("findings", "run_at != '' AND run_at < ?", (cutoff,))
         _delete("runs", "run_at != '' AND run_at < ?", (cutoff,))
@@ -1559,6 +1584,69 @@ class IncidentStore:
             # WAL, so the freed pages actually leave the disk.
             self._db.execute("VACUUM")
         return counts
+
+    # ------------------------------------------- feedback → GitHub issues
+
+    def queue_feedback(self, target: str, investigation_id: int, body: str,
+                       created_at: str = "") -> int:
+        cur = self._db.execute(
+            "INSERT INTO feedback_outbox (target, investigation_id, body, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (str(target), int(investigation_id or 0), str(body), created_at or self._now()))
+        self._db.commit()
+        return int(cur.lastrowid or 0)
+
+    def pending_feedback(self, limit: int, max_attempts: int) -> list[dict]:
+        """Unposted rows still worth trying, oldest first."""
+        rows = self._db.execute(
+            "SELECT * FROM feedback_outbox WHERE posted_at = '' AND attempts < ? "
+            "ORDER BY id LIMIT ?", (int(max_attempts), int(limit))).fetchall()
+        return [dict(r) for r in rows]
+
+    def outbox_rows(self, target: str | None = None) -> list[dict]:
+        """Every unposted row (waiting, retrying or given up), oldest first."""
+        sql, args = "SELECT * FROM feedback_outbox WHERE posted_at = ''", ()
+        if target is not None:
+            sql, args = sql + " AND target = ?", (str(target),)
+        return [dict(r) for r in self._db.execute(sql + " ORDER BY id", args).fetchall()]
+
+    def mark_feedback_posted(self, row_id: int, posted_at: str, issue_number: int) -> None:
+        self._db.execute(
+            "UPDATE feedback_outbox SET posted_at = ?, issue_number = ?, error = '' WHERE id = ?",
+            (posted_at, int(issue_number), int(row_id)))
+        self._db.commit()
+
+    def mark_feedback_failed(self, row_id: int, error: str) -> None:
+        self._db.execute(
+            "UPDATE feedback_outbox SET attempts = attempts + 1, error = ? WHERE id = ?",
+            (str(error), int(row_id)))
+        self._db.commit()
+
+    def note_feedback_error(self, row_id: int, error: str) -> None:
+        """Record why a row could not be sent without spending an attempt
+        (the network was down, not the row at fault)."""
+        self._db.execute("UPDATE feedback_outbox SET error = ? WHERE id = ?",
+                         (str(error), int(row_id)))
+        self._db.commit()
+
+    def feedback_issue(self, target: str) -> dict | None:
+        row = self._db.execute("SELECT * FROM feedback_issues WHERE target = ?",
+                               (str(target),)).fetchone()
+        return dict(row) if row is not None else None
+
+    def feedback_issues(self) -> dict[str, dict]:
+        return {r["target"]: dict(r)
+                for r in self._db.execute("SELECT * FROM feedback_issues").fetchall()}
+
+    def set_feedback_issue(self, target: str, number: int, state: str, url: str,
+                           comments: int, updated_at: str) -> None:
+        self._db.execute(
+            "INSERT INTO feedback_issues (target, number, state, url, comments, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(target) DO UPDATE SET number = excluded.number, "
+            "state = excluded.state, url = excluded.url, comments = excluded.comments, "
+            "updated_at = excluded.updated_at",
+            (str(target), int(number), str(state), str(url), int(comments or 0), updated_at))
+        self._db.commit()
 
     # ------------------------------------------- approvals from outside TG
 

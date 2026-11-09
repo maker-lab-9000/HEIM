@@ -95,6 +95,7 @@ from heim.pipelines.security_audit import AUDIT_HOST, AUDIT_KIND, build_audit_sy
 from heim.pipelines.suppression import mark_false_positive, suppress_fingerprint
 from heim.reports.render import _md_to_html
 from heim.security.report import extract_audit_feedback
+from heim.feedback_issues import MAX_ATTEMPTS
 
 log = logging.getLogger(__name__)
 
@@ -1063,10 +1064,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         for f in every:
             latest.setdefault(f["tool"], f)
         users = _tool_users(cfg)
+        issues = reader.read(lambda s: s.feedback_issues())
         rows = []
         for name, tcfg in cfg.tools.items():
             mine = [c for c in calls if c["tool"] == name]
-            rows.append({"name": name, "description": tcfg.description,
+            rows.append({"name": name, "description": tcfg.description, "issue": issues.get(name),
                          "users": users.get(name, []), "calls": len(mine),
                          "blocked": sum(1 for c in mine if c.get("blocked")),
                          "feedback": latest.get(name)})
@@ -1094,7 +1096,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         return page(request, "tool.html", page_title=f"tools / {name}", tool=tcfg,
                     definition=json.dumps(_tool_definition(tcfg), indent=2, ensure_ascii=False),
                     guard=TOOL_GUARDS.get(name, ""), users=_tool_users(cfg).get(name, []),
-                    history=history, feedback=fb)
+                    history=history, feedback=fb,
+                    issue=reader.read(lambda s: s.feedback_issue(name)),
+                    outbox=_outbox_view(reader.read(lambda s: s.outbox_rows(name))))
 
     @app.get("/agents/{key}", response_class=HTMLResponse)
     async def agent_detail(request: Request, key: str):
@@ -1245,7 +1249,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             return page(request, "error.html", status=404, page_title="security",
                         message=f"No security audit #{wanted}.",
                         detail="The history table lists the audits that are kept.")
-        return page(request, "security.html", page_title="security", **view)
+        return page(request, "security.html", page_title="security",
+                    audit_issue=reader.read(lambda s: s.feedback_issue("security_audit")), **view)
 
     @app.get("/recommendations", response_class=HTMLResponse)
     async def recommendations_page(request: Request):
@@ -2140,7 +2145,23 @@ ACTIVITY_LIMIT = 200
 
 #: what keeps each tool read-only, in one sentence (spec 2026-11-04-activity-
 #: jobs-tools). A test pins one entry per configured tool.
+def _outbox_view(rows: list[dict]) -> list[dict]:
+    """Unposted feedback rows as lamp + word: Waiting (not tried yet),
+    Retrying (failed, will try again), Failed (gave up after MAX_ATTEMPTS)."""
+    out = []
+    for r in rows:
+        n = int(r.get("attempts") or 0)
+        state, word = (("info", "Waiting") if n == 0 else ("warning", "Retrying")
+                       if n < MAX_ATTEMPTS else ("failed", "Failed"))
+        out.append({"state": state, "word": word, "error": r.get("error") or "",
+                    "text": str(r.get("body") or "").split("\n\n_source:", 1)[0]})
+    return out
+
+
 TOOL_GUARDS = {
+    "github_issues": "GET-only GitHub issues API, fixed to the configured repo's "
+                     "heim-feedback issues (the model passes no URL), with a token that "
+                     "can only read issues. HEIM itself posts the feedback.",
     "ssh_diagnostic": "Read-only SSH: every command passes guards/command_guard.py "
                       "(default-deny for destructive, network and interpreter binaries, "
                       "no shell escapes or redirection), and runs as a dedicated user "

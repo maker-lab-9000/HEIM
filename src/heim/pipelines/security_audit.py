@@ -38,6 +38,8 @@ from heim.security.report import (
 )
 from heim.security.types import CheckResult
 from heim.tools.base import ToolContext, load_tools
+from heim.feedback_issues import comment_body
+from heim.security.report import FEEDBACK_PARTS, extract_audit_feedback
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +79,7 @@ def build_audit_system_prompt(rt: Runtime, jenv: Environment) -> str:
     )
     return _expanded_template(jenv, agent.prompt).render(
         now=rt.now_iso(), facts=facts, soft_step_budget=agent.soft_step_budget,
+        github_issues=cfg.settings.github.can_read,
     )
 
 
@@ -88,6 +91,31 @@ def build_audit_brief(rt: Runtime, jenv: Environment, results: list[CheckResult]
         n_resolved=len(diff.resolved), n_carried=len(diff.carried), **sections,
     )
 
+
+
+#: an audit-feedback part that says nothing
+_NOTHING = {"", "- nothing this week", "nothing this week"}
+
+
+def queue_audit_feedback(rt: Runtime, investigation_id: int, report_md: str) -> int:
+    """The auditor's ``## Audit feedback`` → ONE outbox row for the
+    ``security_audit`` GitHub issue (spec 2026-11-08). Not on a dry run, not
+    when the write side is off, not when both parts say nothing. Never raises."""
+    try:
+        if rt.dry_run or not rt.config.settings.github.can_write:
+            return 0
+        parts = extract_audit_feedback(report_md or "") or {}
+        blocks = [f"### {FEEDBACK_PARTS[k]}\n{parts[k].strip()}" for k in ("improve", "check")
+                  if parts.get(k, "").strip().lower().rstrip(".") not in _NOTHING]
+        if not blocks:
+            return 0
+        source = f"security audit #{investigation_id} · {rt.now_iso()[:10]}"
+        rt.store.queue_feedback("security_audit", investigation_id,
+                                comment_body("\n\n".join(blocks), source), created_at=rt.now_iso())
+        return 1
+    except Exception:
+        log.exception("queueing audit feedback for #%s failed", investigation_id)
+        return 0
 
 async def run_security_audit(rt: Runtime, *, llm: bool = True) -> dict:
     """One weekly audit. Raises only when NO source answered; every other
@@ -215,6 +243,7 @@ async def _assessment(rt: Runtime, *, run_id: int, results: list[CheckResult], d
                                      collect_transcript=cfg.settings.store_transcripts)
         report = salvage(result.output_text, ftext, stop_reason=result.stop_reason)
         record_tool_feedback(rt, inv_id, report.report_md if not report.incomplete else result.output_text)
+        queue_audit_feedback(rt, inv_id, report.report_md if not report.incomplete else result.output_text)
         cost = cost_of(agent_cfg.model, result.input_tokens, result.output_tokens, cfg.settings.model_prices)
         rt.store.update_investigation(
             inv_id, status="incomplete" if report.incomplete else "complete",

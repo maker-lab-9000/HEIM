@@ -56,6 +56,7 @@ from heim.reports.render import (
     investigation_email,
     salvage,
 )
+from heim.feedback_issues import comment_body, is_covered_only, target_for
 from heim.runtime import Runtime
 from heim.tools.base import ToolContext, load_tools
 
@@ -209,6 +210,7 @@ def build_system_prompt(rt: Runtime, jenv: Environment, host: str, *,
             facts=facts,
             privileges=privileges or "(no SSH privileges configured)",
             soft_step_budget=agent.soft_step_budget,
+            github_issues=cfg.settings.github.can_read,
         ),
         source=source,
     )
@@ -258,7 +260,8 @@ def _step_recorder(rt: Runtime, investigation_id: int):
     return on_step
 
 
-def record_tool_feedback(rt: Runtime, investigation_id: int, report_md: str) -> int:
+def record_tool_feedback(rt: Runtime, investigation_id: int, report_md: str, *,
+                         file_issues: bool | None = None) -> int:
     """Persist the report's optional ``## Tooling feedback`` lines.
 
     Called for complete *and* incomplete runs — an investigation that ran out
@@ -266,15 +269,38 @@ def record_tool_feedback(rt: Runtime, investigation_id: int, report_md: str) -> 
     from the replay pipeline through the same path, so a replayed model's
     opinion lands next to the original's. Never raises: a suggestion is a nice
     extra, not part of the report contract.
+
+    Each line is also queued for its tool's GitHub issue (spec 2026-11-08)
+    when ``file_issues`` (default: not a dry run) and the write side is
+    configured; ``covered by #N`` lines are stored but never queued. The
+    replay pipeline passes ``file_issues=False``: it is offline by contract.
     """
     written = 0
     try:
-        for tool, suggestion in extract_tool_feedback(report_md or ""):
+        lines = extract_tool_feedback(report_md or "")
+        for tool, suggestion in lines:
             written += 1 if rt.store.add_tool_feedback(
                 investigation_id, tool, suggestion, created_at=rt.now_iso()) else 0
+        if file_issues is None:
+            file_issues = not rt.dry_run
+        if file_issues and lines and rt.config.settings.github.can_write:
+            source = _feedback_source(rt, investigation_id)
+            for tool, suggestion in lines:
+                if is_covered_only(suggestion):
+                    continue
+                target = target_for(tool, rt.config.tools)
+                text = suggestion if target == tool else f"{tool}: {suggestion}"
+                rt.store.queue_feedback(target, investigation_id, comment_body(text, source),
+                                        created_at=rt.now_iso())
     except Exception:
         log.exception("recording tool feedback for investigation #%s failed", investigation_id)
     return written
+
+
+def _feedback_source(rt: Runtime, investigation_id: int) -> str:
+    inv = rt.store.investigation(investigation_id) or {}
+    model = str(inv.get("model") or "model unknown")
+    return f"investigation #{investigation_id} · {model} · {rt.now_iso()[:10]}"
 
 
 #: Hard ceiling on a stored transcript (roadmap §5.6). Transcripts exist for

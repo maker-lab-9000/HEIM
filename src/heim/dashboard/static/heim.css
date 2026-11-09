@@ -344,6 +344,7 @@ footer.foot { display: flex; justify-content: space-between; gap: 16px; padding-
 .burn-note { margin-bottom: 12px; }
 .tufb td { padding-top: 0; font-size: var(--text-13); }
 .tufb-note { margin: 8px 0 0; font-size: var(--text-13); }
+.fbissue{margin:0 0 8px;font-size:var(--text-13)}
 
 .tool { display: inline-flex; gap: 8px; align-items: center; font: var(--text-13)/1.4 var(--mono); }
 .tool .tdot, .hbadge .hdot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--tool-other); }
