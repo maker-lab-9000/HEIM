@@ -134,19 +134,27 @@ analyst_models: []
 # alert poller and the daily aggregation to attribute metrics/alerts to hosts.
 # Matched in order: put longer / more specific prefixes FIRST. Extend when you
 # add hosts.
+# The poller matches by STRING prefix, so an address that starts with another
+# one's digits (…2 is a prefix of …210, …211, …241) must come before it: keep
+# the hypervisor last.
 instance_host_map:
   "${HEIM_SERVER_IP}": ubuntu-server
-  "${HEIM_PROXMOX_IP}": homelab
   "${HEIM_HA_IP}": home-assistant
   # The VM HEIM runs on. The name must match the Proxmox guest name for its
   # vmid, or its node_* and pve_* series land on two different hosts.
   "${HEIM_OBSERVABILITY_IP}": heim
+  # The LXC containers (CT 110 jellyfin, CT 111 llm; names = PVE guest names).
+  # Optional: unset, the entry is dropped. Without them llama-server's scrape
+  # target and the containers' Uptime Kuma monitors land on the hypervisor.
+  "${HEIM_JELLYFIN_IP:-}": jellyfin
+  "${HEIM_LLM_IP:-}": llm
+  "${HEIM_PROXMOX_IP}": homelab
 
 # Host badge colors on the dashboard are handed out by position in this list,
 # so APPEND a new host rather than inserting it — otherwise every host after
 # the insertion point changes color. This is append-only history, not a
 # meaningful ordering. Hosts omitted here follow in config order.
-host_color_order: [home-assistant, homelab, ubuntu-server, heim]
+host_color_order: [home-assistant, homelab, ubuntu-server, heim, jellyfin, llm]
 
 # Open incidents from metric thresholds (config/queries/daily.yaml warn/crit),
 # not just from the Prometheus alert rules. Evaluated on the poller's cadence.

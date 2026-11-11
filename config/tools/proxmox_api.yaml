@@ -6,7 +6,8 @@ description: >-
   /nodes/homelab/tasks?typefilter=vzdump&limit=20 (recent backup/scrub tasks with
   start/end times - correlate with an onset), /nodes/homelab/tasks/<upid>/log (a task's
   log), /nodes/homelab/qemu/<vmid>/config (VM disk placement), /nodes/homelab/qemu (list
-  VMs), /nodes/homelab/status (host CPU/mem/load/uptime),
+  VMs), /nodes/homelab/lxc and /nodes/homelab/lxc/<vmid>/status/current or /config (the LXC
+  containers: 110 jellyfin, 111 llm), /nodes/homelab/status (host CPU/mem/load/uptime),
   /nodes/homelab/journal?lastentries=200 or ?since=<epoch> (host logs - use this, NOT
   /syslog, which has no log file to read on this journald-only host and will simply time
   out after 30s), /nodes/homelab/disks/list and

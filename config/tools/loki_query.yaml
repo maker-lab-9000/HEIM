@@ -2,7 +2,8 @@ name: loki_query
 module: heim.tools.loki_query:LokiQueryTool
 description: >-
   Read-only LogQL against the homelab Loki: the systemd journal of homelab (the Proxmox
-  hypervisor), ubuntu-server and Home Assistant OS (HA core, Supervisor and every add-on),
+  hypervisor), ubuntu-server, the LXC containers jellyfin and llm, and Home Assistant OS
+  (HA core, Supervisor and every add-on),
   plus the docker container logs of ubuntu-server. Use it
   to find WHAT was logged around a finding's onset time (pass 'end' = onset + a few
   minutes and a short lookback). A query starting with '{' returns log lines, newest
@@ -10,13 +11,15 @@ description: >-
   (count_over_time, rate, sum by) is a metric query — start there to see WHERE errors
   are, then read lines from that one stream.
 
-  LABELS (exact). Journal: {job="systemd-journal", host="homelab"|"ubuntu-server"|"homeassistant",
+  LABELS (exact). Journal: {job="systemd-journal", host="homelab"|"ubuntu-server"|"jellyfin"|"llm"|"homeassistant",
   unit="<name>.service"|"kernel"|"init.scope", level="error"|"warning"|"notice"|"info"|"debug"}.
   Docker (ubuntu-server only): {host="ubuntu-server", container_name="<name>"} with
   compose_project, compose_service and source="stdout"|"stderr" — docker lines have NO
   level label: filter their text with |~ "(?i)error|fatal|panic|exception|traceback".
   Container names = Prometheus' cAdvisor 'name' label (nextcloud-app-1, paperless-webserver-1,
-  photoprism-photoprism-1, jellyfin, n8n, browserless, prometheus, loki, …).
+  photoprism-photoprism-1, jellyfin-proxy, n8n, browserless, prometheus, loki, …). Jellyfin itself
+  and llama-server are NOT docker containers any more: read them from the journal of their
+  LXC container, {host="jellyfin", unit="jellyfin.service"} and {host="llm", unit="llama-server.service"}.
   Home Assistant: Loki's label is host="homeassistant" (NO hyphen — HEIM's host
   'home-assistant'); unit="homeassistant" is HA core, unit="hassio_supervisor" the
   Supervisor, unit="app_<slug>" an add-on (app_core_deconz, app_5c53de3b_esphome,

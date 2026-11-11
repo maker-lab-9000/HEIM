@@ -20,6 +20,7 @@ Deployment identity:
 | `HEIM_PROXMOX_IP` | Proxmox API URL, prompt examples, mapping |
 | `HEIM_HA_IP` | Home Assistant URL, mapping |
 | `HEIM_OBSERVABILITY_IP` | the guest HEIM runs on (host `heim`), mapping |
+| `HEIM_JELLYFIN_IP`, `HEIM_LLM_IP` | the LXC containers (hosts `jellyfin`, `llm`), mapping; optional, an unset one is dropped from the map |
 | `HEIM_SSH_USER` | the read-only SSH user (default `monitoring-agent`) |
 | `HEIM_TELEGRAM_CHAT_ID` | approval and report chat |
 | `HEIM_EMAIL_TO`, `HEIM_EMAIL_FROM` | report delivery |
@@ -76,7 +77,9 @@ deployment-specific from `.env`. Copy it when you want to change structure.
   stays until Reset to default. Empty means the chain is shown read-only. An override
   naming a model later removed from this list is ignored, and the YAML chain runs.
 - **`instance_host_map`.** Prometheus `instance` address prefixes to host names, first
-  match wins, so put longer prefixes first.
+  match wins, so put longer prefixes first. The poller compares as strings: `…2` is a
+  prefix of `…210` and `…241`, so the hypervisor's address goes last. An entry whose
+  address is empty (an unset optional variable) is dropped.
 - **`host_color_order`.** Badge colours go by position in this list. Append new hosts;
   inserting one repaints every host after it.
 - **Threshold watch.** `threshold_detection` (true), `threshold_severity` (`crit`, or
@@ -122,7 +125,11 @@ hard-scoped client, then list it in an agent's YAML. The tools are described in
   answers with parseable JSON — one completion, no tools, strict-JSON prompt. Providers:
   `anthropic`, `openrouter` (`OPENROUTER_API_KEY`), and `openai_compat` for any other
   OpenAI-compatible server such as a local llama.cpp (`base_url`, and `api_key_env`
-  only if it needs a key). The older `primary` / `fallback` form still loads.
+  only if it needs a key). An entry may also set `timeout_s` (default 180) and
+  `extra_body` (extra request fields). An `openai_compat` entry whose `base_url` is
+  empty is dropped, so the shipped last entry, llama-server in CT 111
+  (`HEIM_LLAMACPP_URL`, key in `HEIM_LLAMACPP_KEY`, 30 min timeout, Qwen3 thinking
+  off), is off until the URL is set. The older `primary` / `fallback` form still loads.
 
 Prompts live in `config/prompts/`: `analyst.md`, `investigator.md.j2`,
 `security_auditor.md.j2`, and per-role briefs in `briefs/`.

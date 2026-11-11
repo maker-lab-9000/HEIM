@@ -7,7 +7,7 @@ description: >-
   problem (spike vs step vs slow ramp). Optional 'step' sets range resolution (e.g. 5m);
   leave empty for automatic (~100 points). Examples:
   promql=100*(1-node_memory_MemAvailable_bytes/node_memory_MemTotal_bytes);
-  promql=container_fs_usage_bytes{name="jellyfin"} with lookback=24h.
+  promql=container_fs_usage_bytes{name="nextcloud-app-1"} with lookback=24h.
 args:
   promql:
     type: string

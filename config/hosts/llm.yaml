@@ -1,0 +1,16 @@
+name: llm
+role: guest
+vmid: 111
+investigable: all
+
+# No ssh: block — the agent has no shell in this container. The name matches the
+# Proxmox guest name for lxc/111, so its pve_* series, llama-server's scrape
+# target and its Uptime Kuma monitors (HEIM_LLM_IP) land on the same host.
+
+# Injected into the investigator prompt's [FACTS] block.
+facts: |
+  'llm' = Proxmox LXC container 111 (unprivileged Debian; 6 cores, 2 GiB RAM, 512 MiB swap, 16 GB root disk on local-lvm, plus a separate 40 GB local-lvm volume at /opt/llama.cpp/models that is left out of backups on purpose — the models can be downloaded again) on bare-metal 'homelab', since 2026-11-11. Backed up by the vzdump job 'backup-lxc-gpu' on Sundays at 00:00 (with 'jellyfin'). It runs llama-server (llama.cpp on Vulkan) as the systemd unit 'llama-server' on port 8180, serving Qwen3-8B Q4_K_M to n8n with --parallel 1 (one request at a time; others queue), a 32k context and a q8_0 KV cache. Qwen3-4B-Thinking-2507 and Qwen3-1.7B are also on disk but not loaded. It computes on the HOST's iGPU, shared with 'jellyfin' transcodes. The model sits in about 3.5 GB of GPU memory (GTT, metric node_drm_memory_gtt_used_bytes on the host), which does NOT count against the container's 2 GiB memory limit: with the model loaded the container's own memory is about 820 MiB, which is normal. Normal speed is about 7 tokens/s generating and 70 tokens/s reading the prompt; judge latency against that, not against a cloud API.
+  Prometheus scrapes llama-server itself (job "llama-server", its /metrics with an API key; llamacpp:* series). /health is open and is what Uptime Kuma watches. The VM 'ubuntu-server' used to run a llama-server on :8180 too; that one is stopped on purpose and will be removed, so its absence is expected.
+  llama-server will not start without the GPU: its ExecStartPre refuses unless 'llama-server --list-devices' shows a Vulkan device. So a missing iGPU shows as a FAILED unit with that check in its journal, never as a slow CPU fallback; check GpuMissing / node_drm_card_info on the host first.
+  The operator sometimes stops this container on purpose (for example to free RAM for the k8s VMs); KeyVMDown then fires for lxc/111 after 10m. A stopped 'llm' is a finding only when n8n needs it, not by itself.
+  NOT SSH-reachable and no node_exporter: investigate it only via Prometheus (pve_* with id="lxc/111", job "llama-server", node_drm_* on the host), the proxmox_api tool (/nodes/homelab/lxc/111/status/current and /config), Uptime Kuma, and its journal in Loki ({host="llm", unit="llama-server.service"} with loki_query). For anything else inside the container, write the command for the operator to run.

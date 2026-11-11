@@ -43,6 +43,17 @@ Extension beyond the JS (deliberate, 2026-10-31):
   ``'other'`` (never investigated) with an empty name, so every disk firing
   the same alert collapsed into one incident. The JS's qids keep their JS
   category and name.
+
+Extension beyond the JS (deliberate, 2026-11-11, the LXC/GPU migration):
+
+- ``gpu_missing`` (category ``availability``) and ``gpu_gtt_high``
+  (``memory``) watch the hypervisor's iGPU. Both belong to the hypervisor
+  host whatever their ``instance`` label says: ``GpuMissing`` is a
+  ``count(...)`` and carries none. Both are named ``igpu``, never after the
+  DRM ``card`` label, which moves between boots.
+- ``lxc_disk_growth`` (category ``disk``) carries a PVE ``id`` (``lxc/110``),
+  so it takes the same identity path as the ``pve_`` qids: the container is
+  the host, like ``KeyVMDown`` for the same guest.
 """
 from __future__ import annotations
 
@@ -85,6 +96,10 @@ _DISK_NAMED_QIDS = (
     "nvme_crit", "nvme_wear", "nvme_spare", "ssd_life", "ssd_spare",
 )
 _NETWORK_QIDS = ("net_err", "n8n_net_spike")
+#: The hypervisor's iGPU (module docstring, 2026-11-11).
+_GPU_QIDS = ("gpu_missing", "gpu_gtt_high")
+#: Alerts with a PVE ``id`` label but no ``pve_`` prefix (module docstring).
+_PVE_ID_QIDS = ("lxc_disk_growth",)
 
 
 def _category_of_qid(qid: str) -> str:
@@ -106,6 +121,13 @@ def _category_of_qid(qid: str) -> str:
     if qid == "container_mem_dev":
         return "memory"
     if qid == "container_fs_growth":
+        return "disk"
+    # beyond the JS (module docstring, 2026-11-11)
+    if qid == "gpu_missing":
+        return "availability"
+    if qid == "gpu_gtt_high":
+        return "memory"
+    if qid == "lxc_disk_growth":
         return "disk"
     if qid.startswith("container_"):
         return "container"
@@ -136,6 +158,8 @@ def _name_for(qid: str, labels: dict) -> str:
         return labels.get("name") or ""
     if qid == "n8n_net_spike":
         return "n8n"
+    if qid in _GPU_QIDS:
+        return "igpu"
     return ""
 
 
@@ -251,7 +275,9 @@ def diff_and_decide(
         # they fingerprint exactly as the daily and threshold paths do
         if qid.startswith("container_") or qid == "n8n_net_spike":
             host, nm = container_host, _name_for(qid, labels)
-        elif qid.startswith("pve_"):
+        elif qid in _GPU_QIDS:
+            host, nm = hypervisor_host, _name_for(qid, labels)
+        elif qid.startswith("pve_") or qid in _PVE_ID_QIDS:
             host, nm = _identity_for(qid, labels, guest_names or {},
                                      instance_host_map, hypervisor_host)
         else:
