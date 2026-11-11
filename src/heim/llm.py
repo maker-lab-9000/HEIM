@@ -79,21 +79,18 @@ class _Unusable(Exception):
 
 
 async def _complete_openai_compat(url: str, key: str | None, model: str, system: str,
-                                  user: str, max_tokens: int) -> tuple[str, dict]:
+                                  user: str, max_tokens: int, *, timeout_s: float = 180.0,
+                                  extra_body: dict | None = None) -> tuple[str, dict]:
     headers = {"Authorization": f"Bearer {key}"} if key else {}
-    async with httpx.AsyncClient(timeout=180) as client:
-        r = await client.post(
-            url,
-            headers=headers,
-            json={
-                "model": model,
-                "max_tokens": max_tokens,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-            },
-        )
+    body = {**(extra_body or {}),
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ]}
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        r = await client.post(url, headers=headers, json=body)
         try:
             r.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -150,7 +147,8 @@ async def _complete(ref: ModelRef, system: str, user: str, max_tokens: int) -> t
     if ref.provider == "anthropic":
         return await _complete_anthropic(ref.model, system, user, max_tokens)
     url, key = endpoint_for(ref)
-    return await _complete_openai_compat(url, key, ref.model, system, user, max_tokens)
+    return await _complete_openai_compat(url, key, ref.model, system, user, max_tokens,
+                                         timeout_s=ref.timeout_s, extra_body=ref.extra_body)
 
 
 async def run_chain(chain: list[ModelRef], system: str, user: str, max_tokens: int,
@@ -200,7 +198,9 @@ async def analyst_complete(cfg: AnalystCfg, system: str, user: str) -> tuple[str
 def parse_analysis(text: str) -> dict | None:
     """Parse the analyst's strict-JSON reply, tolerating code fences and
     surrounding prose (same cleanup the n8n Code nodes applied)."""
-    raw = (text or "").strip()
+    # a reasoning model (Qwen3 on llama-server) may lead with <think>…</think>,
+    # whose braces would fool the first-{...} fallback below
+    raw = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
     cleaned = re.sub(r"```json\n?", "", raw).replace("```", "").strip()
     for candidate in (cleaned,):
         try:

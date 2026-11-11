@@ -10,11 +10,19 @@ chain:
     model: claude-opus-5-5
   - provider: openrouter
     model: deepseek/deepseek-v4.1-flash-1017
-  # Last resort, once a local llama.cpp server runs (OpenAI-compatible API;
-  # no api_key_env = no auth header):
-  # - provider: openai_compat
-  #   model: local
-  #   base_url: ${HEIM_LLAMACPP_URL:-}
+  # Last resort: llama-server in CT 111 'llm' (Qwen3-8B on the host iGPU,
+  # OpenAI-compatible API; HEIM_LLAMACPP_URL=http://<llm>:8180/v1 and its API
+  # key in HEIM_LLAMACPP_KEY). Unset URL = entry dropped. Slow by design: a
+  # ~20k-token payload takes ~5 min to read and the JSON ~5-8 min to write,
+  # inside a 32k context, so the timeout is 30 min and Qwen3's thinking is off
+  # (it would spend the context and the minutes).
+  - provider: openai_compat
+    model: qwen3-8b
+    base_url: ${HEIM_LLAMACPP_URL:-}
+    api_key_env: HEIM_LLAMACPP_KEY
+    timeout_s: 1800
+    extra_body:
+      chat_template_kwargs: {enable_thinking: false}
 # Doubled from 4096: Claude Opus 5.5 always thinks (it cannot be disabled) and
 # thinking counts toward max_tokens, while the JSON analysis still has to fit.
 max_tokens: 8192

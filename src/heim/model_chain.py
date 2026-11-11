@@ -37,7 +37,10 @@ def resolve_chain(yaml_chain: list[ModelRef], override: dict | None,
     except Exception:
         chain = []
     if chain and all(r.key in allowed_keys for r in chain):
-        return EffectiveChain(chain, "override", False, updated_at)
+        # the allow-list's entry is the full one (key env, timeout, extra body);
+        # a stored override carries only what was saved when it was set
+        by_key = {a.key: a for a in allowed}
+        return EffectiveChain([by_key[r.key] for r in chain], "override", False, updated_at)
     return EffectiveChain(list(yaml_chain), "yaml", True, updated_at)
 
 
