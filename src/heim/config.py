@@ -179,6 +179,9 @@ class ModelRef(BaseModel):
     #: Extra top-level fields for an OpenAI-compatible request, e.g.
     #: ``{"chat_template_kwargs": {"enable_thinking": false}}`` for Qwen3.
     extra_body: dict = {}
+    #: This model's own output budget, in place of the analyst's max_tokens:
+    #: a LAN model must fit its answer into a small context window.
+    max_tokens: int | None = None
 
     @model_validator(mode="after")
     def _compat_needs_url(self) -> "ModelRef":

@@ -99,13 +99,30 @@ async def _complete_openai_compat(url: str, key: str | None, model: str, system:
             body = str(getattr(r, "text", "") or "").strip()[:200]
             raise RuntimeError(f"HTTP {exc.response.status_code}: {body}") from None
         data = r.json()
-    content = data["choices"][0]["message"]["content"]
+    choice = (data.get("choices") or [{}])[0] or {}
+    message = choice.get("message") or {}
+    content = message.get("content")
     usage = data.get("usage") or {}
     usage = {"input": int(usage.get("prompt_tokens") or 0),
              "output": int(usage.get("completion_tokens") or 0)}
     if not (content or "").strip():
-        raise _Unusable(f"{model} returned empty content", usage)
+        raise _Unusable(f"{model} returned empty content ({_why_empty(choice, message, usage)})", usage)
     return content, usage
+
+
+def _why_empty(choice: dict, message: dict, usage: dict) -> str:
+    """What an OpenAI-compatible reply says about its own emptiness: the token
+    limit spent on reasoning, or a provider error behind a 200 (OpenRouter)."""
+    parts = [f"finish_reason={choice.get('finish_reason') or '?'}"]
+    if choice.get("native_finish_reason"):
+        parts.append(f"native={choice['native_finish_reason']}")
+    if message.get("reasoning") or message.get("reasoning_content"):
+        parts.append("reasoning only")
+    err = choice.get("error")
+    if err:
+        parts.append(f"error: {err.get('message') if isinstance(err, dict) else err}")
+    parts.append(f"{usage['output']} output tokens")
+    return ", ".join(parts)
 
 
 async def _complete_anthropic(model: str, system: str, user: str,
@@ -144,6 +161,7 @@ def endpoint_for(ref: ModelRef) -> tuple[str, str | None]:
 
 
 async def _complete(ref: ModelRef, system: str, user: str, max_tokens: int) -> tuple[str, dict]:
+    max_tokens = ref.max_tokens or max_tokens
     if ref.provider == "anthropic":
         return await _complete_anthropic(ref.model, system, user, max_tokens)
     url, key = endpoint_for(ref)

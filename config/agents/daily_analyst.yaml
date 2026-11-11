@@ -21,9 +21,14 @@ chain:
     base_url: ${HEIM_LLAMACPP_URL:-}
     api_key_env: HEIM_LLAMACPP_KEY
     timeout_s: 1800
+    # its own budget: the ~27k-token request plus the answer must fit the
+    # 32k context (the analyst-wide 16384 below would not)
+    max_tokens: 4096
     extra_body:
       chat_template_kwargs: {enable_thinking: false}
 # Doubled from 4096: Claude Opus 5.5 always thinks (it cannot be disabled) and
 # thinking counts toward max_tokens, while the JSON analysis still has to fit.
-max_tokens: 8192
+# Doubled again on 2026-11-11: DeepSeek spent 6.7k of 8192 tokens reasoning on
+# a 27k-token request and was cut off mid-JSON (finish_reason=length).
+max_tokens: 16384
 prompt: analyst.md
