@@ -23,8 +23,8 @@ ROUTING = HostRouting(
     hypervisor_categories=frozenset(
         {"cpu", "memory", "temperature", "disk", "diskHealth", "availability"}),
 )
-HOST_MAP = {"192.168.178.241": "ubuntu-server", "192.168.178.210": "jellyfin",
-            "192.168.178.211": "llm", "192.168.178.2": "homelab"}
+HOST_MAP = {"10.0.0.241": "ubuntu-server", "10.0.0.210": "jellyfin",
+            "10.0.0.211": "llm", "10.0.0.2": "homelab"}
 
 
 def decide(*alerts, guest_names=None):
@@ -49,7 +49,7 @@ def test_gpu_missing_has_no_instance_and_still_lands_on_the_hypervisor():
 
 def test_gpu_gtt_high_is_a_hypervisor_memory_finding_whatever_the_card_number():
     for card in ("card0", "card1"):   # DRM card numbers move at boot
-        d = decide(alert("gpu_gtt_high", instance="192.168.178.2:9100",
+        d = decide(alert("gpu_gtt_high", instance="10.0.0.2:9100",
                          labels={"card": card}))
         assert d.rows_to_upsert[0]["fingerprint"] == "homelab|gpu_gtt_high|igpu"
         assert d.dispatches[0]["category"] == "memory"
@@ -59,7 +59,7 @@ def test_gpu_gtt_high_is_a_hypervisor_memory_finding_whatever_the_card_number():
 
 
 def test_lxc_disk_growth_belongs_to_the_container_not_the_exporter():
-    d = decide(alert("lxc_disk_growth", instance="192.168.178.241:9221",
+    d = decide(alert("lxc_disk_growth", instance="10.0.0.241:9221",
                      labels={"id": "lxc/110"}),
                guest_names={"lxc/110": "jellyfin"})
     row = d.rows_to_upsert[0]
@@ -78,26 +78,26 @@ def test_lxc_disk_growth_is_categorised_disk():
 
 
 def test_llama_server_exporter_down_is_filed_under_llm_not_homelab():
-    # '192.168.178.2' is a string prefix of '.211'; the poller matches by prefix
+    # the hypervisor's address is a string prefix of '.211'; the poller matches by prefix
     d = decide(alert("exporter_up", severity="critical",
-                     instance="192.168.178.211:8180", labels={"job": "llama-server"}))
+                     instance="10.0.0.211:8180", labels={"job": "llama-server"}))
     assert d.rows_to_upsert[0]["fingerprint"] == "llm|exporter_up|llama-server"
 
 
 def test_settings_example_lists_the_containers_before_the_hypervisor(monkeypatch):
-    env = {"HEIM_SERVER_IP": "192.168.178.241", "HEIM_PROXMOX_IP": "192.168.178.2",
-           "HEIM_HA_IP": "192.168.178.137", "HEIM_OBSERVABILITY_IP": "192.168.178.243",
-           "HEIM_JELLYFIN_IP": "192.168.178.210", "HEIM_LLM_IP": "192.168.178.211"}
+    env = {"HEIM_SERVER_IP": "10.0.0.241", "HEIM_PROXMOX_IP": "10.0.0.2",
+           "HEIM_HA_IP": "10.0.0.137", "HEIM_OBSERVABILITY_IP": "10.0.0.243",
+           "HEIM_JELLYFIN_IP": "10.0.0.210", "HEIM_LLM_IP": "10.0.0.211"}
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     settings = Settings(**_load_yaml(ROOT / "config" / "settings.example.yaml"))
     keys = list(settings.instance_host_map)
-    assert settings.instance_host_map["192.168.178.210"] == "jellyfin"
-    assert settings.instance_host_map["192.168.178.211"] == "llm"
+    assert settings.instance_host_map["10.0.0.210"] == "jellyfin"
+    assert settings.instance_host_map["10.0.0.211"] == "llm"
     # every address that has the hypervisor's as a prefix must come before it
-    hyper = keys.index("192.168.178.2")
+    hyper = keys.index("10.0.0.2")
     for i, k in enumerate(keys):
-        if k != "192.168.178.2" and k.startswith("192.168.178.2"):
+        if k != "10.0.0.2" and k.startswith("10.0.0.2"):
             assert i < hyper, k
     assert settings.host_color_order[-2:] == ["jellyfin", "llm"]
 
