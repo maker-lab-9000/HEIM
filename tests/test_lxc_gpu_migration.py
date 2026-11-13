@@ -135,3 +135,10 @@ def test_the_proxmox_guard_reads_container_status_and_config_only():
     for path in ("/nodes/homelab/lxc/110/snapshot", "/nodes/homelab/lxc/110/status/stop",
                  "/nodes/homelab/lxc/110/interfaces", "/nodes/homelab/lxc/abc/config"):
         assert not guard_proxmox_path(path).allowed, path
+
+
+def test_the_four_unbacked_guests_by_design_do_not_flag():
+    # k8s 242-244 (backed up by hand) and template 9000; monitor-box is gone
+    from heim.metrics.queries import load_queries
+    q = {d.qid: d for d in load_queries(ROOT / "config/queries/daily.yaml")}
+    assert (q["pve_unbacked"].warn, q["pve_unbacked"].crit) == (5, 6)

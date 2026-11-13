@@ -420,8 +420,10 @@ queries:
   label: Guests not backed up
   unit: ''
   dir: high
-  warn: 2
-  crit: 3
+  # 4 are unbacked by design (2026-11-13): the k8s nodes 242-244, backed up
+  # by hand, and the template 9000. One more is a warning, two are critical.
+  warn: 5
+  crit: 6
   promql: pve_not_backed_up_total
 - qid: pve_guest_info
   category: Proxmox

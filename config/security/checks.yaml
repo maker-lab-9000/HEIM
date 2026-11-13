@@ -8,7 +8,7 @@ ssh_host: ubuntu-server
 ha_host: home-assistant
 
 params:
-  expected_offline_vms: [monitor-box]     # powered off by design: "stopped" is not a finding
+  expected_offline_vms: []                # VMs powered off by design: "stopped" is not a finding (monitor-box, the last one, was decommissioned 2026-11)
 
 sources:
   - {key: pve.version,            kind: pve, target: /api2/json/version}
