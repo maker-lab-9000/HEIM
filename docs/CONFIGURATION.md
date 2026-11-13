@@ -49,7 +49,14 @@ deployment-specific from `.env`. Copy it when you want to change structure.
   `email`, reports are written to `out/`.
 - **`schedules`.** `daily` (default `["07:00", "22:00"]`), `poll_minutes` (5) and
   `security_audit` (`"mon 06:00"`). The audit default applies even when the key is
-  missing; set `security_audit: ""` to turn it off. Times use `timezone`.
+  missing; set `security_audit: ""` to turn it off. `log_digest` (`"08:00"`) emails the
+  daily Loki error digest and needs the `loki` block; `""` turns it off. Times use
+  `timezone`.
+- **`log_digest.yaml`.** The digest's LogQL sources (journal errors on every host, the
+  ubuntu-server containers' error-like lines, Home Assistant's `ERROR` lines) and its
+  `ignore` list: Python regexes for expected noise (the smartctl low-power lines,
+  browserless stats, stack frames). Ignored lines are counted in the email, not hidden.
+  `heim check` does not read it; `heim log-digest --dry-run` does.
 - **`approvals`.** `require` (true), `approve_timeout_hours` (0 = wait until someone
   answers, the default; a positive value expires into a decline) and
   `outcome_timeout_hours` (8; 0 = wait).

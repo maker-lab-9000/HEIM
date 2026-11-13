@@ -1,0 +1,29 @@
+# The daily Loki error digest (schedules.log_digest, 08:00 by default).
+#
+# Each source is a LogQL *log query* over the last `lookback_hours`; its lines
+# are grouped (same host, same unit or container, same text once numbers and
+# ids are masked) and emailed. A line matching an `ignore` pattern (Python
+# regex, searched anywhere in the line) is dropped and only counted, so the
+# email still says how much expected noise there was.
+
+lookback_hours: 24
+max_groups: 60
+
+sources:
+  # every host's journal (homelab, ubuntu-server, the LXCs, HAOS)
+  - name: journal
+    logql: '{job="systemd-journal", level="error"}'
+  # ubuntu-server docker logs carry no level label: match the text
+  - name: containers
+    logql: '{host="ubuntu-server", container_name=~".+"} |~ "(?i)\\b(error|critical|fatal|panic|exception|traceback)\\b"'
+  # Home Assistant core and its add-ons log errors at journal level info
+  - name: homeassistant
+    logql: '{host="homeassistant", level=~"info|notice|warning"} |~ "\\b(ERROR|CRITICAL)\\b"'
+
+ignore:
+  - pattern: 'low-power mode'
+    why: smartctl skips a spun-down disk instead of waking it (several times a day, by design)
+  - pattern: '"error":\s*0\b'
+    why: browserless usage stats lines, which carry an "error":0 counter
+  - pattern: '^at \S.*\(.*:\d+:\d+\)$'
+    why: JavaScript stack-trace frames (n8n); the error line above them is kept

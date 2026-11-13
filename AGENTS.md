@@ -30,7 +30,7 @@ HEIM watches a homelab through Prometheus and turns raw metrics into three produ
    Telegram messages, an HA sensor, and Loki events.
 
 It is a **standalone Python port of an n8n workflow stack** ("PAM 10–51"). Every port is
-covered by golden tests against the original JavaScript behavior (1579 tests). Design
+covered by golden tests against the original JavaScript behavior (1609 tests). Design
 rule: **declarative data in `config/`, pure logic in `src/heim/` with tests, I/O at the
 edges** (tools, channels, pipelines).
 
@@ -43,7 +43,7 @@ edges** (tools, channels, pipelines).
 | Agent | Anthropic-native or OpenAI-compatible (OpenRouter, llama.cpp) tool loop, model chosen on `/agents/investigator` · soft prompt budget + hard in-loop step cap · retries · real token accounting (run total **and** per-turn attribution per step) · per-run cost from a config price table · optional size-capped full transcript · output salvage (`## Summary` contract, leaked-tool-call detection) · offline replay of a stored run against another model/prompt from its recorded tool results (`heim replay`) · agent-written tooling feedback indexed per tool and filed as one GitHub issue per tool (comments, scrubbed, posted by the daemon) |
 | Tools | Guarded read-only SSH · PromQL instant/range with token-compact encoding · metric discovery · GET-allowlisted HA and Proxmox APIs · read-only `github_issues` (the feedback issues, read token) · per-call Telegram live feed + local `audit.jsonl` |
 | Human loop | Telegram inline-button approvals (long-poll, no inbound ports) raced against a store-written decision (dashboard/CLI, works with no Telegram at all) · decline/timeout → re-proposed next run · outcome confirm (Resolved / Needs human) |
-| Delivery | n8n-faithful HTML dashboard email · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
+| Delivery | n8n-faithful HTML dashboard email · daily Loki error digest email (08:00, `config/log_digest.yaml` sources + counted ignore list, `heim log-digest`) · investigation report email · chunked Telegram reports · HA sensors (`sensor.pam_*`) · Loki AI-event stream (Grafana-compatible) |
 | Ops | `--dry-run` on every pipeline · `heim check` connectivity validation · crash-safe investigation job queue (`heim jobs`, restart sweep, re-trigger with `retry_of`) · dead-man's switch pinged after every completed poll · nightly WAL-safe SQLite backup (rotated) + retention prune · Docker/compose deployment (outbound-only, plus the optional dashboard port) · `.env` interpolation for all deployment identity |
 | Security audit | Weekly (Mon 06:00) read-only configuration-hygiene audit: 47 deterministic checks over the Proxmox API (audit-only token), Home Assistant REST, Prometheus and fixed guard-validated SSH lines · stable fingerprints `host\|check_id\|subject` · week-over-week new/persisting/resolved/carried · findings reuse the verdict/suppression machinery · one bounded Opus 5.5 pass (4 read-only tools incl. `loki_query`, no SSH, cap 6) explains and prioritises, never detects, and ends with `## Audit feedback` (improve the audit / what else to check — proposals only, shown on `/security`) · degradable: a refusal costs only the `## AI assessment` appendix · `heim security-audit [--dry-run] [--no-llm]` |
 | Dashboard | Web UI (`heim dashboard`, FastAPI + Jinja + vendored htmx), laid out as an operator's console (system locked in `design.md`): a grouped rail with lamps and counts, light/dark · **Activity** (a jobs → agents → tools map and a causal timeline nested by recorded run ids) · **Jobs** with timed pauses (1 h / 4 h / 24 h, dead-man ping kept, Telegram on start and end) · **Agents** narrowed to the analyst, investigator and auditor, each with its prompt · **Tools** with definitions, guards and the tooling feedback · overview of instrument cards (condition, agent coverage, last sync, what requires you), Needs attention, Needs you and the Agents panel, then the health, latest-runs, tool-usage and token blocks · Agents pages (`/agents`, `/agents/<key>`): seven agents with honest state, run strips and monitoring-gap lines, from daemon heartbeats (`agent_runs`) · a Live / 24 h / 7 d window switch over the run strips · investigations list/filters with queued ghost rows and a detail page sorted by kind (observations, interpretation, proposed and completed actions) with burn line, cost and the optional full transcript · incidents, findings (each linked to its evidence), recommendations, security, metrics, costs, host cards · actions (queue an investigation, re-run, approve/decline, finding verdicts, mute/unmute) as real forms enhanced by htmx · optional HTTP basic auth · `/telemetry` Prometheus exposition (auth-exempt, aggregates only) · one SQLite connection (WAL) that writes action rows only |
@@ -54,7 +54,7 @@ edges** (tools, channels, pipelines).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q                    # 1579 tests, must stay green
+.venv/bin/pytest -q                    # 1609 tests, must stay green
 .venv/bin/heim check                   # live connectivity validation
 .venv/bin/heim daily --dry-run         # full pipeline, side effects stay local (out/)
 docker compose build && docker compose run --rm heim check   # container parity
@@ -630,7 +630,7 @@ rollback design; multi-tenant SaaS-ification; replacing Grafana for time-series 
 ## 6. Notes for AI agents working here
 
 - Read `docs/ARCHITECTURE.md` first; it maps every module to its n8n source node.
-- Run `.venv/bin/pytest -q` before and after your change; 1579 must not regress.
+- Run `.venv/bin/pytest -q` before and after your change; 1609 must not regress.
 - Ported modules (docstring names an n8n node) are behavior-frozen — see §2.
 - Never log, commit, or email secrets; deployment identity comes from `.env` via
   `${VAR}` interpolation and must stay out of the tree.

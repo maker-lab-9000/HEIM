@@ -37,6 +37,7 @@ from heim.pipelines.investigate import (model_label, notify_investigation_failed
                                        rearm_pending_approvals, run_investigation)
 from heim.pipelines.poller import run_poll
 from heim.pipelines.queue import request_from_payload
+from heim.pipelines.log_digest import run_log_digest
 from heim.pipelines.security_audit import run_security_audit
 from heim.config import parse_weekly
 from heim.metrics.queries import load_queries
@@ -318,6 +319,17 @@ async def _security_audit_body(rt: Runtime, started: str) -> None:
         await rt.notify(f"🔴 HEIM weekly security audit FAILED: {type(exc).__name__}: {exc}")
 
 
+async def _log_digest_job(rt: Runtime) -> None:
+    """Daily Loki error digest. Never raises into the scheduler; a failure is
+    one Telegram line, a success is the email itself."""
+    try:
+        result = await run_log_digest(rt)
+        log.info("log digest sent: %s", result.get("subject"))
+    except Exception as exc:
+        log.exception("log digest failed")
+        await rt.notify(f"🔴 HEIM log digest FAILED: {type(exc).__name__}: {exc}"[:600])
+
+
 async def _check_audit_catalogue(rt: Runtime) -> bool:
     """Validate config/security/checks.yaml at startup (Design §5: "at startup
     and in heim check"). A bad catalogue costs only the weekly audit, so it is
@@ -526,6 +538,12 @@ async def run_daemon() -> None:
         await _check_audit_catalogue(rt)
         scheduler.add_job(_security_audit_job, weekly_trigger(audit_spec, tz), args=[rt],
                           name="security-audit", misfire_grace_time=AUDIT_MISFIRE_GRACE_S)
+
+    digest_at = rt.config.settings.schedules.log_digest
+    if digest_at and rt.config.settings.loki is not None:
+        hour, minute = digest_at.split(":")
+        scheduler.add_job(_log_digest_job, CronTrigger(hour=int(hour), minute=int(minute), timezone=tz),
+                          args=[rt], name="log-digest", misfire_grace_time=3600)
 
     await _sweep_and_notify(rt)
 

@@ -42,6 +42,7 @@ schedules:
   poll_minutes: 5             # fast-path alert poller interval
   security_audit: "mon 06:00" # weekly read-only security audit ("" disables). Monday:
                               # Sunday night runs the PVE stop-mode backups and HEIM's own backup.
+  log_digest: "08:00"         # daily Loki error digest email ("" disables); config/log_digest.yaml
 
 approvals:
   require: true               # human Telegram approval before any investigation

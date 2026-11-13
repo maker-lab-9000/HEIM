@@ -86,6 +86,16 @@ class SchedulesCfg(BaseModel):
     #: configured timezone. "" disables the job. Monday morning by default:
     #: Sunday is maintenance night (PVE stop-mode backups, HEIM's own backup).
     security_audit: str = "mon 06:00"
+    #: Daily Loki error digest email, "HH:MM" in the configured timezone
+    #: (sources and ignore list in config/log_digest.yaml). "" disables it.
+    log_digest: str = "08:00"
+
+    @field_validator("log_digest")
+    @classmethod
+    def _valid_daily(cls, v: str) -> str:
+        if v and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+            raise ValueError(f"log_digest {v!r} must be HH:MM or empty")
+        return v
 
     @field_validator("security_audit")
     @classmethod
