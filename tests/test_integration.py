@@ -60,7 +60,7 @@ def test_config_values_interpolated(cfg):
 
 
 def test_config_loads_and_routes(cfg):
-    assert set(cfg.hosts) == {"ubuntu-server", "homelab", "home-assistant", "heim", "jellyfin", "llm"}
+    assert set(cfg.hosts) == {"ubuntu-server", "homelab", "home-assistant", "heim", "jellyfin", "llm", "adguard"}
     assert set(cfg.tools) == {"ssh_diagnostic", "prometheus_query", "discover_metrics", "loki_query", "ha_api", "proxmox_api",
                               "github_issues"}
     assert "investigator" in cfg.agents

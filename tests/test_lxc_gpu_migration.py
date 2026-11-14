@@ -99,7 +99,7 @@ def test_settings_example_lists_the_containers_before_the_hypervisor(monkeypatch
     for i, k in enumerate(keys):
         if k != "10.0.0.2" and k.startswith("10.0.0.2"):
             assert i < hyper, k
-    assert settings.host_color_order[-2:] == ["jellyfin", "llm"]
+    assert settings.host_color_order[4:6] == ["jellyfin", "llm"]   # append-only
 
 
 def test_an_unset_container_address_leaves_no_empty_key():

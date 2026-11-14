@@ -2,7 +2,7 @@ name: loki_query
 module: heim.tools.loki_query:LokiQueryTool
 description: >-
   Read-only LogQL against the homelab Loki: the systemd journal of homelab (the Proxmox
-  hypervisor), ubuntu-server, the LXC containers jellyfin and llm, and Home Assistant OS
+  hypervisor), ubuntu-server, the LXC containers jellyfin, llm and adguard, and Home Assistant OS
   (HA core, Supervisor and every add-on),
   plus the docker container logs of ubuntu-server. Use it
   to find WHAT was logged around a finding's onset time (pass 'end' = onset + a few
@@ -11,7 +11,7 @@ description: >-
   (count_over_time, rate, sum by) is a metric query — start there to see WHERE errors
   are, then read lines from that one stream.
 
-  LABELS (exact). Journal: {job="systemd-journal", host="homelab"|"ubuntu-server"|"jellyfin"|"llm"|"homeassistant",
+  LABELS (exact). Journal: {job="systemd-journal", host="homelab"|"ubuntu-server"|"jellyfin"|"llm"|"adguard"|"homeassistant",
   unit="<name>.service"|"kernel"|"init.scope", level="error"|"warning"|"notice"|"info"|"debug"}.
   Docker (ubuntu-server only): {host="ubuntu-server", container_name="<name>"} with
   compose_project, compose_service and source="stdout"|"stderr" — docker lines have NO
@@ -20,10 +20,13 @@ description: >-
   photoprism-photoprism-1, jellyfin-proxy, n8n, browserless, prometheus, loki, …). Jellyfin itself
   and llama-server are NOT docker containers any more: read them from the journal of their
   LXC container, {host="jellyfin", unit="jellyfin.service"} and {host="llm", unit="llama-server.service"}.
+  AdGuard Home (the house's DNS) runs in LXC container 112 since 2026-11-14: {host="adguard",
+  unit="adguardhome.service"}.
   Home Assistant: Loki's label is host="homeassistant" (NO hyphen — HEIM's host
   'home-assistant'); unit="homeassistant" is HA core, unit="hassio_supervisor" the
   Supervisor, unit="app_<slug>" an add-on (app_core_deconz, app_5c53de3b_esphome,
-  app_a0d7b954_adguard, app_a0d7b954_uptime-kuma, app_cebe7a76_hassio_google_drive_backup, …);
+  app_a0d7b954_uptime-kuma, app_cebe7a76_hassio_google_drive_backup, …; app_a0d7b954_adguard is
+  LEGACY: the old AdGuard add-on, stopped on 2026-11-14 and silent since — read host="adguard");
   level= works there. Every HA line is also shipped a second time under
   {hostname="homeassistant", container_name=…} — always select with host= to avoid the
   copy (in a 'sum by (host)' it is the row with an empty host). HA writes LOCAL time (Europe/Berlin) inside its messages; the line timestamp is UTC.

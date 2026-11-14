@@ -164,6 +164,8 @@ checks:
     severity: warning
     sources: [ha.states]
     params:
+      # 'adguard': the HA add-on, stopped 2026-11-14 (AdGuard moved to CT 112). Drop the
+      # pattern here and in evaluate_ha._SENSITIVE_DEFAULT once the add-on is uninstalled.
       sensitive_patterns: [core, operating_system, supervisor, vaultwarden, bitwarden, letsencrypt, let_s_encrypt, ssh, adguard, nginx, proxy, wireguard, tailscale, cloudflared]
     recommendation: Apply core/OS/supervisor updates first, then the password vault, TLS and remote-access add-ons.
   - id: ha.pending_updates_other

@@ -144,18 +144,20 @@ instance_host_map:
   # The VM HEIM runs on. The name must match the Proxmox guest name for its
   # vmid, or its node_* and pve_* series land on two different hosts.
   "${HEIM_OBSERVABILITY_IP}": heim
-  # The LXC containers (CT 110 jellyfin, CT 111 llm; names = PVE guest names).
-  # Optional: unset, the entry is dropped. Without them llama-server's scrape
-  # target and the containers' Uptime Kuma monitors land on the hypervisor.
+  # The LXC containers (CT 110 jellyfin, CT 111 llm, CT 112 adguard; names =
+  # PVE guest names). Optional: unset, the entry is dropped. Without them
+  # llama-server's scrape target and the containers' Uptime Kuma monitors land
+  # on the hypervisor.
   "${HEIM_JELLYFIN_IP:-}": jellyfin
   "${HEIM_LLM_IP:-}": llm
+  "${HEIM_ADGUARD_IP:-}": adguard
   "${HEIM_PROXMOX_IP}": homelab
 
 # Host badge colors on the dashboard are handed out by position in this list,
 # so APPEND a new host rather than inserting it — otherwise every host after
 # the insertion point changes color. This is append-only history, not a
 # meaningful ordering. Hosts omitted here follow in config order.
-host_color_order: [home-assistant, homelab, ubuntu-server, heim, jellyfin, llm]
+host_color_order: [home-assistant, homelab, ubuntu-server, heim, jellyfin, llm, adguard]
 
 # Open incidents from metric thresholds (config/queries/daily.yaml warn/crit),
 # not just from the Prometheus alert rules. Evaluated on the poller's cadence.

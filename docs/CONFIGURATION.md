@@ -20,7 +20,7 @@ Deployment identity:
 | `HEIM_PROXMOX_IP` | Proxmox API URL, prompt examples, mapping |
 | `HEIM_HA_IP` | Home Assistant URL, mapping |
 | `HEIM_OBSERVABILITY_IP` | the guest HEIM runs on (host `heim`), mapping |
-| `HEIM_JELLYFIN_IP`, `HEIM_LLM_IP` | the LXC containers (hosts `jellyfin`, `llm`), mapping; optional, an unset one is dropped from the map |
+| `HEIM_JELLYFIN_IP`, `HEIM_LLM_IP`, `HEIM_ADGUARD_IP` | the LXC containers (hosts `jellyfin`, `llm`, `adguard`), mapping; optional, an unset one is dropped from the map. Keep them above the hypervisor in `instance_host_map`: the poller matches addresses by prefix, and the hypervisor's address is a prefix of theirs |
 | `HEIM_SSH_USER` | the read-only SSH user (default `monitoring-agent`) |
 | `HEIM_TELEGRAM_CHAT_ID` | approval and report chat |
 | `HEIM_EMAIL_TO`, `HEIM_EMAIL_FROM` | report delivery |

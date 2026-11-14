@@ -324,8 +324,9 @@ queries:
 # to homelab rather than to "unknown".
 #
 # LXC containers count (their memory limit is host RAM too); since 2026-11-11
-# every per-guest query here selects (qemu|lxc)/ — CT 110 jellyfin and CT 111
-# llm have no in-guest exporter, so these rows are their only daily view.
+# every per-guest query here selects (qemu|lxc)/ — CT 110 jellyfin, CT 111
+# llm and CT 112 adguard have no in-guest exporter, so these rows are their
+# only daily view.
 #
 # Templates are left out: a template can never start, so its memory is never
 # committed (the k8s template, VM 9000, alone inflated the figure by ~5 points).
