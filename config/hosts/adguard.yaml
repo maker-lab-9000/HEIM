@@ -1,0 +1,16 @@
+name: adguard
+role: guest
+vmid: 112
+investigable: all
+
+# No ssh: block — the agent has no shell in this container. The name matches the
+# Proxmox guest name for lxc/112, so its pve_* series and its Uptime Kuma
+# monitors (instance_host_map, HEIM_ADGUARD_IP) land on the same host.
+
+# Injected into the investigator prompt's [FACTS] block.
+facts: |
+  'adguard' = Proxmox LXC container 112 (unprivileged Debian 13; 2 cores, 1024 MiB RAM, 512 MiB swap, 4 GB root disk on local-lvm) on bare-metal 'homelab', since 2026-11-14. It is the house's ONLY DNS server (the Fritz!Box hands its address out as "Lokaler DNS-Server"): CT 112 stopped, or AdGuard dead inside it, means NO DNS for every device at home, so treat it as critical and urgent, never as a background finding. Proxmox startup order 1: it boots before every other guest. Backed up by the vzdump job 'backup-lxc-gpu' on Sundays at 00:00 (with 'jellyfin' and 'llm').
+  It runs AdGuard Home v0.107.80 from the release tarball as the systemd unit 'adguardhome.service' — NOT a Home Assistant add-on any more (until 2026-11-14 it was the HA add-on 'app_a0d7b954_adguard' on 'home-assistant'; that add-on is stopped and will be uninstalled, so its absence or 'stopped' state is expected, never a finding). Binary /opt/AdGuardHome, config /opt/AdGuardHome/AdGuardHome.yaml, data /var/lib/AdGuardHome. DNS on :53 UDP and TCP; web UI and API on port 80 (HTTP only, admin login).
+  ansible-homelab renders the WHOLE config: upstreams Quad9 and Cloudflare over DNS-over-HTTPS queried in parallel with DNSSEC, fritz.box names and LAN reverse lookups forwarded to the Fritz!Box; block lists AdGuard DNS filter, HaGeZi Multi Pro and HaGeZi Threat Intelligence Feeds (about 1.84M rules); query log 7 days, statistics 90 days. A change made in AdGuard's UI or from Home Assistant (e.g. "protection off") is undone by the next 'make apply' — a setting that keeps reverting is that, not a fault.
+  Memory: about 320 MB resident is normal, peaking near 480 MB while the block lists reload every 24 h; a daily memory spike to ~50% of the 1 GiB limit is that reload. Swap use or an OOM kill is a finding.
+  NOT SSH-reachable and no in-guest exporter (no AdGuard Prometheus metrics either): investigate it only via Prometheus pve_* with id="lxc/112" (the hypervisor's view: up, CPU, memory, root disk; alert KeyVMDown, qid pve_vm_up), the proxmox_api tool (/nodes/homelab/lxc/112/status/current and /config), Uptime Kuma ("AdGuard DNS (CT 112)" resolves adguard.com through it — a public name, so a failure there means real resolution through the upstreams failed — "AdGuard web (CT 112)" checks the UI, "CT 112 adguard (ping)"), and its journal in Loki ({host="adguard", unit="adguardhome.service"} with loki_query). DNS answering but slow, or upstream DoH errors in the journal, point at the internet uplink or the upstream, not at the container. For anything else inside the container, write the command for the operator to run.

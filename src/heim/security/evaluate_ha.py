@@ -12,6 +12,8 @@ _LOGIN = re.compile(r"login|ip ban|banned", re.I)
 #: Mirrors ha.pending_updates_sensitive's own `sensitive_patterns` param so
 #: ha.pending_updates_other's count never depends on another check's params
 #: (the two checks are independent catalogue rows, each evaluated alone).
+#: 'adguard' is the HA add-on stopped on 2026-11-14 (AdGuard now runs in CT 112);
+#: drop it here and in checks.yaml once the add-on is uninstalled.
 _SENSITIVE_DEFAULT = ["core", "operating_system", "supervisor", "vaultwarden", "bitwarden", "letsencrypt",
                       "let_s_encrypt", "ssh", "adguard", "nginx", "proxy", "wireguard", "tailscale", "cloudflared"]
 

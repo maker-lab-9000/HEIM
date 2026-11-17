@@ -16,6 +16,7 @@
     heim dashboard [--host] [--port]   serve the read-only web dashboard
     heim daemon                        run scheduler + poller + approvals
     heim security-audit [--dry-run]    run the weekly read-only security audit once
+    heim log-digest [--dry-run]        email the Loki error digest once (dry run: out/)
                         [--no-llm]     (collectors + deterministic report only, no model call)
 
 --dry-run keeps side effects local: emails become HTML files under out/,
@@ -540,6 +541,15 @@ async def _cmd_security_audit(args) -> int:
     return 0
 
 
+async def _cmd_log_digest(args) -> int:
+    from heim.pipelines.log_digest import run_log_digest
+    from heim.runtime import build_runtime
+
+    result = await run_log_digest(build_runtime(dry_run=args.dry_run))
+    print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="heim", description="HEIM — Homelab Event & Incident Monitor")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -606,6 +616,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sa.add_argument("--dry-run", action="store_true")
     sa.add_argument("--no-llm", action="store_true",
                     help="collectors + deterministic report only — no model call, zero cost")
+    ld = sub.add_parser("log-digest", help="email the Loki error digest once")
+    ld.add_argument("--dry-run", action="store_true")
     return p
 
 
@@ -618,7 +630,7 @@ def main() -> None:
         "investigate": _cmd_investigate, "incidents": _cmd_incidents,
         "investigations": _cmd_investigations, "jobs": _cmd_jobs, "replay": _cmd_replay,
         "dashboard": _cmd_dashboard, "daemon": _cmd_daemon,
-        "security-audit": _cmd_security_audit,
+        "security-audit": _cmd_security_audit, "log-digest": _cmd_log_digest,
     }[args.cmd]
     try:
         sys.exit(asyncio.run(handler(args)))

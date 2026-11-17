@@ -20,6 +20,7 @@ In Docker, prefix each command with `docker compose run --rm heim`.
 | `heim jobs [--limit N] [--status S]` | the investigation job queue |
 | `heim replay ID [--model M] [--prompt-file F]` | offline replay of a stored investigation |
 | `heim security-audit [--dry-run] [--no-llm]` | one security audit |
+| `heim log-digest [--dry-run]` | one Loki error digest (the daemon sends it daily at `schedules.log_digest`) |
 
 `--dry-run` keeps side effects local: emails become HTML files in `out/`, Telegram, Loki
 and HA sends become log lines, and approvals are granted automatically. The live
@@ -119,6 +120,16 @@ be a free OpenRouter model), one investigator session per approved investigation
 short audit pass a week. With `model_prices` set, each investigation and run records its
 cost, shown on the investigation pages, the findings run headers, the overview's 24 h
 tile and the Costs page.
+
+## Loki error digest
+
+Every day at 08:00 the daemon emails the last 24 h of error lines from Loki, grouped
+by host, unit or container and message, most frequent first, with the expected noise
+from `config/log_digest.yaml` dropped and counted. It sends on a clean day too, so a
+missing email means the job is broken. A source Loki could not answer, or one that hit
+the 5,000-line read limit, marks the email "incomplete"; if every source fails, the
+daemon sends one Telegram line instead. Add a pattern to `ignore` when a line is
+expected; keep its `why`, because the email shows it.
 
 ## Logs and audit trail
 

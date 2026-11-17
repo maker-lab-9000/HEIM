@@ -86,6 +86,16 @@ class SchedulesCfg(BaseModel):
     #: configured timezone. "" disables the job. Monday morning by default:
     #: Sunday is maintenance night (PVE stop-mode backups, HEIM's own backup).
     security_audit: str = "mon 06:00"
+    #: Daily Loki error digest email, "HH:MM" in the configured timezone
+    #: (sources and ignore list in config/log_digest.yaml). "" disables it.
+    log_digest: str = "08:00"
+
+    @field_validator("log_digest")
+    @classmethod
+    def _valid_daily(cls, v: str) -> str:
+        if v and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+            raise ValueError(f"log_digest {v!r} must be HH:MM or empty")
+        return v
 
     @field_validator("security_audit")
     @classmethod
@@ -173,6 +183,15 @@ class ModelRef(BaseModel):
     model: str
     base_url: str = ""
     api_key_env: str = ""
+    #: HTTP timeout for one completion. A LAN model on an iGPU (llama-server in
+    #: CT 111 reads ~70 tokens/s, writes ~7) needs far more than a cloud API.
+    timeout_s: float = 180.0
+    #: Extra top-level fields for an OpenAI-compatible request, e.g.
+    #: ``{"chat_template_kwargs": {"enable_thinking": false}}`` for Qwen3.
+    extra_body: dict = {}
+    #: This model's own output budget, in place of the analyst's max_tokens:
+    #: a LAN model must fit its answer into a small context window.
+    max_tokens: int | None = None
 
     @model_validator(mode="after")
     def _compat_needs_url(self) -> "ModelRef":
@@ -264,6 +283,14 @@ class Settings(BaseModel):
     # instance-label address prefix -> host name (used by the alert poller to
     # attribute a firing alert's `instance` label to a configured host)
     instance_host_map: dict[str, str] = {}
+
+    @field_validator("instance_host_map")
+    @classmethod
+    def _drop_unset_addresses(cls, v: dict[str, str]) -> dict[str, str]:
+        # An unset optional address (`${HEIM_LLM_IP:-}`) yields an empty key,
+        # and the poller matches by prefix: '' would claim every alert.
+        return {k.strip(): h for k, h in v.items() if k and k.strip()}
+
     #: Display order for host badge colors, which are handed out by position.
     #: APPEND new hosts; inserting one repaints every host after it. Hosts left
     #: out follow in config order (alphabetical by filename).
@@ -390,6 +417,17 @@ class AnalystCfg(BaseModel):
     fallback: ModelRef | None = None
     max_tokens: int = 4096
     prompt: str = "analyst.md"
+
+    @field_validator("chain", mode="before")
+    @classmethod
+    def _drop_unset_local_models(cls, v):
+        # `base_url: ${HEIM_LLAMACPP_URL:-}` left unset means "no local model
+        # here", not a config error that stops the daemon.
+        if isinstance(v, list):
+            return [e for e in v if not (isinstance(e, dict)
+                                         and e.get("provider") == "openai_compat"
+                                         and not str(e.get("base_url") or "").strip())]
+        return v
 
     @model_validator(mode="after")
     def _build_chain(self) -> "AnalystCfg":

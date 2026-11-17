@@ -8,4 +8,4 @@ api:
   verify_ssl: true
 
 facts: |
-  'home-assistant' = Proxmox VM 101 (2 vCPU, 4 GiB) on 'homelab'. NOT SSH-reachable — investigate it only via the Home Assistant REST API tool and Prometheus (hass_* metrics = in-guest view; pve_* with id="qemu/101" = hypervisor view).
+  'home-assistant' = Proxmox VM 101 (2 vCPU, 4 GiB) on 'homelab'. NOT SSH-reachable — investigate it only via the Home Assistant REST API tool and Prometheus (hass_* metrics = in-guest view; pve_* with id="qemu/101" = hypervisor view). It no longer serves DNS: AdGuard Home moved from its add-on (app_a0d7b954_adguard, stopped, to be uninstalled) to the LXC container 'adguard' (CT 112) on 2026-11-14, so a DNS problem is never this VM's, and the AdGuard integration's sensors here read CT 112 over the network. Until the Fritz!Box lease renews (up to ~10 days) this VM may itself still resolve through its old address; once the add-on is stopped that shows as HA failing to resolve names.

@@ -30,6 +30,10 @@ _ALLOW: tuple[re.Pattern[str], ...] = (
     re.compile("^" + _N + r"/status$"),
     re.compile("^" + _N + r"/qemu$"),
     re.compile("^" + _N + r"/qemu/\d+/(status/current|config)$"),
+    # the LXC containers (CT 110 jellyfin, CT 111 llm, since 2026-11-11):
+    # the same two read-only views as a VM
+    re.compile("^" + _N + r"/lxc$"),
+    re.compile("^" + _N + r"/lxc/\d+/(status/current|config)$"),
     re.compile("^" + _N + r"/tasks" + _Q + r"$"),
     re.compile("^" + _N + r"/tasks/[A-Za-z0-9:.@_%\-]+/(log|status)" + _Q + r"$"),
     re.compile("^" + _N + r"/(syslog|journal)" + _Q + r"$"),

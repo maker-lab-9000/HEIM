@@ -1,0 +1,15 @@
+name: jellyfin
+role: guest
+vmid: 110
+investigable: all
+
+# No ssh: block — the agent has no shell in this container. The name matches the
+# Proxmox guest name for lxc/110, so its pve_* series and its Uptime Kuma
+# monitors (instance_host_map, HEIM_JELLYFIN_IP) land on the same host.
+
+# Injected into the investigator prompt's [FACTS] block.
+facts: |
+  'jellyfin' = Proxmox LXC container 110 (unprivileged Debian; 4 cores, 2 GiB RAM, 512 MiB swap, 16 GB root disk on local-lvm) on bare-metal 'homelab', since 2026-11-11. Backed up by the vzdump job 'backup-lxc-gpu' on Sundays at 00:00 (with 'llm'), so a Sunday-night I/O or disk spike can be that job. It runs Jellyfin from the apt package as the systemd service 'jellyfin' — NOT Docker, and NOT on 'ubuntu-server' any more (the Docker container named 'jellyfin' there is stopped on purpose and will be removed; its absence is expected, never a finding). Transcoding is VA-API on the HOST's iGPU (/dev/dri/renderD128 passed into the container), shared with 'llm'. Paths: /media = the media (a READ-ONLY bind mount of the host directory /mnt/pve/JellyMedia/media, which sits on the 'jellymedia' SSD; Jellyfin cannot write there, so a write or permission error on /media is expected, not a fault), /config = Jellyfin's config and database, /cache = its cache, /cache/transcodes = transcode output (the usual cause of root-disk growth here, alert LxcDiskGrowth).
+  The family reaches it through 'jellyfin-proxy', a Caddy container on 'ubuntu-server' listening on :8096 that forwards here, so a Jellyfin outage shows on BOTH the proxy monitor and this container's own monitor; only the proxy failing means the problem is on 'ubuntu-server'.
+  NOT SSH-reachable and no node_exporter: investigate it only via Prometheus pve_* with id="lxc/110" (the hypervisor's view: CPU, memory, root disk, up), node_drm_* on the host for the GPU, the proxmox_api tool (/nodes/homelab/lxc/110/status/current and /config), Uptime Kuma, and its journal in Loki ({host="jellyfin", unit="jellyfin.service"} with loki_query). For anything else inside the container (du on /cache), write the command for the operator to run.
+  The 'jellymedia' SSD behind /media is FAILING, known since 2026-11-10 and a replacement is on order (SMART: reallocated and pending sectors, offline-uncorrectable sectors, a high UDMA CRC count). A staging copy of the media is on the host at /toshiba_raid/jellymedia-staging. Treat its SMART warnings as the known issue; report only a sharp CHANGE in those counters, or read errors that make media unplayable.
