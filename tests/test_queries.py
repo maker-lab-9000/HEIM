@@ -89,7 +89,7 @@ def test_spot_check_promql_verbatim():
     svc = by_qid["ha_svc_uptime"]
     assert svc.promql == (
         'min by (instance) (hass_sensor_unit_percent{entity=~".+_uptime_1_day",'
-        ' entity!~"sensor\\\\.(k8s|cp[0-9]+)_.+"})'
+        ' entity!~"sensor\\\\.(k8s|cp[0-9]+|ntopng)_.+"})'
     )
     assert (svc.dir, svc.warn, svc.crit) == ("low", 99, 95)
 

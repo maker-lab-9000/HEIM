@@ -112,6 +112,22 @@ def build_context(cfg: Config, suppressed: set[str],
     )
 
 
+def drop_on_demand(monitors: list | None, cfg: Config, ctx) -> list | None:
+    """Monitors minus each host's ``on_demand_monitors`` (names, any case).
+
+    A dropped monitor is simply absent to ``decide``, so an outage it already
+    has is closed by the usual "no longer monitored" path."""
+    if not monitors:
+        return monitors
+    on_demand = {(h, n.lower()) for h, host in cfg.hosts.items()
+                 for n in host.on_demand_monitors}
+    if not on_demand:
+        return monitors
+    return [m for m in monitors
+            if (map_host(m.address, ctx.instance_host_map, ctx.host_names),
+                m.name.lower()) not in on_demand]
+
+
 def _report_only_count(monitors: list | None, ctx) -> int:
     """Monitors that can only be reported: unmapped, or on a non-investigable host."""
     n = 0
@@ -170,6 +186,16 @@ async def run_uptime(rt: Runtime, run_at: str, *, dispatch_concurrently: bool) -
 
     states = store.uptime_states()
     ctx = build_context(cfg, suppressed, pending_uptime_investigations(store))
+    kept = drop_on_demand(monitors, cfg, ctx)
+    if monitors and not kept:
+        # Kuma answered but every monitor is on demand: a good poll with nothing
+        # to judge (decide would read an empty list as a failed one)
+        if not rt.dry_run:
+            store.set_uptime_fail_polls(0)
+        return {"uptime_monitors": 0, "uptime_report_only": 0, "uptime_upserts": 0,
+                "uptime_groups": 0, "uptime_dispatches": 0, "uptime_messages": 0,
+                "uptime_state_changed": False, "uptime_unreachable": False}
+    monitors = kept
     dec = decide(monitors, store.open_rows(), states, store.uptime_fail_polls(),
                  run_at, ctx, recent_rows=_recent_rows(store, states, run_at))
 

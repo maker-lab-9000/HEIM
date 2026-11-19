@@ -107,6 +107,7 @@ One file per host.
 | `vmid` | Proxmox VM id, display only |
 | `facts` | injected into the investigator's `[FACTS]` block: topology the agent must know |
 | `privileges` | injected into `[PRIVILEGES]`: must match the host's real sudoers and groups |
+| `on_demand_monitors` | Uptime Kuma monitor names on this host that run only on demand (homelab: `[ntopng]`). Down is normal: the uptime poll never opens an outage for them and closes one already open. |
 
 Adding a host: create the file, grant the read-only permission set if it has a shell
 ([INSTALL.md](INSTALL.md#2-read-only-access-for-the-agents)), add its address to
