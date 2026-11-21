@@ -116,7 +116,9 @@ queries:
   crit: 95
   # k8s lab VMs (cp1, k8s-w1, k8s-w2, the API server) are allowed to be powered off,
   # so their Uptime Kuma monitors are excluded from this minimum (operator, 2026-11-02).
-  promql: min by (instance) (hass_sensor_unit_percent{entity=~".+_uptime_1_day", entity!~"sensor\\.(k8s|cp[0-9]+)_.+"})
+  # ntopng on the hypervisor runs only on demand, stopped is normal (operator,
+  # 2026-11-17; config/hosts/homelab.yaml on_demand_monitors).
+  promql: min by (instance) (hass_sensor_unit_percent{entity=~".+_uptime_1_day", entity!~"sensor\\.(k8s|cp[0-9]+|ntopng)_.+"})
 - qid: ha_unavail
   category: Host
   label: HA unavailable entities

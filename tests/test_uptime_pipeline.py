@@ -543,3 +543,36 @@ def _chain_result(text: str, model: str, tokens_in: int, tokens_out: int):
     return ChainResult(text=text, analysis=parse_analysis(text), model_used=model, index=0,
                        usage={"input": tokens_in, "output": tokens_out},
                        attempts=[Attempt("anthropic", model, True, "", tokens_in, tokens_out)])
+
+
+# ntopng on the hypervisor runs only on demand (operator, 2026-11-17): a host's
+# on_demand_monitors are never incidents, down or not.
+def test_homelab_lists_ntopng_as_on_demand(rt):
+    assert rt.config.hosts["homelab"].on_demand_monitors == ["ntopng"]
+
+
+async def test_an_on_demand_monitor_down_opens_nothing(rt, rig):
+    await rig.poll(_metrics(("ntopng", "10.0.0.2", 0)))
+    assert rt.store.open_rows() == [] and rig.notes == [] and rig.dispatched == []
+
+
+async def test_the_same_name_on_another_host_still_counts(rt, rig):
+    await rig.poll(_metrics(("ntopng", "10.0.0.10", 0)))
+    assert [r["host"] for r in rt.store.open_rows()] == ["ubuntu-server"]
+
+
+async def test_an_open_on_demand_outage_is_closed(rt, rig):
+    await rig.poll(_metrics(("ntopng", "10.0.0.2", 0), ("n8n", "10.0.0.10", 1)))
+    assert rt.store.open_rows() == []
+    rt.config.hosts["homelab"].on_demand_monitors = []
+    await rig.poll(_metrics(("ntopng", "10.0.0.2", 0), ("n8n", "10.0.0.10", 1)))
+    assert [r["metric"] for r in rt.store.open_rows()] == ["ntopng"]
+    rt.config.hosts["homelab"].on_demand_monitors = ["ntopng"]
+    for _ in range(3):
+        await rig.poll(_metrics(("ntopng", "10.0.0.2", 0), ("n8n", "10.0.0.10", 1)))
+    assert rt.store.open_rows() == []
+
+
+async def test_only_on_demand_monitors_is_not_a_failed_poll(rt, rig):
+    await rig.poll(_metrics(("ntopng", "10.0.0.2", 0)))
+    assert rt.store.uptime_fail_polls() == 0

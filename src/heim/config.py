@@ -359,6 +359,9 @@ class Host(BaseModel):
     api: ApiCfg | None = None
     facts: str = ""       # injected into the investigator prompt's [FACTS] block
     privileges: str = ""  # injected into the [PRIVILEGES] block (ssh hosts only)
+    # Uptime Kuma monitor names on this host that run only on demand: stopped
+    # is normal, so the uptime poll never opens (and closes) their outages.
+    on_demand_monitors: list[str] = []
 
 
 # --------------------------------------------------------------------------- tools & agents
